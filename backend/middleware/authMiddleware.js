@@ -10,8 +10,24 @@ if (process.env.NODE_ENV === "production" && (!process.env.JWT_SECRET || process
 
 // Extract JWT token from cookie or Authorization header
 const extractToken = (req) => {
-  if (req.cookies && req.cookies.superadmin_token) {
-    return req.cookies.superadmin_token
+  const isSuperAdminRoute = req.originalUrl && req.originalUrl.includes("/super-admin")
+
+  if (req.cookies) {
+    if (isSuperAdminRoute) {
+      if (req.cookies.superadmin_token) {
+        return req.cookies.superadmin_token
+      }
+      if (req.cookies.client_token) {
+        return req.cookies.client_token
+      }
+    } else {
+      if (req.cookies.client_token) {
+        return req.cookies.client_token
+      }
+      if (req.cookies.superadmin_token) {
+        return req.cookies.superadmin_token
+      }
+    }
   }
   const authHeader = req.headers.authorization
   if (authHeader && authHeader.startsWith("Bearer ")) {

@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken")
 const User = require("../models/User")
+const Account = require("../models/Account")
 
 const JWT_SECRET = process.env.JWT_SECRET || "leadflow-superadmin-secret-key-2026-secure"
 const JWT_EXPIRES_IN = "24h"
@@ -36,6 +37,40 @@ const login = async (req, res) => {
       })
     }
 
+    // If user belongs to a tenant or is an account admin, check if the tenant account is active
+    let accountData = null
+    const accountQuery = []
+    if (user.tenantId) {
+      accountQuery.push({ accountId: user.tenantId })
+    }
+    if (user._id) {
+      accountQuery.push({ adminUserId: user._id })
+    }
+
+    if (accountQuery.length > 0) {
+      const account = await Account.findOne({ $or: accountQuery }).lean()
+      if (account) {
+        if (account.status === "suspended") {
+          return res.status(403).json({
+            success: false,
+            error: `Your Leads Account (${account.companyName}) is currently suspended. Please contact your administrator.`,
+          })
+        }
+        accountData = {
+          id: account._id.toString(),
+          accountId: account.accountId,
+          companyName: account.companyName,
+          displayName: account.displayName,
+          status: account.status,
+        }
+        // Ensure user tenantId is synchronized if missing
+        if (!user.tenantId && account.accountId) {
+          user.tenantId = account.accountId
+          await User.findByIdAndUpdate(user._id, { tenantId: account.accountId })
+        }
+      }
+    }
+
     const isMatch = await user.comparePassword(password)
     if (!isMatch) {
       return invalidCredentialsResponse()
@@ -53,23 +88,41 @@ const login = async (req, res) => {
       { expiresIn: JWT_EXPIRES_IN },
     )
 
-    // Set secure HTTP-only cookie
+    // Set secure HTTP-only cookies with role-appropriate isolation
     const isProduction = process.env.NODE_ENV === "production"
-    res.cookie("superadmin_token", token, {
+    const cookieOptions = {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
       maxAge: 24 * 60 * 60 * 1000,
       path: "/",
-    })
+    }
+
+    if (user.role === "super_admin") {
+      res.cookie("superadmin_token", token, cookieOptions)
+      res.clearCookie("client_token", { path: "/" })
+    } else {
+      res.cookie("client_token", token, cookieOptions)
+      // Clear any prior Super Admin session to prevent identity leakage
+      res.clearCookie("superadmin_token", { path: "/" })
+    }
+
+    const roleTitle =
+      user.role === "account_admin"
+        ? "Leads Account Admin"
+        : user.role === "super_admin"
+          ? "Super Admin"
+          : user.role
 
     const authUser = {
       id: user._id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,
+      roleTitle,
       tenantId: user.tenantId,
       status: user.status,
+      account: accountData,
     }
 
     res.status(200).json({
@@ -91,12 +144,14 @@ const login = async (req, res) => {
 const logout = async (_req, res) => {
   try {
     const isProduction = process.env.NODE_ENV === "production"
-    res.clearCookie("superadmin_token", {
+    const clearOptions = {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
       path: "/",
-    })
+    }
+    res.clearCookie("superadmin_token", clearOptions)
+    res.clearCookie("client_token", clearOptions)
 
     res.status(200).json({
       success: true,
@@ -120,10 +175,43 @@ const getMe = async (req, res) => {
       })
     }
 
+    let accountData = null
+    const accountQuery = []
+    if (req.user.tenantId) {
+      accountQuery.push({ accountId: req.user.tenantId })
+    }
+    if (req.user.id) {
+      accountQuery.push({ adminUserId: req.user.id })
+    }
+
+    if (accountQuery.length > 0) {
+      const account = await Account.findOne({ $or: accountQuery }).lean()
+      if (account) {
+        accountData = {
+          id: account._id.toString(),
+          accountId: account.accountId,
+          companyName: account.companyName,
+          displayName: account.displayName,
+          status: account.status,
+        }
+      }
+    }
+
+    const roleTitle =
+      req.user.role === "account_admin"
+        ? "Leads Account Admin"
+        : req.user.role === "super_admin"
+          ? "Super Admin"
+          : req.user.role
+
     res.status(200).json({
       success: true,
       data: {
-        user: req.user,
+        user: {
+          ...req.user,
+          roleTitle,
+          account: accountData,
+        },
       },
     })
   } catch (error) {
@@ -134,8 +222,46 @@ const getMe = async (req, res) => {
   }
 }
 
+// GET /api/auth/tenant-info?tenantId=ACC-XXXX
+const getTenantInfo = async (req, res) => {
+  try {
+    const { tenantId } = req.query
+    if (!tenantId || typeof tenantId !== "string" || !tenantId.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: "Tenant ID is required",
+      })
+    }
+
+    const account = await Account.findOne({ accountId: tenantId.trim() }).lean()
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: "No active Leads Account found with this Tenant ID",
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        accountId: account.accountId,
+        companyName: account.companyName,
+        displayName: account.displayName,
+        status: account.status,
+      },
+    })
+  } catch (error) {
+    console.error("Error fetching tenant info:", error)
+    return res.status(500).json({
+      success: false,
+      error: "Failed to retrieve tenant info",
+    })
+  }
+}
+
 module.exports = {
   login,
   logout,
   getMe,
+  getTenantInfo,
 }

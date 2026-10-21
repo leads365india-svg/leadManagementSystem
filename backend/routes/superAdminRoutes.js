@@ -5,6 +5,7 @@ const {
   getAccountStats,
   getAccountById,
   createAccount,
+  updateAccount,
   updateAccountStatus,
 } = require("../controllers/accountController")
 const { getPermissions, updatePermissions } = require("../controllers/permissionController")
@@ -19,6 +20,7 @@ router.get("/stats", getAccountStats)
 router.get("/accounts", getAccounts)
 router.get("/accounts/:id", getAccountById)
 router.post("/accounts", createAccount)
+router.put("/accounts/:id", updateAccount)
 router.patch("/accounts/:id/status", updateAccountStatus)
 
 // Roles & Permissions Configuration

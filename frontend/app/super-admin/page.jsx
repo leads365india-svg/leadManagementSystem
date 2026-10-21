@@ -1,7 +1,9 @@
 "use client"
 
-import React, { useEffect, useState, useCallback } from "react"
+import React, { useEffect, useState, useCallback, useRef } from "react"
+import Link from "next/link"
 import { apiClient } from "@/lib/api"
+import { toast } from "react-hot-toast"
 import {
   Building2,
   Users,
@@ -18,6 +20,13 @@ import {
   Lock,
   X,
   Info,
+  ExternalLink,
+  Edit2,
+  Globe,
+  Palette,
+  ChevronLeft,
+  ChevronRight,
+  Phone,
 } from "lucide-react"
 
 export default function SuperAdminDashboardPage() {
@@ -30,87 +39,192 @@ export default function SuperAdminDashboardPage() {
   const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [search, setSearch] = useState("")
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchInput, setSearchInput] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalAccountsCount, setTotalAccountsCount] = useState(0)
 
+  const activeReqIdRef = useRef(0)
+
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
   const [selectedAccount, setSelectedAccount] = useState(null)
   const [isConfirmSuspendOpen, setIsConfirmSuspendOpen] = useState(false)
   const [accountToToggle, setAccountToToggle] = useState(null)
 
-  // Success Notification State
+  // Success Notification Banner State
   const [successMessage, setSuccessMessage] = useState(null)
 
-  // Add Account Form Data with manual password fields
+  // Add Account Form Data
   const [formData, setFormData] = useState({
     companyName: "",
     displayName: "",
     adminName: "",
     adminEmail: "",
+    countryCode: "IN",
     contactNumber: "",
     password: "",
     confirmPassword: "",
     status: "active",
+    customDomain: "",
+    logoUrl: "",
+    primaryColor: "#4f46e5",
+    pageTitle: "",
   })
+
+  // Edit Account Form Data
+  const [editFormData, setEditFormData] = useState({
+    id: "",
+    companyName: "",
+    displayName: "",
+    adminName: "",
+    countryCode: "IN",
+    contactNumber: "",
+    customDomain: "",
+    logoUrl: "",
+    primaryColor: "#4f46e5",
+    pageTitle: "",
+  })
+
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [formErrors, setFormErrors] = useState({})
+  const [editFormErrors, setEditFormErrors] = useState({})
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isUpdating, setIsUpdating] = useState(false)
   const [actionError, setActionError] = useState(null)
   const [copiedKey, setCopiedKey] = useState(null)
 
-  // Fetch Stats and Accounts List
-  const loadData = useCallback(async () => {
-    try {
-      setRefreshing(true)
-      const [statsRes, accountsRes] = await Promise.all([
-        apiClient.getSuperAdminStats(),
-        apiClient.getSuperAdminAccounts({
-          page,
-          limit: 10,
-          search,
-          status: statusFilter !== "all" ? statusFilter : undefined,
-        }),
-      ])
+  // Debounce search input by 200ms so typing feels instantaneous and avoids unnecessary backend load
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchInput.trim())
+      setPage(1)
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [searchInput])
 
+  // Fetch Global Summary Stats (only on mount, manual refresh, or mutate actions)
+  const loadStats = useCallback(async () => {
+    try {
+      const statsRes = await apiClient.getSuperAdminStats()
       if (statsRes.success && statsRes.data) {
         setStats(statsRes.data)
       }
+    } catch (error) {
+      console.error("Failed to load dashboard stats:", error)
+    }
+  }, [])
 
-      if (accountsRes.success && accountsRes.data) {
-        setAccounts(accountsRes.data.accounts)
+  // Fetch Accounts List with fast cancellation/ignoring of stale network queries
+  const loadAccounts = useCallback(async (queryTerm, statusVal, pageVal) => {
+    const reqId = ++activeReqIdRef.current
+    setIsSearching(true)
+    try {
+      const accountsRes = await apiClient.getSuperAdminAccounts({
+        page: pageVal,
+        limit: 10,
+        search: (queryTerm || "").trim(),
+        status: statusVal !== "all" ? statusVal : undefined,
+      })
+
+      if (reqId === activeReqIdRef.current && accountsRes.success && accountsRes.data) {
+        setAccounts(accountsRes.data.accounts || [])
         setTotalPages(accountsRes.data.totalPages || 1)
         setTotalAccountsCount(accountsRes.data.total || 0)
       }
     } catch (error) {
-      console.error("Failed to load dashboard data:", error)
+      if (reqId === activeReqIdRef.current) {
+        console.error("Failed to load accounts:", error)
+        toast.error("Failed to load accounts list")
+      }
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (reqId === activeReqIdRef.current) {
+        setLoading(false)
+        setIsSearching(false)
+        setRefreshing(false)
+      }
     }
-  }, [page, search, statusFilter])
+  }, [])
 
+  // Initial load of global metrics
   useEffect(() => {
-    loadData()
-  }, [loadData])
+    loadStats()
+  }, [loadStats])
+
+  // Instant or debounced trigger for accounts list
+  useEffect(() => {
+    loadAccounts(debouncedSearch, statusFilter, page)
+  }, [debouncedSearch, statusFilter, page, loadAccounts])
+
+  // Complete data refresh (both stats and accounts)
+  const refreshAllData = useCallback(async () => {
+    setRefreshing(true)
+    await Promise.all([
+      loadStats(),
+      loadAccounts(debouncedSearch, statusFilter, page),
+    ])
+    setRefreshing(false)
+  }, [debouncedSearch, statusFilter, page, loadStats, loadAccounts])
 
   // Copy helper
   const handleCopy = (text, key) => {
+    if (!text) return
     navigator.clipboard.writeText(text)
     setCopiedKey(key)
     setTimeout(() => setCopiedKey(null), 2000)
   }
 
-  // Validate form fields
+  // Copy full client package
+  const copyClientPackage = (pkg) => {
+    const text = `🌟 LeadFlow CRM - Client Portal Credentials
+🏢 Organization: ${pkg.companyName}
+🆔 Tenant ID: ${pkg.accountId}
+🌐 Portal URL: ${pkg.portalUrl}
+📧 Admin Email: ${pkg.adminEmail}
+🔑 Password: ${pkg.password}
+
+Please sign in at the URL above to access your dedicated CRM pipeline.`
+    navigator.clipboard.writeText(text)
+    setCopiedKey("pkg")
+    toast.success("Credentials copied to clipboard!")
+    setTimeout(() => setCopiedKey(null), 3000)
+  }
+
+  // Validation helper for Indian mobile numbers (10 digits starting with 6-9)
+  const validateMobile = (number, countryCode) => {
+    if (!number || !number.trim()) return true // Optional
+    const clean = number.trim().replace(/[\s\-+]/g, "")
+    if (countryCode === "IN") {
+      if (clean.length === 12 && clean.startsWith("91")) {
+        return /^[6-9]\d{9}$/.test(clean.slice(2))
+      }
+      return /^[6-9]\d{9}$/.test(clean)
+    }
+    // Generic phone check for other countries: 7 to 15 digits
+    return /^\d{7,15}$/.test(clean)
+  }
+
+  // Domain format validation helper
+  const validateDomain = (domain) => {
+    if (!domain || !domain.trim()) return true // Optional
+    const clean = domain.trim().toLowerCase()
+    if (clean.includes("://") || clean.includes("/") || clean.includes(":") || clean.includes("?")) {
+      return false
+    }
+    return /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(clean)
+  }
+
+  // Validate Add Account form fields
   const validateForm = () => {
     const errors = {}
     if (!formData.companyName.trim()) {
-      errors.companyName = "Leads Account / Company name is required"
+      errors.companyName = "Company / Leads Account name is required"
     }
     if (!formData.displayName.trim()) {
       errors.displayName = "Display name is required"
@@ -126,6 +240,22 @@ export default function SuperAdminDashboardPage() {
         errors.adminEmail = "Please enter a valid email address"
       }
     }
+
+    if (formData.contactNumber.trim()) {
+      if (!validateMobile(formData.contactNumber, formData.countryCode)) {
+        errors.contactNumber =
+          formData.countryCode === "IN"
+            ? "Enter a valid 10-digit Indian mobile number (e.g. 9876543210)"
+            : "Enter a valid phone number (digits only)"
+      }
+    }
+
+    if (formData.customDomain.trim()) {
+      if (!validateDomain(formData.customDomain)) {
+        errors.customDomain = "Invalid domain format. Example: crm.yourcompany.com"
+      }
+    }
+
     if (!formData.password) {
       errors.password = "Password is required"
     } else if (formData.password.length < 8) {
@@ -140,24 +270,65 @@ export default function SuperAdminDashboardPage() {
     return Object.keys(errors).length === 0
   }
 
+  // Validate Edit Account form fields
+  const validateEditForm = () => {
+    const errors = {}
+    if (!editFormData.companyName.trim()) {
+      errors.companyName = "Company name is required"
+    }
+    if (!editFormData.displayName.trim()) {
+      errors.displayName = "Display name is required"
+    }
+    if (!editFormData.adminName.trim()) {
+      errors.adminName = "Admin full name is required"
+    }
+    if (editFormData.contactNumber.trim()) {
+      if (!validateMobile(editFormData.contactNumber, editFormData.countryCode)) {
+        errors.contactNumber =
+          editFormData.countryCode === "IN"
+            ? "Enter a valid 10-digit Indian mobile number (e.g. 9876543210)"
+            : "Enter a valid phone number (digits only)"
+      }
+    }
+    if (editFormData.customDomain.trim()) {
+      if (!validateDomain(editFormData.customDomain)) {
+        errors.customDomain = "Invalid domain format. Example: crm.yourcompany.com"
+      }
+    }
+    setEditFormErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
   // Handle Add Account Form Submission
   const handleCreateAccount = async (e) => {
     e.preventDefault()
     setActionError(null)
 
-    if (!validateForm()) return
+    if (!validateForm()) {
+      toast.error("Please resolve the validation errors")
+      return
+    }
 
     try {
       setIsSubmitting(true)
+      const toastId = toast.loading("Creating Leads Account & Admin user...")
       const { confirmPassword, ...payload } = formData
       const response = await apiClient.createSuperAdminAccount(payload)
+      toast.dismiss(toastId)
 
       if (response.success && response.data) {
-        // Show success notification without exposing password
+        const acc = response.data.account
+        const origin = typeof window !== "undefined" ? window.location.origin : ""
+        const portalUrl = `${origin}/portal/login?tenant=${acc.accountId}`
+
+        toast.success(`Leads Account "${acc.companyName}" created successfully!`)
+
         setSuccessMessage({
-          accountId: response.data.account.accountId,
-          companyName: response.data.account.companyName,
-          adminEmail: response.data.account.adminEmail,
+          accountId: acc.accountId,
+          companyName: acc.companyName,
+          adminEmail: acc.adminEmail,
+          password: payload.password,
+          portalUrl,
         })
 
         // Reset form
@@ -166,24 +337,82 @@ export default function SuperAdminDashboardPage() {
           displayName: "",
           adminName: "",
           adminEmail: "",
+          countryCode: "IN",
           contactNumber: "",
           password: "",
           confirmPassword: "",
           status: "active",
+          customDomain: "",
+          logoUrl: "",
+          primaryColor: "#4f46e5",
+          pageTitle: "",
         })
         setShowPassword(false)
         setShowConfirmPassword(false)
         setIsAddModalOpen(false)
 
-        // Seamlessly refresh data without a full page reload
-        loadData()
+        // Seamlessly refresh stats and accounts
+        loadStats()
+        loadAccounts(debouncedSearch, statusFilter, 1)
       } else {
-        setActionError(response.error || "Failed to create Leads Account")
+        const errMsg = response.error || "Failed to create Leads Account"
+        setActionError(errMsg)
+        toast.error(errMsg)
       }
     } catch (err) {
-      setActionError(err.message || "Failed to create Leads Account")
+      const errMsg = err.message || "Failed to create Leads Account"
+      setActionError(errMsg)
+      toast.error(errMsg)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // Open Edit Modal for an Account
+  const handleOpenEditModal = (account) => {
+    setEditFormData({
+      id: account.id,
+      companyName: account.companyName || "",
+      displayName: account.displayName || "",
+      adminName: account.adminName || "",
+      countryCode: "IN",
+      contactNumber: account.contactNumber || "",
+      customDomain: account.customDomain || "",
+      logoUrl: account.logoUrl || "",
+      primaryColor: account.primaryColor || "#4f46e5",
+      pageTitle: account.pageTitle || "",
+    })
+    setEditFormErrors({})
+    setIsEditModalOpen(true)
+  }
+
+  // Handle Edit Account Form Submission
+  const handleUpdateAccount = async (e) => {
+    e.preventDefault()
+    if (!validateEditForm()) {
+      toast.error("Please resolve the validation errors")
+      return
+    }
+
+    try {
+      setIsUpdating(true)
+      const toastId = toast.loading("Saving account & white-label settings...")
+      const { id, ...payload } = editFormData
+      const response = await apiClient.updateSuperAdminAccount(id, payload)
+      toast.dismiss(toastId)
+
+      if (response.success) {
+        toast.success(`Account "${editFormData.companyName}" updated successfully!`)
+        setIsEditModalOpen(false)
+        loadStats()
+        loadAccounts(debouncedSearch, statusFilter, page)
+      } else {
+        toast.error(response.error || "Failed to update account")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to update account")
+    } finally {
+      setIsUpdating(false)
     }
   }
 
@@ -192,38 +421,46 @@ export default function SuperAdminDashboardPage() {
     if (!accountToToggle) return
 
     const newStatus = accountToToggle.status === "active" ? "suspended" : "active"
+    const toastId = toast.loading(`Updating account status to ${newStatus}...`)
 
     try {
       const response = await apiClient.updateAccountStatus(accountToToggle.id, newStatus)
+      toast.dismiss(toastId)
       if (response.success) {
+        toast.success(`Account "${accountToToggle.companyName}" is now ${newStatus}!`)
         setIsConfirmSuspendOpen(false)
         setAccountToToggle(null)
-        // Refresh without full reload
-        loadData()
+        loadStats()
+        loadAccounts(debouncedSearch, statusFilter, page)
       } else {
-        alert(response.error || "Failed to update status")
+        const errMsg = response.error || "Failed to update status"
+        toast.error(errMsg)
       }
     } catch (err) {
-      alert(err.message || "Failed to update status")
+      toast.dismiss(toastId)
+      const errMsg = err.message || "Failed to update status"
+      toast.error(errMsg)
     }
   }
 
+  // Compute pagination record count string
+  const startRecord = totalAccountsCount === 0 ? 0 : (page - 1) * 10 + 1
+  const endRecord = Math.min(page * 10, totalAccountsCount)
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
-      {/* Top Controls Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-4 animate-in fade-in duration-200">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-2.5 border-b border-slate-200">
         <div>
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">
-            Leads Accounts & Multi-Tenancy
-          </h2>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Leads Accounts</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Overview of all customer accounts, assigned tenant administrators, and system status
+            Manage customer accounts, tenant administrators, and white-label branding
           </p>
         </div>
 
         <div className="flex items-center space-x-3">
           <button
-            onClick={() => loadData()}
+            onClick={() => refreshAllData()}
             disabled={refreshing}
             className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
           >
@@ -238,14 +475,21 @@ export default function SuperAdminDashboardPage() {
                 displayName: "",
                 adminName: "",
                 adminEmail: "",
+                countryCode: "IN",
                 contactNumber: "",
+                password: "",
+                confirmPassword: "",
                 status: "active",
+                customDomain: "",
+                logoUrl: "",
+                primaryColor: "#4f46e5",
+                pageTitle: "",
               })
               setFormErrors({})
               setActionError(null)
               setIsAddModalOpen(true)
             }}
-            className="inline-flex items-center space-x-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm shadow-indigo-100 transition-colors cursor-pointer"
+            className="inline-flex items-center space-x-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Add Leads Account</span>
@@ -255,112 +499,198 @@ export default function SuperAdminDashboardPage() {
 
       {/* Success Notification Banner when Account is created */}
       {successMessage && (
-        <div className="p-4 rounded-2xl bg-emerald-50/90 border border-emerald-200/90 shadow-xs flex items-start justify-between relative animate-in fade-in">
-          <div className="flex items-start space-x-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 shadow-2xs space-y-3 animate-in fade-in">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start space-x-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
+              <div>
+                <h4 className="text-sm font-bold text-emerald-950">
+                  Leads Account & Client Portal Provisioned Successfully!
+                </h4>
+                <p className="text-xs text-emerald-800 mt-0.5">
+                  Account <strong>{successMessage.companyName}</strong> is active. You can share these credentials with the client:
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setSuccessMessage(null)}
+              className="text-emerald-500 hover:text-emerald-800 p-1 rounded-lg cursor-pointer"
+              aria-label="Dismiss banner"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs bg-white p-3.5 rounded-lg border border-emerald-200">
             <div>
-              <h4 className="text-sm font-semibold text-emerald-900">
-                Leads Account & Admin Created Successfully!
-              </h4>
-              <p className="text-xs text-emerald-700 mt-0.5 leading-relaxed">
-                Account <strong>{successMessage.companyName}</strong> (Tenant ID: <span className="font-mono font-medium">{successMessage.accountId}</span>) has been provisioned. Admin <strong>{successMessage.adminEmail}</strong> can now log in using the configured password.
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                Dedicated Client Portal URL
+              </span>
+              <div className="flex items-center space-x-2 mt-1">
+                <a
+                  href={successMessage.portalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-xs font-semibold text-indigo-600 hover:text-indigo-800 underline truncate max-w-[260px] flex items-center space-x-1"
+                >
+                  <span>{successMessage.portalUrl}</span>
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                </a>
+                <button
+                  onClick={() => handleCopy(successMessage.portalUrl, "success-url")}
+                  className="text-slate-400 hover:text-indigo-600 cursor-pointer p-0.5"
+                  title="Copy URL"
+                >
+                  {copiedKey === "success-url" ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                Account ID & Admin Email
+              </span>
+              <p className="font-mono text-xs text-slate-800 mt-1">
+                ID: <span className="font-semibold text-indigo-700">{successMessage.accountId}</span> | Email: <span className="font-semibold">{successMessage.adminEmail}</span>
               </p>
             </div>
+
+            <div className="md:col-span-2 pt-2 border-t border-emerald-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-slate-500 text-xs font-medium">Configured Password:</span>
+                <span className="font-mono font-bold bg-slate-100 px-2.5 py-0.5 rounded text-slate-800 text-xs">
+                  {successMessage.password}
+                </span>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => copyClientPackage(successMessage)}
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors cursor-pointer"
+                >
+                  {copiedKey === "pkg" ? (
+                    <Check className="w-3.5 h-3.5" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  <span>{copiedKey === "pkg" ? "Copied!" : "Copy Full Client Package"}</span>
+                </button>
+
+                <a
+                  href={successMessage.portalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center space-x-1 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors"
+                >
+                  <span>Open Portal</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </div>
           </div>
-          <button
-            onClick={() => setSuccessMessage(null)}
-            className="text-emerald-500 hover:text-emerald-800 p-1 rounded-lg cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
         </div>
       )}
 
-      {/* 4 Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        {/* Card 1: Total Leads Accounts */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+      {/* 4 Compact Summary Cards (Full Dataset Metrics) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Card 1: Total Accounts */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Total Accounts
             </p>
-            <h3 className="text-2xl font-bold text-slate-900 mt-1">{stats.totalAccounts}</h3>
-            <p className="text-[11px] text-slate-400 mt-1">Tenant accounts configured</p>
+            <h3 className="text-xl font-bold text-slate-900 mt-1">{stats.totalAccounts}</h3>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-            <Building2 className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+            <Building2 className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 2: Active Leads Accounts */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        {/* Card 2: Active Accounts */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Active Accounts
             </p>
-            <h3 className="text-2xl font-bold text-emerald-600 mt-1">{stats.activeAccounts}</h3>
-            <p className="text-[11px] text-slate-400 mt-1">Operational & running</p>
+            <h3 className="text-xl font-bold text-emerald-600 mt-1">{stats.activeAccounts}</h3>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <CheckCircle2 className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+            <CheckCircle2 className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 3: Suspended Leads Accounts */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        {/* Card 3: Suspended Accounts */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Suspended Accounts
             </p>
-            <h3 className="text-2xl font-bold text-amber-600 mt-1">{stats.suspendedAccounts}</h3>
-            <p className="text-[11px] text-slate-400 mt-1">Access restricted</p>
+            <h3 className="text-xl font-bold text-amber-600 mt-1">{stats.suspendedAccounts}</h3>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-            <AlertTriangle className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+            <AlertTriangle className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 4: Total Leads Account Admins */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        {/* Card 4: Account Admins */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Account Admins
             </p>
-            <h3 className="text-2xl font-bold text-slate-900 mt-1">{stats.totalAdmins}</h3>
-            <p className="text-[11px] text-slate-400 mt-1">Tenant admins assigned</p>
+            <h3 className="text-xl font-bold text-slate-900 mt-1">{stats.totalAdmins}</h3>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center">
-            <Users className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+            <Users className="w-5 h-5" />
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="relative w-full sm:w-96">
+          {isSearching ? (
+            <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          ) : (
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          )}
           <input
             type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              setPage(1)
-            }}
-            placeholder="Search by company, account ID, admin..."
-            className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search by company, ID, admin email, domain..."
+            className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-colors"
           />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchInput("")
+                setDebouncedSearch("")
+                setPage(1)
+              }}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
+              aria-label="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center space-x-2 w-full sm:w-auto">
           <Filter className="w-3.5 h-3.5 text-slate-400" />
-          <span className="text-xs text-slate-500">Status:</span>
+          <span className="text-xs text-slate-500 font-medium">Status:</span>
           <select
             value={statusFilter}
             onChange={(e) => {
               setStatusFilter(e.target.value)
-              setPage(1)
+              setPage(1) // Reset to page 1 on status change
             }}
-            className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+            className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-600 cursor-pointer"
           >
             <option value="all">All Accounts</option>
             <option value="active">Active Only</option>
@@ -370,24 +700,25 @@ export default function SuperAdminDashboardPage() {
       </div>
 
       {/* Leads Accounts Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
-                <th className="py-3.5 px-4 sm:px-6">Account / Company</th>
-                <th className="py-3.5 px-4">Account ID</th>
-                <th className="py-3.5 px-4">Account Admin</th>
-                <th className="py-3.5 px-4">Admin Email</th>
-                <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Created Date</th>
-                <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
+                <th className="py-3 px-4 sm:px-6">Company / Account Name</th>
+                <th className="py-3 px-4">Account ID</th>
+                <th className="py-3 px-4">Account Admin</th>
+                <th className="py-3 px-4">Admin Email</th>
+                <th className="py-3 px-4">Custom Domain / Portal</th>
+                <th className="py-3 px-4">Status</th>
+                <th className="py-3 px-4">Created Date</th>
+                <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <td colSpan={8} className="py-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
                       <span>Loading Leads Accounts...</span>
@@ -396,14 +727,14 @@ export default function SuperAdminDashboardPage() {
                 </tr>
               ) : accounts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <td colSpan={8} className="py-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <Building2 className="w-8 h-8 text-slate-300" />
                       <p className="font-medium text-slate-700">No Leads Accounts Found</p>
                       <p className="text-xs text-slate-400">
-                        {search || statusFilter !== "all"
+                        {debouncedSearch || statusFilter !== "all"
                           ? "Try adjusting your search query or status filter."
-                          : "Get started by adding your first Leads Account."}
+                          : "Get started by clicking 'Add Leads Account'."}
                       </p>
                     </div>
                   </td>
@@ -411,12 +742,12 @@ export default function SuperAdminDashboardPage() {
               ) : (
                 accounts.map((account) => (
                   <tr key={account.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-3.5 px-4 sm:px-6">
+                    <td className="py-3 px-4 sm:px-6">
                       <div className="font-semibold text-slate-900">{account.companyName}</div>
                       <div className="text-[11px] text-slate-400">{account.displayName}</div>
                     </td>
 
-                    <td className="py-3.5 px-4">
+                    <td className="py-3 px-4">
                       <div className="inline-flex items-center space-x-1.5 font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded text-slate-700">
                         <span>{account.accountId}</span>
                         <button
@@ -433,17 +764,45 @@ export default function SuperAdminDashboardPage() {
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-4 font-medium text-slate-800">
+                    <td className="py-3 px-4 font-medium text-slate-800">
                       {account.adminName}
                     </td>
 
-                    <td className="py-3.5 px-4 text-slate-600 font-mono text-[11px]">
+                    <td className="py-3 px-4 text-slate-600 font-mono text-[11px]">
                       {account.adminEmail}
                     </td>
 
-                    <td className="py-3.5 px-4">
+                    <td className="py-3 px-4">
+                      {account.customDomain ? (
+                        <div className="flex flex-col space-y-1">
+                          <div className="flex items-center space-x-1">
+                            <Globe className="w-3 h-3 text-indigo-600 shrink-0" />
+                            <span className="font-mono font-medium text-slate-800 text-[11px] truncate max-w-[130px]">
+                              {account.customDomain}
+                            </span>
+                          </div>
+                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 w-fit">
+                            Pending DNS
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center space-x-1.5">
+                          <Link
+                            href={`/portal/login?tenant=${account.accountId}`}
+                            target="_blank"
+                            className="inline-flex items-center space-x-1 text-[11px] font-mono text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200/80 transition-colors"
+                            title="Open Client Portal in New Tab"
+                          >
+                            <span className="truncate max-w-[90px]">/portal?tenant={account.accountId}</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </Link>
+                        </div>
+                      )}
+                    </td>
+
+                    <td className="py-3 px-4">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold tracking-wide uppercase ${
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wide uppercase ${
                           account.status === "active"
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                             : "bg-amber-50 text-amber-700 border border-amber-200"
@@ -458,7 +817,7 @@ export default function SuperAdminDashboardPage() {
                       </span>
                     </td>
 
-                    <td className="py-3.5 px-4 text-slate-500 text-[11px]">
+                    <td className="py-3 px-4 text-slate-500 text-[11px]">
                       {new Date(account.createdAt).toLocaleDateString(undefined, {
                         year: "numeric",
                         month: "short",
@@ -466,18 +825,31 @@ export default function SuperAdminDashboardPage() {
                       })}
                     </td>
 
-                    <td className="py-3.5 px-4 sm:px-6 text-right space-x-2 whitespace-nowrap">
+                    <td className="py-3 px-4 sm:px-6 text-right space-x-1.5 whitespace-nowrap">
+                      {/* View Details */}
                       <button
                         onClick={() => {
                           setSelectedAccount(account)
                           setIsDetailsModalOpen(true)
                         }}
                         className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors cursor-pointer"
+                        title="View Account Details & White-Label"
                       >
                         <Eye className="w-3 h-3 text-slate-500" />
                         <span>Details</span>
                       </button>
 
+                      {/* Edit Account & White-Label */}
+                      <button
+                        onClick={() => handleOpenEditModal(account)}
+                        className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 transition-colors cursor-pointer"
+                        title="Edit Account & Branding"
+                      >
+                        <Edit2 className="w-3 h-3 text-indigo-600" />
+                        <span>Edit</span>
+                      </button>
+
+                      {/* Activate / Suspend with Confirmation */}
                       {account.status === "active" ? (
                         <button
                           onClick={() => {
@@ -509,53 +881,56 @@ export default function SuperAdminDashboardPage() {
           </table>
         </div>
 
-        {/* Pagination Footer */}
-        {totalPages > 1 && (
-          <div className="p-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span>
-              Showing {accounts.length} of {totalAccountsCount} accounts
-            </span>
-            <div className="flex items-center space-x-1.5">
-              <button
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-2.5 py-1 border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <span className="px-2 font-medium text-slate-700">
-                Page {page} of {totalPages}
-              </span>
-              <button
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="px-2.5 py-1 border border-slate-200 rounded-md bg-white hover:bg-slate-50 disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
+        {/* Section 3: Pagination Controls (Max 10 per page) */}
+        <div className="p-3.5 border-t border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+          <div>
+            Showing {startRecord}–{endRecord} of {totalAccountsCount} accounts
           </div>
-        )}
+
+          <div className="flex items-center space-x-2">
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors cursor-pointer"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span>Previous</span>
+            </button>
+
+            <span className="px-3 py-1 font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg">
+              Page {page} of {Math.max(1, totalPages)}
+            </span>
+
+            <button
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors cursor-pointer"
+            >
+              <span>Next</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* --- MODAL 1: Add Leads Account Form --- */}
+      {/* --- MODAL 1: Add Leads Account Form (Sections A & B + White-Label) --- */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-2xl w-full my-8 overflow-hidden">
             <div className="h-14 px-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <div className="flex items-center space-x-2 font-semibold text-slate-900 text-sm">
                 <Building2 className="w-4 h-4 text-indigo-600" />
-                <span>Add Leads Account</span>
+                <span>Add New Leads Account</span>
               </div>
               <button
                 onClick={() => setIsAddModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateAccount} className="p-6 space-y-4">
+            <form onSubmit={handleCreateAccount} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
               {actionError && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-center space-x-2">
                   <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
@@ -563,182 +938,270 @@ export default function SuperAdminDashboardPage() {
                 </div>
               )}
 
-              {/* Company / Account Name */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Leads Account / Company Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Apex Dynamics Ltd"
-                  value={formData.companyName}
-                  onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
-                />
-                {formErrors.companyName && (
-                  <p className="text-[11px] text-red-600 mt-1">{formErrors.companyName}</p>
-                )}
-              </div>
-
-              {/* Account Display Name */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Account Display Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Apex Dynamics"
-                  value={formData.displayName}
-                  onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
-                />
-                {formErrors.displayName && (
-                  <p className="text-[11px] text-red-600 mt-1">{formErrors.displayName}</p>
-                )}
-              </div>
-
-              {/* Admin Full Name */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Account Admin Full Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Sarah Jenkins"
-                  value={formData.adminName}
-                  onChange={(e) => setFormData({ ...formData, adminName: e.target.value })}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
-                />
-                {formErrors.adminName && (
-                  <p className="text-[11px] text-red-600 mt-1">{formErrors.adminName}</p>
-                )}
-              </div>
-
-              {/* Admin Email */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Account Admin Email <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="email"
-                  required
-                  placeholder="admin@apexdynamics.com"
-                  value={formData.adminEmail}
-                  onChange={(e) => setFormData({ ...formData, adminEmail: e.target.value })}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
-                />
-                {formErrors.adminEmail && (
-                  <p className="text-[11px] text-red-600 mt-1">{formErrors.adminEmail}</p>
-                )}
-              </div>
-
-              {/* Contact Number & Status */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Contact Number (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="+1 (555) 019-2834"
-                    value={formData.contactNumber}
-                    onChange={(e) => setFormData({ ...formData, contactNumber: e.target.value })}
-                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
-                  />
+              {/* Section A: Account & White-Label Information */}
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2 pb-2 border-b border-slate-100">
+                  <Building2 className="w-4 h-4 text-indigo-600" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                    Section A: Account & White-Label Information
+                  </h3>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Account Status
-                  </label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) =>
-                      setFormData({ ...formData, status: e.target.value })
-                    }
-                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
-                  >
-                    <option value="active">Active (Default)</option>
-                    <option value="suspended">Suspended</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Password & Confirm Password */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Password <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Company Name */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Company / Leads Account Name <span className="text-red-500">*</span>
+                    </label>
                     <input
-                      type={showPassword ? "text" : "password"}
+                      type="text"
                       required
-                      placeholder="Min. 8 characters"
-                      value={formData.password}
-                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      className="w-full text-xs pl-3 pr-8 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                      placeholder="e.g. Apex Dynamics Ltd"
+                      value={formData.companyName}
+                      onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none cursor-pointer"
-                      title={showPassword ? "Hide password" : "Show password"}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="w-3.5 h-3.5" />
-                      ) : (
-                        <Eye className="w-3.5 h-3.5" />
-                      )}
-                    </button>
+                    {formErrors.companyName && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.companyName}</p>
+                    )}
                   </div>
-                  {formErrors.password && (
-                    <p className="text-[11px] text-red-600 mt-1">{formErrors.password}</p>
-                  )}
-                </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Confirm Password <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
+                  {/* Display Name */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Display Name <span className="text-red-500">*</span>
+                    </label>
                     <input
-                      type={showConfirmPassword ? "text" : "password"}
+                      type="text"
                       required
-                      placeholder="Re-enter password"
-                      value={formData.confirmPassword}
-                      onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                      className="w-full text-xs pl-3 pr-8 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                      placeholder="e.g. Apex Dynamics"
+                      value={formData.displayName}
+                      onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none cursor-pointer"
-                      title={showConfirmPassword ? "Hide password" : "Show password"}
-                    >
-                      {showConfirmPassword ? (
-                        <EyeOff className="w-3.5 h-3.5" />
-                      ) : (
-                        <Eye className="w-3.5 h-3.5" />
-                      )}
-                    </button>
+                    {formErrors.displayName && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.displayName}</p>
+                    )}
                   </div>
-                  {formErrors.confirmPassword && (
-                    <p className="text-[11px] text-red-600 mt-1">{formErrors.confirmPassword}</p>
-                  )}
+
+                  {/* Custom Domain (Optional) */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Custom Domain (Optional)
+                    </label>
+                    <div className="relative">
+                      <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="crm.yourcompany.com"
+                        value={formData.customDomain}
+                        onChange={(e) => setFormData({ ...formData, customDomain: e.target.value })}
+                        className="w-full text-xs pl-8 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                      />
+                    </div>
+                    {formErrors.customDomain && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.customDomain}</p>
+                    )}
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Pending DNS CNAME pointing to <code className="font-mono">portal.leadflow.io</code>
+                    </p>
+                  </div>
+
+                  {/* Logo URL (Optional) */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Logo URL (Optional)
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://example.com/logo.png"
+                      value={formData.logoUrl}
+                      onChange={(e) => setFormData({ ...formData, logoUrl: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                    />
+                  </div>
+
+                  {/* Primary Brand Colour */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Primary Brand Colour
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="color"
+                        value={formData.primaryColor}
+                        onChange={(e) => setFormData({ ...formData, primaryColor: e.target.value })}
+                        className="w-8 h-8 rounded border border-slate-300 cursor-pointer p-0.5 bg-white"
+                      />
+                      <input
+                        type="text"
+                        value={formData.primaryColor}
+                        onChange={(e) => setFormData({ ...formData, primaryColor: e.target.value })}
+                        placeholder="#4f46e5"
+                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Account Status */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Initial Status
+                    </label>
+                    <select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    >
+                      <option value="active">Active (Default)</option>
+                      <option value="suspended">Suspended</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              <div className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-100 flex items-start space-x-2">
-                <Lock className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+              {/* Section B: Account Admin Information */}
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2 pb-2 border-b border-slate-100">
+                  <Users className="w-4 h-4 text-indigo-600" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                    Section B: Account Admin Information
+                  </h3>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Admin Name */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Admin Full Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Sarah Jenkins"
+                      value={formData.adminName}
+                      onChange={(e) => setFormData({ ...formData, adminName: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                    />
+                    {formErrors.adminName && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.adminName}</p>
+                    )}
+                  </div>
+
+                  {/* Admin Email */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Admin Email <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="admin@apexdynamics.com"
+                      value={formData.adminEmail}
+                      onChange={(e) => setFormData({ ...formData, adminEmail: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                    />
+                    {formErrors.adminEmail && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.adminEmail}</p>
+                    )}
+                  </div>
+
+                  {/* Mobile Number with Indian / Global Rule */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Mobile Number (Validated)
+                    </label>
+                    <div className="flex space-x-2">
+                      <select
+                        value={formData.countryCode}
+                        onChange={(e) => setFormData({ ...formData, countryCode: e.target.value })}
+                        className="text-xs bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                      >
+                        <option value="IN">🇮🇳 India (+91)</option>
+                        <option value="US">🇺🇸 USA / Canada (+1)</option>
+                        <option value="UK">🇬🇧 UK (+44)</option>
+                        <option value="OTHER">🌐 Other</option>
+                      </select>
+                      <input
+                        type="text"
+                        placeholder={formData.countryCode === "IN" ? "10-digit mobile (e.g. 9876543210)" : "Phone number"}
+                        value={formData.contactNumber}
+                        onChange={(e) => setFormData({ ...formData, contactNumber: e.target.value })}
+                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white font-mono"
+                      />
+                    </div>
+                    {formErrors.contactNumber && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.contactNumber}</p>
+                    )}
+                  </div>
+
+                  {/* Password */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Password <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        required
+                        placeholder="Min. 8 characters"
+                        value={formData.password}
+                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                        className="w-full text-xs pl-3 pr-8 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none cursor-pointer"
+                        title={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    {formErrors.password && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.password}</p>
+                    )}
+                  </div>
+
+                  {/* Confirm Password */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Confirm Password <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPassword ? "text" : "password"}
+                        required
+                        placeholder="Re-enter password"
+                        value={formData.confirmPassword}
+                        onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                        className="w-full text-xs pl-3 pr-8 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none cursor-pointer"
+                        title={showConfirmPassword ? "Hide password" : "Show password"}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    {formErrors.confirmPassword && (
+                      <p className="text-[11px] text-red-600 mt-1">{formErrors.confirmPassword}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Informational Guidance */}
+              <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-200 flex items-start space-x-2">
+                <Lock className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
                 <span>
-                  The Admin will use this email and password to log in. Passwords must be at least 8 characters and are securely hashed with bcrypt.
+                  The Admin will log in using this email and password. Passwords are securely hashed with bcrypt. A dedicated client portal path (<code className="font-mono text-indigo-700">/portal/login?tenant=...</code>) is automatically generated.
                 </span>
               </div>
 
+              {/* Modal Buttons */}
               <div className="pt-4 border-t border-slate-100 flex items-center justify-end space-x-2">
                 <button
                   type="button"
@@ -767,10 +1230,201 @@ export default function SuperAdminDashboardPage() {
         </div>
       )}
 
-      {/* --- MODAL 2: Account Details View --- */}
+      {/* --- MODAL 2: Edit Account & White-Label Settings --- */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-xl w-full my-8 overflow-hidden">
+            <div className="h-14 px-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center space-x-2 font-semibold text-slate-900 text-sm">
+                <Edit2 className="w-4 h-4 text-indigo-600" />
+                <span>Edit Account & White-Label Settings</span>
+              </div>
+              <button
+                onClick={() => setIsEditModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateAccount} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Company Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editFormData.companyName}
+                    onChange={(e) => setEditFormData({ ...editFormData, companyName: e.target.value })}
+                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                  {editFormErrors.companyName && (
+                    <p className="text-[11px] text-red-600 mt-1">{editFormErrors.companyName}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Display Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editFormData.displayName}
+                    onChange={(e) => setEditFormData({ ...editFormData, displayName: e.target.value })}
+                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                  {editFormErrors.displayName && (
+                    <p className="text-[11px] text-red-600 mt-1">{editFormErrors.displayName}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Admin Full Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editFormData.adminName}
+                    onChange={(e) => setEditFormData({ ...editFormData, adminName: e.target.value })}
+                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                  {editFormErrors.adminName && (
+                    <p className="text-[11px] text-red-600 mt-1">{editFormErrors.adminName}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Contact Number
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="10-digit mobile"
+                    value={editFormData.contactNumber}
+                    onChange={(e) => setEditFormData({ ...editFormData, contactNumber: e.target.value })}
+                    className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 font-mono"
+                  />
+                  {editFormErrors.contactNumber && (
+                    <p className="text-[11px] text-red-600 mt-1">{editFormErrors.contactNumber}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* White-Label Settings Section */}
+              <div className="pt-3 border-t border-slate-100 space-y-3">
+                <div className="flex items-center space-x-2">
+                  <Palette className="w-4 h-4 text-indigo-600" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                    White-Label Customization
+                  </h4>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Custom Domain
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="crm.yourbrand.com"
+                      value={editFormData.customDomain}
+                      onChange={(e) => setEditFormData({ ...editFormData, customDomain: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    />
+                    {editFormErrors.customDomain && (
+                      <p className="text-[11px] text-red-600 mt-1">{editFormErrors.customDomain}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Browser Page Title
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Apex CRM Portal"
+                      value={editFormData.pageTitle}
+                      onChange={(e) => setEditFormData({ ...editFormData, pageTitle: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Logo URL
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://example.com/logo.png"
+                      value={editFormData.logoUrl}
+                      onChange={(e) => setEditFormData({ ...editFormData, logoUrl: e.target.value })}
+                      className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Brand Primary Colour
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="color"
+                        value={editFormData.primaryColor}
+                        onChange={(e) => setEditFormData({ ...editFormData, primaryColor: e.target.value })}
+                        className="w-8 h-8 rounded border border-slate-300 cursor-pointer p-0.5 bg-white"
+                      />
+                      <input
+                        type="text"
+                        value={editFormData.primaryColor}
+                        onChange={(e) => setEditFormData({ ...editFormData, primaryColor: e.target.value })}
+                        className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* DNS Notice */}
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px] leading-relaxed">
+                  <strong>Notice on Domain Activation:</strong> Custom domain activation remains pending until DNS configuration is verified. Add a <code>CNAME</code> record pointing to <code>portal.leadflow.io</code> in your DNS provider.
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdating}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm disabled:opacity-50 transition-colors cursor-pointer flex items-center space-x-1.5"
+                >
+                  {isUpdating ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Saving Changes...</span>
+                    </>
+                  ) : (
+                    <span>Save Changes</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 3: Account Details View + White-Label Summary --- */}
       {isDetailsModalOpen && selectedAccount && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full my-8 overflow-hidden">
             <div className="h-14 px-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <div className="flex items-center space-x-2 font-semibold text-slate-900 text-sm">
                 <Info className="w-4 h-4 text-indigo-600" />
@@ -778,14 +1432,14 @@ export default function SuperAdminDashboardPage() {
               </div>
               <button
                 onClick={() => setIsDetailsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="p-6 space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80">
                   <span className="text-slate-400 block text-[10px] font-semibold uppercase">
                     Account / Company
@@ -807,6 +1461,91 @@ export default function SuperAdminDashboardPage() {
                 </div>
               </div>
 
+              {/* Dedicated Client Portal Link */}
+              <div className="bg-indigo-50/70 border border-indigo-200/80 rounded-xl p-3.5 space-y-1.5">
+                <span className="text-slate-500 block text-[10px] font-semibold uppercase tracking-wider">
+                  Client CRM Portal URL
+                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-indigo-700 text-xs truncate">
+                    {typeof window !== "undefined" ? window.location.origin : ""}/portal/login?tenant={selectedAccount.accountId}
+                  </span>
+                  <div className="flex items-center space-x-1 shrink-0">
+                    <button
+                      onClick={() => {
+                        const origin = typeof window !== "undefined" ? window.location.origin : ""
+                        handleCopy(`${origin}/portal/login?tenant=${selectedAccount.accountId}`, `modal-url`)
+                      }}
+                      className="p-1 text-slate-500 hover:text-indigo-600 rounded cursor-pointer"
+                      title="Copy Portal Link"
+                    >
+                      {copiedKey === "modal-url" ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                    <a
+                      href={`/portal/login?tenant=${selectedAccount.accountId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-1 text-indigo-600 hover:text-indigo-800 rounded cursor-pointer"
+                      title="Launch Portal"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              {/* White-Label Settings Summary */}
+              <div className="border border-slate-200 rounded-xl p-4 space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Globe className="w-3.5 h-3.5 text-indigo-600" />
+                  <h4 className="font-semibold text-slate-800 text-xs uppercase tracking-wide">
+                    White-Label Configuration
+                  </h4>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs pt-1">
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Custom Domain</span>
+                    <span className="font-mono text-slate-800">
+                      {selectedAccount.customDomain || "Not configured"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Domain Status</span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                      {selectedAccount.customDomain ? "Pending DNS Verification" : "Unconfigured"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Brand Colour</span>
+                    <div className="flex items-center space-x-2 mt-0.5">
+                      <span
+                        className="w-4 h-4 rounded-full border border-slate-300"
+                        style={{ backgroundColor: selectedAccount.primaryColor || "#4f46e5" }}
+                      />
+                      <span className="font-mono text-slate-700">
+                        {selectedAccount.primaryColor || "#4f46e5"}
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Page Title</span>
+                    <span className="text-slate-700">
+                      {selectedAccount.pageTitle || "Default (LeadFlow CRM)"}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedAccount.customDomain && (
+                  <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-600 space-y-1">
+                    <p className="font-semibold text-slate-800">DNS CNAME Setup:</p>
+                    <p>Host: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">{selectedAccount.customDomain}</code></p>
+                    <p>Value: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">portal.leadflow.io</code></p>
+                  </div>
+                )}
+              </div>
+
+              {/* Account Administrator Details */}
               <div className="border border-slate-200 rounded-xl p-4 space-y-2">
                 <h4 className="font-semibold text-slate-800 text-xs uppercase tracking-wide">
                   Account Administrator
@@ -822,7 +1561,7 @@ export default function SuperAdminDashboardPage() {
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Contact Number</span>
-                    <span className="text-slate-700">
+                    <span className="text-slate-700 font-mono">
                       {selectedAccount.contactNumber || "Not specified"}
                     </span>
                   </div>
@@ -859,7 +1598,7 @@ export default function SuperAdminDashboardPage() {
         </div>
       )}
 
-      {/* --- MODAL 3: Confirmation Dialog for Suspend/Activate --- */}
+      {/* --- MODAL 4: Confirmation Dialog for Suspend/Activate --- */}
       {isConfirmSuspendOpen && accountToToggle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">

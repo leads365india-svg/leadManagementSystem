@@ -56,6 +56,19 @@ class ApiClient {
     return this.request("/leads/stats")
   }
 
+  async deleteLead(id) {
+    return this.request(`/leads/${id}`, {
+      method: "DELETE",
+    })
+  }
+
+  async updateLead(id, data) {
+    return this.request(`/leads/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+
   // --- Authentication Endpoints ---
   async login(credentials) {
     return this.request("/auth/login", {
@@ -72,6 +85,10 @@ class ApiClient {
 
   async getMe() {
     return this.request("/auth/me")
+  }
+
+  async getTenantInfo(tenantId) {
+    return this.request(`/auth/tenant-info?tenantId=${encodeURIComponent(tenantId)}`)
   }
 
   // --- Super Admin Endpoints ---
@@ -101,6 +118,13 @@ class ApiClient {
     })
   }
 
+  async updateSuperAdminAccount(accountId, payload) {
+    return this.request(`/super-admin/accounts/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
   async updateAccountStatus(accountId, status) {
     return this.request(`/super-admin/accounts/${accountId}/status`, {
       method: "PATCH",
@@ -116,6 +140,30 @@ class ApiClient {
     return this.request("/super-admin/permissions", {
       method: "PUT",
       body: JSON.stringify({ permissions }),
+    })
+  }
+
+  // --- Lead Feeds & Website Integration Endpoints ---
+  async getLeadFeedSettings() {
+    return this.request("/integrations/settings/website")
+  }
+
+  async updateLeadFeedSettings(payload) {
+    return this.request("/integrations/settings/website", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async rotateLeadFeedApiKey() {
+    return this.request("/integrations/settings/website/rotate-key", {
+      method: "POST",
+    })
+  }
+
+  async sendLeadFeedTest() {
+    return this.request("/integrations/settings/website/test", {
+      method: "POST",
     })
   }
 }

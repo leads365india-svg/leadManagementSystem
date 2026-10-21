@@ -8,6 +8,27 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
+// Helper to validate domain name format (e.g. crm.domain.com or client-portal.io)
+const isValidDomain = (domain) => {
+  if (!domain || typeof domain !== "string") return false
+  const clean = domain.trim().toLowerCase()
+  if (clean.includes("://") || clean.includes("/") || clean.includes(":") || clean.includes("?")) {
+    return false
+  }
+  const domainRegex = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
+  return domainRegex.test(clean)
+}
+
+// Helper to validate Indian mobile numbers (10 digits starting with 6, 7, 8, or 9)
+const isValidIndianMobile = (number) => {
+  if (!number || typeof number !== "string") return false
+  const clean = number.replace(/[\s\-+]/g, "")
+  if (clean.length === 12 && clean.startsWith("91")) {
+    return /^[6-9]\d{9}$/.test(clean.slice(2))
+  }
+  return /^[6-9]\d{9}$/.test(clean)
+}
+
 // Generate clean, secure unique tenant/account ID with collision protection
 const generateUniqueAccountId = async () => {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -47,6 +68,7 @@ const getAccounts = async (req, res) => {
         { accountId: { $regex: sanitizedTerm, $options: "i" } },
         { adminName: { $regex: sanitizedTerm, $options: "i" } },
         { adminEmail: { $regex: sanitizedTerm, $options: "i" } },
+        { customDomain: { $regex: sanitizedTerm, $options: "i" } },
       ]
     }
 
@@ -74,6 +96,12 @@ const getAccounts = async (req, res) => {
       adminEmail: acc.adminEmail,
       contactNumber: acc.contactNumber || "",
       status: acc.status,
+      customDomain: acc.customDomain || "",
+      domainStatus: acc.domainStatus || "unconfigured",
+      logoUrl: acc.logoUrl || "",
+      primaryColor: acc.primaryColor || "#4f46e5",
+      pageTitle: acc.pageTitle || "",
+      portalUrl: `/portal/login?tenant=${acc.accountId}`,
       createdAt: acc.createdAt,
       updatedAt: acc.updatedAt,
     }))
@@ -154,6 +182,7 @@ const getAccountById = async (req, res) => {
       data: {
         ...account,
         id: account._id.toString(),
+        portalUrl: `/portal/login?tenant=${account.accountId}`,
         adminDetails: admin
           ? {
               id: admin._id.toString(),
@@ -185,6 +214,11 @@ const createAccount = async (req, res) => {
     contactNumber = "",
     password,
     status = "active",
+    customDomain = "",
+    logoUrl = "",
+    primaryColor = "#4f46e5",
+    pageTitle = "",
+    countryCode = "",
   } = req.body
 
   // Validation
@@ -209,6 +243,50 @@ const createAccount = async (req, res) => {
   if (!emailRegex.test(adminEmail.trim())) {
     res.status(400).json({ success: false, error: "Please enter a valid admin email address" })
     return
+  }
+
+  // Mobile number validation (Indian 10-digit rule when countryCode is IN, general phone rule otherwise)
+  const trimmedContact = typeof contactNumber === "string" ? contactNumber.trim() : ""
+  if (trimmedContact) {
+    if (countryCode === "IN") {
+      if (!isValidIndianMobile(trimmedContact)) {
+        res.status(400).json({
+          success: false,
+          error: "Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9)",
+        })
+        return
+      }
+    } else {
+      const digitsOnly = trimmedContact.replace(/[\s\-+()]/g, "")
+      if (!/^\d{7,15}$/.test(digitsOnly)) {
+        res.status(400).json({
+          success: false,
+          error: "Please enter a valid phone number (7 to 15 digits)",
+        })
+        return
+      }
+    }
+  }
+
+  // Custom domain validation
+  let cleanDomain = ""
+  if (customDomain && typeof customDomain === "string" && customDomain.trim()) {
+    cleanDomain = customDomain.trim().toLowerCase()
+    if (!isValidDomain(cleanDomain)) {
+      res.status(400).json({
+        success: false,
+        error: "Invalid custom domain format. Example: crm.yourcompany.com",
+      })
+      return
+    }
+    const duplicateDomain = await Account.findOne({ customDomain: cleanDomain })
+    if (duplicateDomain) {
+      res.status(400).json({
+        success: false,
+        error: "This custom domain is already registered to another account",
+      })
+      return
+    }
   }
 
   // Password validation
@@ -247,7 +325,7 @@ const createAccount = async (req, res) => {
       role: "account_admin",
       tenantId: accountId,
       status: normalizedStatus,
-      contactNumber: typeof contactNumber === "string" ? contactNumber.trim() : "",
+      contactNumber: trimmedContact,
     })
     await createdUser.save()
 
@@ -259,8 +337,13 @@ const createAccount = async (req, res) => {
       adminUserId: createdUser._id,
       adminName: createdUser.name,
       adminEmail: createdUser.email,
-      contactNumber: typeof contactNumber === "string" ? contactNumber.trim() : "",
+      contactNumber: trimmedContact,
       status: normalizedStatus,
+      customDomain: cleanDomain,
+      domainStatus: cleanDomain ? "pending_verification" : "unconfigured",
+      logoUrl: typeof logoUrl === "string" ? logoUrl.trim() : "",
+      primaryColor: typeof primaryColor === "string" && primaryColor.trim() ? primaryColor.trim() : "#4f46e5",
+      pageTitle: typeof pageTitle === "string" ? pageTitle.trim() : "",
     })
     await createdAccount.save()
 
@@ -277,6 +360,12 @@ const createAccount = async (req, res) => {
           adminEmail: createdAccount.adminEmail,
           contactNumber: createdAccount.contactNumber,
           status: createdAccount.status,
+          customDomain: createdAccount.customDomain,
+          domainStatus: createdAccount.domainStatus,
+          logoUrl: createdAccount.logoUrl,
+          primaryColor: createdAccount.primaryColor,
+          pageTitle: createdAccount.pageTitle,
+          portalUrl: `/portal/login?tenant=${createdAccount.accountId}`,
           createdAt: createdAccount.createdAt,
         },
       },
@@ -307,6 +396,173 @@ const createAccount = async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Failed to create Leads Account. Changes were safely rolled back.",
+    })
+  }
+}
+
+// PUT /api/super-admin/accounts/:id - Edit account details & white-label settings
+const updateAccount = async (req, res) => {
+  try {
+    const { id } = req.params
+    const {
+      companyName,
+      displayName,
+      adminName,
+      contactNumber,
+      customDomain,
+      logoUrl,
+      primaryColor,
+      pageTitle,
+      countryCode = "",
+    } = req.body
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({
+        success: false,
+        error: "Invalid account ID format",
+      })
+      return
+    }
+
+    const account = await Account.findById(id)
+    if (!account) {
+      res.status(404).json({
+        success: false,
+        error: "Leads Account not found",
+      })
+      return
+    }
+
+    // Validations
+    if (companyName !== undefined) {
+      if (!companyName || typeof companyName !== "string" || !companyName.trim()) {
+        res.status(400).json({ success: false, error: "Company name is required" })
+        return
+      }
+      account.companyName = companyName.trim()
+    }
+
+    if (displayName !== undefined) {
+      if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
+        res.status(400).json({ success: false, error: "Display name is required" })
+        return
+      }
+      account.displayName = displayName.trim()
+    }
+
+    if (adminName !== undefined) {
+      if (!adminName || typeof adminName !== "string" || !adminName.trim()) {
+        res.status(400).json({ success: false, error: "Admin full name is required" })
+        return
+      }
+      account.adminName = adminName.trim()
+    }
+
+    if (contactNumber !== undefined) {
+      const trimmedContact = typeof contactNumber === "string" ? contactNumber.trim() : ""
+      if (trimmedContact) {
+        if (countryCode === "IN") {
+          if (!isValidIndianMobile(trimmedContact)) {
+            res.status(400).json({
+              success: false,
+              error: "Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9)",
+            })
+            return
+          }
+        } else {
+          const digitsOnly = trimmedContact.replace(/[\s\-+()]/g, "")
+          if (!/^\d{7,15}$/.test(digitsOnly)) {
+            res.status(400).json({
+              success: false,
+              error: "Please enter a valid phone number (7 to 15 digits)",
+            })
+            return
+          }
+        }
+      }
+      account.contactNumber = trimmedContact
+    }
+
+    if (customDomain !== undefined) {
+      const cleanDomain = typeof customDomain === "string" ? customDomain.trim().toLowerCase() : ""
+      if (cleanDomain) {
+        if (!isValidDomain(cleanDomain)) {
+          res.status(400).json({
+            success: false,
+            error: "Invalid custom domain format. Example: crm.yourcompany.com",
+          })
+          return
+        }
+        const duplicateDomain = await Account.findOne({
+          customDomain: cleanDomain,
+          _id: { $ne: account._id },
+        })
+        if (duplicateDomain) {
+          res.status(400).json({
+            success: false,
+            error: "This custom domain is already registered to another account",
+          })
+          return
+        }
+        if (account.customDomain !== cleanDomain) {
+          account.customDomain = cleanDomain
+          account.domainStatus = "pending_verification"
+        }
+      } else {
+        account.customDomain = ""
+        account.domainStatus = "unconfigured"
+      }
+    }
+
+    if (logoUrl !== undefined) {
+      account.logoUrl = typeof logoUrl === "string" ? logoUrl.trim() : ""
+    }
+    if (primaryColor !== undefined) {
+      account.primaryColor =
+        typeof primaryColor === "string" && primaryColor.trim() ? primaryColor.trim() : "#4f46e5"
+    }
+    if (pageTitle !== undefined) {
+      account.pageTitle = typeof pageTitle === "string" ? pageTitle.trim() : ""
+    }
+
+    await account.save()
+
+    // Sync Admin user details
+    if (account.adminUserId) {
+      const userUpdates = {}
+      if (adminName !== undefined) userUpdates.name = account.adminName
+      if (contactNumber !== undefined) userUpdates.contactNumber = account.contactNumber
+      if (Object.keys(userUpdates).length > 0) {
+        await User.findByIdAndUpdate(account.adminUserId, userUpdates)
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Account and white-label settings updated successfully",
+      data: {
+        id: account._id.toString(),
+        accountId: account.accountId,
+        companyName: account.companyName,
+        displayName: account.displayName,
+        adminName: account.adminName,
+        adminEmail: account.adminEmail,
+        contactNumber: account.contactNumber,
+        status: account.status,
+        customDomain: account.customDomain,
+        domainStatus: account.domainStatus,
+        logoUrl: account.logoUrl,
+        primaryColor: account.primaryColor,
+        pageTitle: account.pageTitle,
+        portalUrl: `/portal/login?tenant=${account.accountId}`,
+        updatedAt: account.updatedAt,
+      },
+    })
+  } catch (error) {
+    console.error("Error updating account:", error)
+    res.status(500).json({
+      success: false,
+      error: "Failed to update account details",
     })
   }
 }
@@ -374,5 +630,6 @@ module.exports = {
   getAccountStats,
   getAccountById,
   createAccount,
+  updateAccount,
   updateAccountStatus,
 }

@@ -51,6 +51,33 @@ const accountSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // White-Label Settings
+    customDomain: {
+      type: String,
+      trim: true,
+      default: "",
+      lowercase: true,
+    },
+    domainStatus: {
+      type: String,
+      enum: ["unconfigured", "pending_verification", "active"],
+      default: "unconfigured",
+    },
+    logoUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    primaryColor: {
+      type: String,
+      trim: true,
+      default: "#4f46e5",
+    },
+    pageTitle: {
+      type: String,
+      trim: true,
+      default: "",
+    },
   },
   {
     timestamps: true,

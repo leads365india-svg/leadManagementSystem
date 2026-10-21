@@ -6,7 +6,7 @@ const escapeRegex = (str) => {
 }
 
 // Strict whitelist for sortable fields to prevent injection
-const ALLOWED_SORT_FIELDS = ["name", "email", "createdAt", "updatedAt", "status"]
+const ALLOWED_SORT_FIELDS = ["name", "email", "phone", "source", "status", "assignedTo", "createdAt", "updatedAt"]
 
 // Determine effective tenant partition based on authentication context
 const getEffectiveTenant = (req) => {
@@ -32,6 +32,8 @@ const getLeads = async (req, res) => {
       limit = 10,
       search = "",
       status = "all",
+      source = "all",
+      assignedTo = "all",
       sortBy = "createdAt",
       sortOrder = "desc",
       tenantId: requestedTenantId,
@@ -72,6 +74,16 @@ const getLeads = async (req, res) => {
       query.status = status
     }
 
+    // Source filter
+    if (source && source !== "all") {
+      query.source = source
+    }
+
+    // AssignedTo filter
+    if (assignedTo && assignedTo !== "all") {
+      query.assignedTo = assignedTo
+    }
+
     // Sort configuration with allowlist validation
     const sortField = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt"
     const sortConfig = {}
@@ -88,8 +100,17 @@ const getLeads = async (req, res) => {
     const transformedLeads = leads.map((lead) => ({
       _id: lead._id.toString(),
       name: lead.name,
-      email: lead.email,
-      status: lead.status,
+      email: lead.email || "",
+      phone: lead.phone || "",
+      source: lead.source || "Website Form",
+      assignedTo: lead.assignedTo || "Unassigned",
+      assignedStaffId: lead.assignedStaffId || "unassigned",
+      status: lead.status || "New",
+      message: lead.message || "",
+      formId: lead.formId || "",
+      landingPage: lead.landingPage || "",
+      isEmailVerified: Boolean(lead.isEmailVerified),
+      verificationStatus: lead.verificationStatus || "unverified",
       tenantId: lead.tenantId,
       createdAt: lead.createdAt,
       updatedAt: lead.updatedAt,
@@ -116,7 +137,7 @@ const getLeads = async (req, res) => {
 
 const createLead = async (req, res) => {
   try {
-    const { name, email, status, tenantId: bodyTenantId } = req.body
+    const { name, email, phone, source, assignedTo, status, tenantId: bodyTenantId } = req.body
 
     // Validation
     if (!name || typeof name !== "string" || !name.trim()) {
@@ -164,6 +185,9 @@ const createLead = async (req, res) => {
     const lead = new Lead({
       name: name.trim(),
       email: email.toLowerCase().trim(),
+      phone: (phone || "").trim(),
+      source: (source || "Manual Entry").trim(),
+      assignedTo: (assignedTo || "Unassigned").trim(),
       status: status || "New",
       tenantId: assignedTenant,
     })

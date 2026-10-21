@@ -11,11 +11,14 @@ const leadSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: [true, "Email is required"],
-      unique: true,
       trim: true,
       lowercase: true,
-      match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, "Please enter a valid email"],
+      default: "",
+    },
+    phone: {
+      type: String,
+      trim: true,
+      default: "",
     },
     status: {
       type: String,
@@ -27,6 +30,52 @@ const leadSchema = new mongoose.Schema(
       type: String,
       default: "default-tenant",
       index: true,
+    },
+    source: {
+      type: String,
+      default: "Website",
+      trim: true,
+    },
+    assignedTo: {
+      type: String,
+      default: "Unassigned",
+      trim: true,
+    },
+    assignedStaffId: {
+      type: String,
+      default: "unassigned",
+    },
+    message: {
+      type: String,
+      default: "",
+      maxlength: [2000, "Message cannot exceed 2000 characters"],
+    },
+    formId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    landingPage: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    verificationStatus: {
+      type: String,
+      enum: ["unverified", "pending_confirmation", "verified", "trusted"],
+      default: "unverified",
+    },
+    isTest: {
+      type: Boolean,
+      default: false,
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
   },
   {
@@ -42,8 +91,10 @@ const leadSchema = new mongoose.Schema(
   },
 )
 
-// Create indexes for query performance
+// Create indexes for query performance and tenant-scoped lookups
 leadSchema.index({ tenantId: 1, createdAt: -1 })
+leadSchema.index({ tenantId: 1, email: 1 })
+leadSchema.index({ tenantId: 1, phone: 1 })
 leadSchema.index({ status: 1 })
 leadSchema.index({ createdAt: -1 })
 leadSchema.index({ name: "text", email: "text" })

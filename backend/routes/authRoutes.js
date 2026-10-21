@@ -1,6 +1,6 @@
 const { Router } = require("express")
 const rateLimit = require("express-rate-limit")
-const { login, logout, getMe } = require("../controllers/authController")
+const { login, logout, getMe, getTenantInfo } = require("../controllers/authController")
 const { authenticate } = require("../middleware/authMiddleware")
 
 const router = Router()
@@ -25,5 +25,8 @@ router.post("/logout", logout)
 
 // GET /api/auth/me
 router.get("/me", authenticate, getMe)
+
+// GET /api/auth/tenant-info?tenantId=ACC-XXXX
+router.get("/tenant-info", getTenantInfo)
 
 module.exports = router

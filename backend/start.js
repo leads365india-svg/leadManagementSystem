@@ -5,9 +5,11 @@ const rateLimit = require("express-rate-limit")
 const cookieParser = require("cookie-parser")
 const dotenv = require("dotenv")
 const connectDB = require("./db/connection")
+const { checkDbConnection } = require("./db/connection")
 const leadRoutes = require("./routes/leadRoutes")
 const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
+const integrationRoutes = require("./routes/integrationRoutes")
 const { verifyCSRF } = require("./middleware/authMiddleware")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
 
@@ -30,17 +32,14 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+    // Allow requests with no origin (like mobile apps, curl, or server-to-server proxies)
     if (!origin) return callback(null, true)
 
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true)
-    } else {
-      callback(new Error("Not allowed by CORS"))
-    }
+    // Allow frontend origins and external client websites submitting leads via webhook
+    callback(null, true)
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-api-key", "X-Api-Key"],
   credentials: true, // Allow cookies to be sent across origins
   maxAge: 86400, // Cache preflight requests for 24 hours
 }
@@ -90,10 +89,14 @@ app.get("/health", (_req, res) => {
   })
 })
 
+// Ensure DB is ready for API calls
+app.use("/api", checkDbConnection)
+
 // API routes
 app.use("/api/auth", authRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/leads", leadRoutes)
+app.use("/api/integrations", integrationRoutes)
 
 // Error handling middleware
 app.use(notFound)

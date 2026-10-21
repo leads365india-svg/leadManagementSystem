@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
+import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
 
 export default function NewLeadPage() {
@@ -48,10 +49,12 @@ export default function NewLeadPage() {
     e.preventDefault()
 
     if (!validateForm()) {
+      toast.error("Please resolve form validation errors.")
       return
     }
 
     setIsSubmitting(true)
+    const toastId = toast.loading("Saving new lead...")
 
     try {
       const response = await apiClient.createLead({
@@ -60,8 +63,11 @@ export default function NewLeadPage() {
         status: formData.status,
       })
 
+      toast.dismiss(toastId)
+
       if (response.success) {
         setShowSuccess(true)
+        toast.success(`Lead "${formData.name.trim()}" created successfully!`)
 
         // Reset form
         setFormData({
@@ -70,17 +76,22 @@ export default function NewLeadPage() {
           status: "New",
         })
 
-        // Hide success message and redirect after 2 seconds
+        // Redirect after 1.5 seconds
         setTimeout(() => {
           setShowSuccess(false)
           router.push("/leads")
-        }, 2000)
+        }, 1500)
       } else {
-        setErrors({ email: response.error || "Failed to create lead" })
+        const errorMsg = response.error || "Failed to create lead"
+        setErrors({ email: errorMsg })
+        toast.error(errorMsg)
       }
     } catch (error) {
+      toast.dismiss(toastId)
       console.error("Error creating lead:", error)
-      setErrors({ email: error.message || "Failed to create lead" })
+      const errorMsg = error.message || "Failed to create lead"
+      setErrors({ email: errorMsg })
+      toast.error(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
