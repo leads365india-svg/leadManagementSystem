@@ -49,6 +49,16 @@ app.use(cors(corsOptions))
 // Handle preflight OPTIONS requests
 app.options("*", cors(corsOptions))
 
+// Enforce HTTPS in production behind reverse proxies / balancers
+if (process.env.NODE_ENV === "production") {
+  app.use((req, res, next) => {
+    if (req.secure || req.headers["x-forwarded-proto"] === "https") {
+      return next()
+    }
+    return res.redirect(301, `https://${req.headers.host}${req.url}`)
+  })
+}
+
 // Security middleware
 app.use(
   helmet({

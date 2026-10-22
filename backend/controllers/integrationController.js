@@ -38,22 +38,13 @@ const normalizePhone = (phone) => {
 }
 
 // Helper: Cryptographically verify email verification token or OTP proof using integration key
-const verifyEmailToken = async (email, token, rawApiKey, tenantId) => {
+const verifyEmailToken = async (email, token, rawApiKey, tenantId, strictMode = false) => {
   if (!email || !token || typeof token !== "string" || !rawApiKey) return false
   const cleanEmail = email.toLowerCase().trim()
   const trimmedToken = token.trim()
 
   try {
-    // 1. Direct HMAC-SHA256 signature: HMAC(rawApiKey, cleanEmail)
-    const expectedDirectHash = crypto.createHmac("sha256", rawApiKey).update(cleanEmail).digest("hex")
-    if (
-      trimmedToken.length === expectedDirectHash.length &&
-      crypto.timingSafeEqual(Buffer.from(trimmedToken), Buffer.from(expectedDirectHash))
-    ) {
-      return true
-    }
-
-    // 2. Timestamped HMAC token: timestamp:HMAC(rawApiKey, cleanEmail + ":" + timestamp)
+    // 1. Timestamped HMAC token: timestamp:HMAC(rawApiKey, cleanEmail + ":" + timestamp)
     if (trimmedToken.includes(":")) {
       const parts = trimmedToken.split(":")
       if (parts.length === 2) {
@@ -83,6 +74,29 @@ const verifyEmailToken = async (email, token, rawApiKey, tenantId) => {
             return true
           }
         }
+      }
+      return false
+    }
+
+    // 2. Direct HMAC token (Allowed only in non-strict mode)
+    if (!strictMode) {
+      const expectedDirectHash = crypto.createHmac("sha256", rawApiKey).update(cleanEmail).digest("hex")
+      if (
+        trimmedToken.length === expectedDirectHash.length &&
+        crypto.timingSafeEqual(Buffer.from(trimmedToken), Buffer.from(expectedDirectHash))
+      ) {
+        if (tenantId) {
+          const tokenHash = crypto.createHash("sha256").update(trimmedToken).digest("hex")
+          const replayed = await Lead.exists({
+            tenantId,
+            "metadata.verificationTokenHash": tokenHash,
+          })
+          if (replayed) {
+            console.warn(`Replay protection triggered: Direct token for ${cleanEmail} was already redeemed.`)
+            return false
+          }
+        }
+        return true
       }
     }
   } catch (err) {
@@ -500,17 +514,66 @@ const receiveWebsiteLead = async (req, res) => {
       })
     }
 
+    // 3.5 Check Webhook Idempotency (prevent duplicate creates on automated retries)
+    const idempotencyKey = (
+      req.headers["x-idempotency-key"] ||
+      req.headers["idempotency-key"] ||
+      req.body?.idempotencyKey ||
+      req.body?.submissionId ||
+      ""
+    ).toString().trim()
+
+    if (idempotencyKey) {
+      const existingIdempotentLead = await Lead.findOne({
+        tenantId,
+        "metadata.idempotencyKey": idempotencyKey,
+      }).lean()
+
+      if (existingIdempotentLead) {
+        return res.status(200).json({
+          success: true,
+          message: "Lead already received and processed (idempotent request)",
+          idempotent: true,
+          data: {
+            id: existingIdempotentLead._id.toString(),
+            name: existingIdempotentLead.name,
+            email: existingIdempotentLead.email,
+            phone: existingIdempotentLead.phone,
+            status: existingIdempotentLead.status,
+            assignedTo: existingIdempotentLead.assignedTo,
+            createdAt: existingIdempotentLead.createdAt,
+          },
+        })
+      }
+    }
+
     // 4. Extract and sanitize incoming fields
     const body = req.body || {}
-    const name = (body.name || body.fullName || body.full_name || body.contactName || "Website Lead").trim()
+    const name = (body.name || body.fullName || body.full_name || body.contactName || "Website Lead").slice(0, 100).trim()
     const rawEmail = (body.email || body.emailAddress || body.email_address || "").toLowerCase().trim()
     const rawPhone = (body.phone || body.phoneNumber || body.phone_number || body.tel || body.mobile || "").trim()
     const message = (body.message || body.notes || body.comment || body.inquiry || "").slice(0, 2000).trim()
-    const formId = (body.formId || body.form_id || body.formName || body.form_name || "").trim()
+    const formId = (body.formId || body.form_id || body.formName || body.form_name || "").slice(0, 100).trim()
     const landingPage = (body.landingPage || body.landing_page || body.pageUrl || body.page_url || req.headers.referer || "").slice(0, 500).trim()
     const isTest = Boolean(body.isTest || body.is_test || req.query?.isTest === "true")
-    const emailVerified = Boolean(body.emailVerified || body.email_verified || body.verified)
     const verificationToken = (body.verificationToken || body.token || body.verification_token || "").trim()
+
+    // Validate email length
+    if (rawEmail && rawEmail.length > 255) {
+      return res.status(400).json({
+        success: false,
+        error: "Email address exceeds maximum length of 255 characters",
+      })
+    }
+
+    // Validate phone number format if provided
+    const normalizedPhone = normalizePhone(rawPhone)
+    if (rawPhone && (normalizedPhone.replace(/[^\d]/g, "").length < 5 || normalizedPhone.length > 20)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid phone number format. Must contain between 5 and 20 digits.",
+      })
+    }
 
     // 5. Accepted Forms Filtering
     const acceptedForms = config.websiteSource.acceptedForms || []
@@ -573,8 +636,8 @@ const receiveWebsiteLead = async (req, res) => {
     let verificationStatus = "unverified"
 
     if (rawEmail) {
-      // Validate email format
-      const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/
+      // Validate email format (supports all modern domain TLDs)
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/
       if (!emailRegex.test(rawEmail)) {
         return res.status(400).json({
           success: false,
@@ -583,7 +646,8 @@ const receiveWebsiteLead = async (req, res) => {
       }
 
       // Cryptographically verify email token if provided using tenant's API key
-      const tokenValid = await verifyEmailToken(rawEmail, verificationToken, rawApiKey, tenantId)
+      const isStrict = Boolean(verConfig.strictVerification)
+      const tokenValid = await verifyEmailToken(rawEmail, verificationToken, rawApiKey, tenantId, isStrict)
 
       if (verConfig.strictVerification) {
         // Strict verification requires trusted cryptographic HMAC proof or signed OTP token
@@ -662,7 +726,6 @@ const receiveWebsiteLead = async (req, res) => {
 
     // 9. Lead Validation & Duplicate Handling (Tenant Scoped)
     const duplicateHandling = config.websiteSource.duplicateHandling || "reject"
-    const normalizedPhone = normalizePhone(rawPhone)
 
     // Check for existing lead strictly in the caller's tenant
     const orConditions = []
@@ -763,6 +826,7 @@ const receiveWebsiteLead = async (req, res) => {
         receivedVia: "website_webhook",
         submittedAt: new Date(),
         ipAddress: req.ip || req.headers["x-forwarded-for"] || "unknown",
+        idempotencyKey: idempotencyKey || null,
         verificationTokenHash: verificationToken
           ? crypto.createHash("sha256").update(verificationToken.trim()).digest("hex")
           : null,

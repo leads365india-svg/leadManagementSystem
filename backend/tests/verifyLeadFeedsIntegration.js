@@ -217,7 +217,11 @@ async function runTests() {
         name: "Customer Alpha in Tenant B",
         email: "customer.alpha@example.com",
         phone: "+1 555 999 8888",
-        emailVerified: true, // Tenant B requires verified email
+        verificationToken: (() => {
+          const ts = Date.now()
+          const sig = crypto.createHmac("sha256", rawKeyB).update(`customer.alpha@example.com:${ts}`).digest("hex")
+          return `${ts}:${sig}`
+        })(),
       }),
     })
     console.log(`[Tenant B Same Email Test] status: ${resTenantBSameEmail.status} (expected 201)`)
@@ -235,7 +239,11 @@ async function runTests() {
         name: "Customer Alpha in Tenant B",
         email: "customer.alpha@example.com",
         message: "Updated inquiry notes from second submission.",
-        emailVerified: true,
+        verificationToken: (() => {
+          const ts = Date.now() + 500
+          const sig = crypto.createHmac("sha256", rawKeyB).update(`customer.alpha@example.com:${ts}`).digest("hex")
+          return `${ts}:${sig}`
+        })(),
       }),
     })
     const updateDataB = await resTenantBUpdate.json()
