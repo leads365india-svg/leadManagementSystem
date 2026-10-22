@@ -98,7 +98,7 @@ leadSchema.index({ tenantId: 1, phone: 1 })
 leadSchema.index({ status: 1 })
 leadSchema.index({ createdAt: -1 })
 leadSchema.index({ name: "text", email: "text" })
-leadSchema.index({ tenantId: 1, "metadata.idempotencyKey": 1 }, { sparse: true })
+leadSchema.index({ tenantId: 1, "metadata.idempotencyKey": 1 }, { unique: true, sparse: true })
 leadSchema.index({ tenantId: 1, "metadata.verificationTokenHash": 1 }, { sparse: true })
 
 module.exports = mongoose.model("Lead", leadSchema)

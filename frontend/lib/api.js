@@ -20,6 +20,19 @@ class ApiClient {
       const data = await response.json()
 
       if (!response.ok) {
+        if (response.status === 401 && typeof window !== "undefined") {
+          const isAuthEndpoint =
+            endpoint === "/auth/me" ||
+            endpoint === "/auth/login" ||
+            endpoint.startsWith("/auth/tenant-info")
+          const isLoginPage = window.location.pathname.includes("/login")
+          if (!isAuthEndpoint && !isLoginPage) {
+            const redirectUrl = window.location.pathname.startsWith("/super-admin")
+              ? "/super-admin/login?session=expired"
+              : "/portal/login?session=expired"
+            window.location.href = redirectUrl
+          }
+        }
         throw new Error(data.error || `HTTP ${response.status}`)
       }
 

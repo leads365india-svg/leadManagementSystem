@@ -1,6 +1,12 @@
 const mongoose = require("mongoose")
 const dotenv = require("dotenv")
+const dns = require("dns")
 const { bootstrapSuperAdmin } = require("./seedSuperAdmin")
+
+// Ensure reliable DNS resolution for MongoDB Atlas SRV records
+try {
+  dns.setServers(["8.8.8.8", "1.1.1.1"])
+} catch (_) {}
 
 dotenv.config()
 
@@ -28,18 +34,20 @@ const connectDB = async () => {
       retryTimer = null
     }
     await bootstrapSuperAdmin()
+    return conn
   } catch (error) {
     console.error("❌ Error connecting to MongoDB Atlas:", error.message)
-    console.error("\n💡 IMPORTANT: If using MongoDB Atlas, your current public IP (47.29.250.116) must be whitelisted.")
+    console.error("\n💡 IMPORTANT: If using MongoDB Atlas, ensure your server IP address is whitelisted in Network Access.")
     console.error("1. Go to: https://cloud.mongodb.com -> Network Access")
-    console.error("2. Click 'Add IP Address' -> Select 'Allow Access from Anywhere' (0.0.0.0/0) or add 47.29.250.116")
+    console.error("2. Add your server IP address or '0.0.0.0/0' for dynamic cloud hosting environments (e.g. Render).")
     console.error("3. The backend will automatically retry connecting every 10 seconds...\n")
 
     if (!retryTimer) {
       retryTimer = setInterval(() => {
-        connectDB()
+        connectDB().catch(() => {})
       }, 10000)
     }
+    throw error
   } finally {
     isConnecting = false
   }
@@ -50,8 +58,7 @@ const checkDbConnection = (_req, res, next) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({
       success: false,
-      error:
-        "Database is currently connecting or IP not whitelisted. Please whitelist IP 47.29.250.116 or add '0.0.0.0/0' in MongoDB Atlas Network Access (https://cloud.mongodb.com).",
+      error: "Database service temporarily unavailable. Please verify Atlas Network Access and try again shortly.",
     })
   }
   next()

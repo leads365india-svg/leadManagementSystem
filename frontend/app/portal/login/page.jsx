@@ -195,6 +195,15 @@ function PortalLoginForm() {
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
         <div className="bg-white py-8 px-6 shadow-sm rounded-2xl border border-slate-200 sm:px-10">
+          {searchParams.get("session") === "expired" && !error && (
+            <div className="mb-6 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start space-x-2.5 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Session Expired:</strong> Your previous session has timed out. Please sign in again to continue.
+              </span>
+            </div>
+          )}
+
           {error && (
             <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 flex items-start space-x-3 text-red-800 text-xs animate-in fade-in">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />

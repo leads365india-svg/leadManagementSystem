@@ -459,6 +459,24 @@ export default function LeadFeedsClient() {
                   <p className="text-xs text-slate-500 mt-1.5">
                     Keep this key strictly confidential. Rotating your key will immediately invalidate the existing key.
                   </p>
+
+                  {newlyGeneratedKey && (
+                    <div className="mt-2.5 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start justify-between gap-3 text-xs text-amber-900 animate-in fade-in">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold">Important:</span> This unmasked key is revealed only once. Please copy and store it securely in your server environment variables now. For security reasons, it cannot be recovered after refreshing this page.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(newlyGeneratedKey, "key")}
+                        className="shrink-0 px-2.5 py-1 bg-amber-200 hover:bg-amber-300 text-amber-900 font-semibold rounded text-[11px] transition-colors"
+                      >
+                        {copiedKey ? "Copied" : "Copy Secret"}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* 3. Lead Assignment Dropdown */}
@@ -571,6 +589,11 @@ add_action('wpcf7_mail_sent', function($contact_form) {
 
     $leadflow_url = '${webhookUrl || "http://localhost:5000/api/integrations/leads/website"}';
     $leadflow_key = '${newlyGeneratedKey || "lf_live_your_api_key_here"}'; // Store securely in wp-config.php
+    $email = sanitize_email($data['your-email'] ?? '');
+
+    // Optional HMAC verification token (if strict email verification is enabled)
+    $timestamp = time() * 1000;
+    $hmac = hash_hmac('sha256', "{$email}:{$timestamp}", $leadflow_key);
 
     wp_remote_post($leadflow_url, [
         'headers' => [
@@ -578,12 +601,13 @@ add_action('wpcf7_mail_sent', function($contact_form) {
             'x-api-key'    => $leadflow_key,
         ],
         'body'    => wp_json_encode([
-            'name'        => sanitize_text_field($data['your-name'] ?? ''),
-            'email'       => sanitize_email($data['your-email'] ?? ''),
-            'phone'       => sanitize_text_field($data['your-phone'] ?? ''),
-            'message'     => sanitize_textarea_field($data['your-message'] ?? ''),
-            'formId'      => 'cf7_contact_form',
-            'landingPage' => esc_url($_SERVER['HTTP_REFERER'] ?? home_url()),
+            'name'              => sanitize_text_field($data['your-name'] ?? ''),
+            'email'             => $email,
+            'phone'             => sanitize_text_field($data['your-phone'] ?? ''),
+            'message'           => sanitize_textarea_field($data['your-message'] ?? ''),
+            'formId'            => 'cf7_contact_form',
+            'landingPage'       => esc_url($_SERVER['HTTP_REFERER'] ?? home_url()),
+            'verificationToken' => "{$timestamp}:{$hmac}",
         ]),
         'timeout' => 10,
     ]);
@@ -599,15 +623,23 @@ add_action('wpcf7_mail_sent', function($contact_form) {
                           </div>
                           <pre className="text-sky-300 bg-slate-950 p-3.5 rounded-lg overflow-x-auto leading-relaxed">{`// app/api/contact/route.js (Server-side handler)
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 
 export async function POST(request) {
   const body = await request.json();
+  const apiKey = process.env.LEADFLOW_INTEGRATION_KEY; // Kept secure on server
+
+  // Optional HMAC verification token (if strict email verification is enabled)
+  const timestamp = Date.now();
+  const signature = crypto.createHmac("sha256", apiKey)
+    .update(\`\${body.email}:\${timestamp}\`)
+    .digest("hex");
 
   const response = await fetch("${webhookUrl || "http://localhost:5000/api/integrations/leads/website"}", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": process.env.LEADFLOW_INTEGRATION_KEY, // Stored safely on server
+      "x-api-key": apiKey,
     },
     body: JSON.stringify({
       name: body.name,
@@ -616,6 +648,7 @@ export async function POST(request) {
       message: body.message,
       formId: "react_quote_form",
       landingPage: request.headers.get("referer") || "",
+      verificationToken: \`\${timestamp}:\${signature}\`,
     }),
   });
 
@@ -645,15 +678,20 @@ class ContactController extends Controller {
             'notes' => 'nullable|string',
         ]);
 
+        $apiKey = config('services.leadflow.api_key');
+        $timestamp = (int)(microtime(true) * 1000);
+        $hmac = hash_hmac('sha256', "{$validated['email']}:{$timestamp}", $apiKey);
+
         $response = Http::withHeaders([
-            'x-api-key' => config('services.leadflow.api_key'),
+            'x-api-key' => $apiKey,
         ])->post('${webhookUrl || "http://localhost:5000/api/integrations/leads/website"}', [
-            'name'        => $validated['name'],
-            'email'       => $validated['email'],
-            'phone'       => $validated['phone'] ?? '',
-            'message'     => $validated['notes'] ?? '',
-            'formId'      => 'laravel_contact_form',
-            'landingPage' => $request->header('referer'),
+            'name'              => $validated['name'],
+            'email'             => $validated['email'],
+            'phone'             => $validated['phone'] ?? '',
+            'message'           => $validated['notes'] ?? '',
+            'formId'            => 'laravel_contact_form',
+            'landingPage'       => $request->header('referer'),
+            'verificationToken' => "{$timestamp}:{$hmac}",
         ]);
 
         return response()->json($response->json(), $response->status());

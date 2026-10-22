@@ -3,6 +3,8 @@ import "./globals.css"
 import Header from "@/components/header"
 import Footer from "@/components/footer"
 import { Toaster } from "react-hot-toast"
+import { AuthProvider } from "@/lib/auth-context"
+import AuthGuard from "@/components/auth-guard"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -18,9 +20,13 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased`}>
-        <Header />
-        <main className="flex-1 w-full">{children}</main>
-        <Footer />
+        <AuthProvider>
+          <Header />
+          <main className="flex-1 w-full">
+            <AuthGuard>{children}</AuthGuard>
+          </main>
+          <Footer />
+        </AuthProvider>
         <Toaster
           position="top-right"
           toastOptions={{

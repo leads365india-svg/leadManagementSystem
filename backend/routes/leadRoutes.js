@@ -7,12 +7,12 @@ const {
   deleteLead,
   getLeadStats,
 } = require("../controllers/leadController")
-const { optionalAuthenticate, checkPermission } = require("../middleware/authMiddleware")
+const { authenticate, checkPermission } = require("../middleware/authMiddleware")
 
 const router = Router()
 
-// Attach user session if token/cookie is present
-router.use(optionalAuthenticate)
+// Enforce authentication on all CRM lead management routes
+router.use(authenticate)
 
 // GET /api/leads - View leads list
 router.get("/", checkPermission("leads.view"), getLeads)

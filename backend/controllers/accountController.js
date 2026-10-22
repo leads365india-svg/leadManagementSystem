@@ -76,8 +76,19 @@ const getAccounts = async (req, res) => {
       query.status = status
     }
 
+    const ALLOWED_ACCOUNT_SORT_FIELDS = [
+      "companyName",
+      "displayName",
+      "accountId",
+      "adminName",
+      "adminEmail",
+      "status",
+      "createdAt",
+      "updatedAt",
+    ]
+    const sortField = ALLOWED_ACCOUNT_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt"
     const sortConfig = {}
-    sortConfig[sortBy] = sortOrder === "asc" ? 1 : -1
+    sortConfig[sortField] = sortOrder === "asc" ? 1 : -1
 
     const [accounts, total] = await Promise.all([
       Account.find(query).sort(sortConfig).skip(skip).limit(limitNum).lean(),

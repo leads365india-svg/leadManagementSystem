@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import { toast } from "react-hot-toast"
 import {
   LayoutDashboard,
@@ -304,7 +305,8 @@ export default function Header() {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
-  const [user, setUser] = useState(null)
+  const { user: authUser, logout } = useAuth()
+  const user = authUser?.role === "account_admin" ? authUser : null
 
   const dropdownTimeoutRef = useRef(null)
   const navRef = useRef(null)
@@ -312,32 +314,12 @@ export default function Header() {
   const categoryButtonRefs = useRef({})
   const settingsRef = useRef(null)
 
-  // Fetch current authenticated user details from session
+  // Redirect Super Admin if they access Client CRM
   useEffect(() => {
-    let isMounted = true
-    const checkUser = async () => {
-      try {
-        const res = await apiClient.getMe()
-        if (isMounted && res.success && res.data?.user) {
-          const authUser = res.data.user
-          // "If the current session belongs to a Super Admin, do not silently render it as a client Admin. Redirect it to its appropriate separate Super Admin area or show an access-denied page."
-          if (authUser.role === "super_admin") {
-            router.replace("/super-admin")
-            return
-          }
-          if (authUser.role === "account_admin") {
-            setUser(authUser)
-          }
-        }
-      } catch (err) {
-        // Unauthenticated or session expired
-      }
+    if (authUser?.role === "super_admin") {
+      router.replace("/super-admin")
     }
-    checkUser()
-    return () => {
-      isMounted = false
-    }
-  }, [pathname, router])
+  }, [authUser, router])
 
   // Fullscreen change listener
   useEffect(() => {
@@ -442,15 +424,11 @@ export default function Header() {
 
   const handleLogout = async () => {
     try {
-      await apiClient.logout()
-      toast.success("Signed out successfully")
+      setUserDropdownOpen(false)
+      await logout()
     } catch (err) {
       console.error("Logout error:", err)
       toast.error("Logout failed. Please try again.")
-    } finally {
-      setUser(null)
-      setUserDropdownOpen(false)
-      router.push("/portal/login")
     }
   }
 
@@ -490,8 +468,12 @@ export default function Header() {
     .slice(0, 2)
     .toUpperCase() || "A"
 
-  // Super Admin layout is completely separate - hide Client CRM header on /super-admin routes
-  if (pathname?.startsWith("/super-admin")) {
+  // Hide Client CRM header on Super Admin console or login pages
+  if (
+    pathname?.startsWith("/super-admin") ||
+    pathname?.startsWith("/portal/login") ||
+    pathname === "/login"
+  ) {
     return null
   }
 

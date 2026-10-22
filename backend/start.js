@@ -4,42 +4,84 @@ const helmet = require("helmet")
 const rateLimit = require("express-rate-limit")
 const cookieParser = require("cookie-parser")
 const dotenv = require("dotenv")
+const mongoose = require("mongoose")
 const connectDB = require("./db/connection")
 const { checkDbConnection } = require("./db/connection")
 const leadRoutes = require("./routes/leadRoutes")
 const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
 const integrationRoutes = require("./routes/integrationRoutes")
-const { verifyCSRF } = require("./middleware/authMiddleware")
+const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
 
 // Load environment variables
 dotenv.config()
 
+// Validate critical security environment variables on startup
+try {
+  getJwtSecret()
+} catch (configErr) {
+  console.error("❌ Fatal Configuration Error:", configErr.message)
+  if (process.env.NODE_ENV === "production") {
+    process.exit(1)
+  }
+}
+
 const app = express()
 const PORT = process.env.PORT || 5000
 app.set("trust proxy", 1)
 
-// Connect to MongoDB & bootstrap Super Admin
-connectDB()
+// CORS configuration supporting comma-separated FRONTEND_URL or local defaults
+const configuredFrontendUrls = (process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean)
 
-// CORS configuration
 const allowedOrigins = [
-  process.env.FRONTEND_URL || "http://localhost:3000",
+  ...configuredFrontendUrls,
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ]
+
+// Specific CORS for public integration webhook (allows external client websites without credentials)
+const webhookCors = cors({
+  origin: "*",
+  methods: ["POST", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-api-key",
+    "X-Api-Key",
+    "x-idempotency-key",
+    "X-Idempotency-Key",
+    "idempotency-key",
+  ],
+})
+app.use("/api/integrations/leads/website", webhookCors)
+app.options("/api/integrations/leads/website", webhookCors)
 
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, curl, or server-to-server proxies)
     if (!origin) return callback(null, true)
 
-    // Allow frontend origins and external client websites submitting leads via webhook
-    callback(null, true)
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true)
+    }
+
+    callback(null, false)
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-api-key", "X-Api-Key"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "x-api-key",
+    "X-Api-Key",
+    "x-idempotency-key",
+    "X-Idempotency-Key",
+    "idempotency-key",
+  ],
   credentials: true, // Allow cookies to be sent across origins
   maxAge: 86400, // Cache preflight requests for 24 hours
 }
@@ -84,17 +126,28 @@ const limiter = rateLimit({
 })
 app.use(limiter)
 
-// Body and Cookie parsing middleware
-app.use(express.json({ limit: "10mb" }))
-app.use(express.urlencoded({ extended: true, limit: "10mb" }))
+// Body and Cookie parsing middleware (hardened 2mb request-size limit)
+app.use(express.json({ limit: "2mb" }))
+app.use(express.urlencoded({ extended: true, limit: "2mb" }))
 app.use(cookieParser())
 app.use(verifyCSRF(allowedOrigins))
 
-// Health check route
+// Health check route - accurately reports service and database readiness without leaking details
 app.get("/health", (_req, res) => {
+  const isDbReady = mongoose.connection && mongoose.connection.readyState === 1
+  if (!isDbReady) {
+    return res.status(503).json({
+      status: "degraded",
+      database: "disconnected",
+      message: "Database service unavailable",
+      timestamp: new Date().toISOString(),
+    })
+  }
+
   res.status(200).json({
-    success: true,
-    message: "Server is running",
+    status: "healthy",
+    database: "connected",
+    message: "Service is operational",
     timestamp: new Date().toISOString(),
   })
 })
@@ -112,11 +165,92 @@ app.use("/api/integrations", integrationRoutes)
 app.use(notFound)
 app.use(errorHandler)
 
+let server = null
+let isShuttingDown = false
+
+const setupGracefulShutdown = (httpServer) => {
+  const shutdown = async (signal) => {
+    if (isShuttingDown) {
+      console.log(`⚠️ Shutdown already in progress. Ignoring duplicate ${signal}.`)
+      return
+    }
+    isShuttingDown = true
+    console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`)
+
+    // Force exit if graceful shutdown exceeds timeout (10s)
+    const forceExitTimer = setTimeout(() => {
+      console.error("❌ Graceful shutdown timed out (10s limit exceeded). Forcing process exit.")
+      process.exit(1)
+    }, 10000)
+    if (forceExitTimer.unref) {
+      forceExitTimer.unref()
+    }
+
+    try {
+      // 1. Stop accepting new HTTP requests
+      if (httpServer && httpServer.close) {
+        await new Promise((resolve) => {
+          httpServer.close((err) => {
+            if (err) {
+              console.error("Error closing HTTP server:", err.message)
+            } else {
+              console.log("✅ HTTP server closed. In-flight requests completed.")
+            }
+            resolve()
+          })
+        })
+      }
+
+      // 2. Safely close Mongoose connection pool
+      if (mongoose.connection && mongoose.connection.readyState !== 0) {
+        await mongoose.connection.close(false)
+        console.log("✅ Mongoose connection closed cleanly.")
+      }
+
+      clearTimeout(forceExitTimer)
+      console.log("👋 Graceful shutdown complete. Exiting process.")
+      process.exit(0)
+    } catch (err) {
+      console.error("❌ Error during graceful shutdown:", err.message)
+      clearTimeout(forceExitTimer)
+      process.exit(1)
+    }
+  }
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"))
+  process.on("SIGINT", () => shutdown("SIGINT"))
+}
+
+const startServer = async () => {
+  try {
+    console.log("⏳ Connecting to database before starting HTTP server...")
+    await connectDB()
+    console.log("✅ Database connected successfully.")
+
+    server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Server is running on port ${PORT}`)
+      console.log(`Environment: ${process.env.NODE_ENV || "development"}`)
+    })
+
+    setupGracefulShutdown(server)
+  } catch (err) {
+    console.error("❌ Fatal error during server startup:", err.message)
+    if (process.env.NODE_ENV === "production") {
+      process.exit(1)
+    } else {
+      console.warn("⚠️ Starting HTTP server in degraded mode for development debugging...")
+      server = app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Server is running in degraded mode on port ${PORT}`)
+      })
+      setupGracefulShutdown(server)
+    }
+  }
+}
+
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`)
-    console.log(`Environment: ${process.env.NODE_ENV || "development"}`)
-  })
+  startServer()
 }
 
 module.exports = app
+module.exports.startServer = startServer
+module.exports.setupGracefulShutdown = setupGracefulShutdown

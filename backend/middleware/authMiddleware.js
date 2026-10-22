@@ -1,11 +1,34 @@
 const jwt = require("jsonwebtoken")
 const User = require("../models/User")
+const Account = require("../models/Account")
 const RolePermission = require("../models/RolePermission")
 
-const JWT_SECRET = process.env.JWT_SECRET || "leadflow-superadmin-secret-key-2026-secure"
+const INSECURE_DEFAULT_SECRETS = [
+  "leadflow-superadmin-secret-key-2026-secure",
+  "your-random-secure-jwt-secret-here",
+  "secret",
+  "jwt-secret",
+]
 
-if (process.env.NODE_ENV === "production" && (!process.env.JWT_SECRET || process.env.JWT_SECRET === "leadflow-superadmin-secret-key-2026-secure")) {
-  console.warn("⚠️ SECURITY WARNING: Insecure default JWT_SECRET is in use in production mode. Set JWT_SECRET in environment variables!")
+// Validate and retrieve JWT secret securely
+const getJwtSecret = () => {
+  const secret = process.env.JWT_SECRET
+  const isProduction = process.env.NODE_ENV === "production"
+
+  if (isProduction) {
+    if (!secret || typeof secret !== "string" || !secret.trim()) {
+      throw new Error("FATAL: JWT_SECRET environment variable is missing or empty in production mode.")
+    }
+    if (INSECURE_DEFAULT_SECRETS.includes(secret.trim()) || secret.trim().length < 32) {
+      throw new Error(
+        "FATAL: Insecure or weak JWT_SECRET configured in production. Must be at least 32 characters and not a known placeholder.",
+      )
+    }
+    return secret.trim()
+  }
+
+  // Development / Test fallback
+  return (secret && secret.trim()) || "leadflow-dev-secret-key-min32-chars-for-local-only"
 }
 
 // Extract JWT token from cookie or Authorization header
@@ -48,7 +71,7 @@ const authenticate = async (req, res, next) => {
       })
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET)
+    const decoded = jwt.verify(token, getJwtSecret())
 
     const user = await User.findById(decoded.id)
     if (!user) {
@@ -63,6 +86,17 @@ const authenticate = async (req, res, next) => {
         success: false,
         error: "Your account is suspended. Please contact the administrator.",
       })
+    }
+
+    // Check if the tenant account is suspended
+    if (user.tenantId && user.role !== "super_admin") {
+      const account = await Account.findOne({ accountId: user.tenantId }).lean()
+      if (account && account.status === "suspended") {
+        return res.status(403).json({
+          success: false,
+          error: `Your Leads Account (${account.companyName}) is currently suspended. Please contact your administrator.`,
+        })
+      }
     }
 
     req.user = {
@@ -95,7 +129,7 @@ const optionalAuthenticate = async (req, res, next) => {
       return next()
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET)
+    const decoded = jwt.verify(token, getJwtSecret())
     const user = await User.findById(decoded.id)
 
     if (user && user.status !== "suspended") {
@@ -146,16 +180,12 @@ const requireAccountAdmin = (req, res, next) => {
 const checkPermission = (requiredPermission) => {
   return async (req, res, next) => {
     try {
-      // If user is unauthenticated (legacy/public customer demo):
+      // Require authentication for all protected CRM permission checks
       if (!req.user) {
-        const targetTenant = (req.query && req.query.tenantId) || (req.body && req.body.tenantId)
-        if (targetTenant && targetTenant !== "default-tenant") {
-          return res.status(403).json({
-            success: false,
-            error: "Authentication required to access tenant partition.",
-          })
-        }
-        return next()
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required. Please log in.",
+        })
       }
 
       // Super Admin always bypasses role-specific permission restrictions
@@ -189,7 +219,12 @@ const verifyCSRF = (allowedOrigins) => {
       return next()
     }
 
-    if (req.cookies && req.cookies.superadmin_token) {
+    // Skip CSRF verification for public integration webhook (authenticated via API key, no session cookies)
+    if (req.originalUrl && req.originalUrl.includes("/integrations/leads/website")) {
+      return next()
+    }
+
+    if (req.cookies && (req.cookies.superadmin_token || req.cookies.client_token)) {
       const origin = req.headers.origin || req.headers.referer
       if (origin) {
         const isAllowed = allowedOrigins.some((allowed) => origin.startsWith(allowed))
@@ -207,6 +242,7 @@ const verifyCSRF = (allowedOrigins) => {
 }
 
 module.exports = {
+  getJwtSecret,
   extractToken,
   authenticate,
   optionalAuthenticate,

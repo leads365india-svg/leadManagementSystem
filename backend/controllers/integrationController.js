@@ -498,6 +498,15 @@ const receiveWebsiteLead = async (req, res) => {
     // Derived strictly from authenticated credential
     const tenantId = config.tenantId
 
+    // Verify tenant account is active
+    const account = await Account.findOne({ accountId: tenantId }).lean()
+    if (account && account.status === "suspended") {
+      return res.status(403).json({
+        success: false,
+        error: "Website lead integration is currently disabled: Account is suspended.",
+      })
+    }
+
     // 3. Verify that the website source is enabled
     if (!config.websiteSource.enabled) {
       // Record error on config stats
@@ -856,6 +865,31 @@ const receiveWebsiteLead = async (req, res) => {
       },
     })
   } catch (error) {
+    if (error.code === 11000 && idempotencyKey) {
+      // Race condition hit: concurrent request inserted first. Fetch and return idempotently.
+      try {
+        const recheckLead = await Lead.findOne({
+          tenantId,
+          "metadata.idempotencyKey": idempotencyKey,
+        }).lean()
+        if (recheckLead) {
+          return res.status(200).json({
+            success: true,
+            message: "Lead already received and processed (idempotent request)",
+            idempotent: true,
+            data: {
+              id: recheckLead._id.toString(),
+              name: recheckLead.name,
+              email: recheckLead.email,
+              phone: recheckLead.phone,
+              status: recheckLead.status,
+              assignedTo: recheckLead.assignedTo,
+              createdAt: recheckLead.createdAt,
+            },
+          })
+        }
+      } catch (_) {}
+    }
     console.error("Error processing website lead ingestion:", error)
     return res.status(500).json({
       success: false,

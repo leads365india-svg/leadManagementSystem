@@ -1,3 +1,4 @@
+const mongoose = require("mongoose")
 const Lead = require("../models/Lead")
 
 // Helper to escape regex special characters and prevent ReDoS
@@ -21,8 +22,8 @@ const getEffectiveTenant = (req) => {
     return { tenantId: req.user.tenantId, isSuperAdmin: false }
   }
 
-  // Unauthenticated requests are strictly locked to legacy default-tenant
-  return { tenantId: "default-tenant", isSuperAdmin: false }
+  // Unauthenticated requests have no tenant access
+  return { tenantId: null, isSuperAdmin: false }
 }
 
 const getLeads = async (req, res) => {
@@ -41,6 +42,15 @@ const getLeads = async (req, res) => {
 
     const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
 
+    // Security check: Unauthenticated requests cannot access private CRM leads
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required to access CRM leads.",
+      })
+      return
+    }
+
     // Security check: Unauthenticated or Account Admin attempting to access another tenant
     if (!isSuperAdmin && requestedTenantId && requestedTenantId !== effectiveTenantId) {
       res.status(403).json({
@@ -56,6 +66,9 @@ const getLeads = async (req, res) => {
 
     // Build query with tenant isolation
     const query = {}
+    if (req.query?.includeTest !== "true") {
+      query.isTest = { $ne: true }
+    }
     if (effectiveTenantId) {
       query.tenantId = effectiveTenantId
     }
@@ -158,6 +171,14 @@ const createLead = async (req, res) => {
 
     const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
 
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required to create CRM leads.",
+      })
+      return
+    }
+
     // Security check: Prevent tampering with tenantId
     if (!isSuperAdmin && bodyTenantId && bodyTenantId !== effectiveTenantId) {
       res.status(403).json({
@@ -167,7 +188,7 @@ const createLead = async (req, res) => {
       return
     }
 
-    const assignedTenant = effectiveTenantId || bodyTenantId || "default-tenant"
+    const assignedTenant = isSuperAdmin ? (bodyTenantId || "default-tenant") : effectiveTenantId
 
     // Check if email already exists within this tenant partition
     const existingLead = await Lead.findOne({
@@ -225,7 +246,24 @@ const createLead = async (req, res) => {
 const getLeadById = async (req, res) => {
   try {
     const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({
+        success: false,
+        error: "Invalid lead ID format",
+      })
+      return
+    }
+
     const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required to access lead details.",
+      })
+      return
+    }
 
     // Query must be scoped to the caller's tenant
     const query = { _id: id }
@@ -260,7 +298,24 @@ const updateLead = async (req, res) => {
   try {
     const { id } = req.params
     const { name, email, status } = req.body
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({
+        success: false,
+        error: "Invalid lead ID format",
+      })
+      return
+    }
+
     const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required to update leads.",
+      })
+      return
+    }
 
     // Tenant isolation: only find lead belonging to caller's tenant
     const query = { _id: id }
@@ -295,8 +350,8 @@ const updateLead = async (req, res) => {
       }
     }
 
-    const updatedLead = await Lead.findByIdAndUpdate(
-      id,
+    const updatedLead = await Lead.findOneAndUpdate(
+      query,
       {
         ...(name && typeof name === "string" && { name: name.trim() }),
         ...(email && typeof email === "string" && { email: email.toLowerCase().trim() }),
@@ -331,7 +386,24 @@ const updateLead = async (req, res) => {
 const deleteLead = async (req, res) => {
   try {
     const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({
+        success: false,
+        error: "Invalid lead ID format",
+      })
+      return
+    }
+
     const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required to delete leads.",
+      })
+      return
+    }
 
     // Enforce tenant scoping on deletion
     const query = { _id: id }
@@ -366,7 +438,18 @@ const getLeadStats = async (req, res) => {
   try {
     const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
 
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required to view lead statistics.",
+      })
+      return
+    }
+
     const matchQuery = {}
+    if (req.query?.includeTest !== "true") {
+      matchQuery.isTest = { $ne: true }
+    }
     if (!isSuperAdmin && effectiveTenantId) {
       matchQuery.tenantId = effectiveTenantId
     } else if (isSuperAdmin && typeof req.query?.tenantId === "string") {

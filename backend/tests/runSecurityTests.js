@@ -2,15 +2,22 @@ const request = require("supertest")
 const mongoose = require("mongoose")
 const jwt = require("jsonwebtoken")
 const dotenv = require("dotenv")
+const dns = require("dns")
+
+try {
+  dns.setServers(["8.8.8.8", "1.1.1.1"])
+} catch (_) {}
 
 // Force test environment
 process.env.NODE_ENV = "test"
 dotenv.config()
 
+const crypto = require("crypto")
 const app = require("../start")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const Lead = require("../models/Lead")
+const LeadFeedConfig = require("../models/LeadFeedConfig")
 const RolePermission = require("../models/RolePermission")
 const { DEFAULT_ACCOUNT_ADMIN_PERMISSIONS } = RolePermission
 const SystemConfig = require("../models/SystemConfig")
@@ -50,6 +57,9 @@ async function runAllSecurityTests() {
   let superAdminUser
   let accountAdminA
   let accountAdminB
+  let accountA
+  let feedConfigA
+  let rawApiKeyA
   let leadDefault
   let leadTenantA
   let leadTenantB
@@ -126,6 +136,30 @@ async function runAllSecurityTests() {
       email: `lead_b_${TEST_TAG}@test.com`,
       status: "Proposal Sent",
       tenantId: TENANT_B_ID,
+    })
+
+    // 4.5 Create Account and LeadFeedConfig for Tenant A
+    accountA = await Account.create({
+      accountId: TENANT_A_ID,
+      companyName: `Company A ${TEST_TAG}`,
+      displayName: `Company A`,
+      adminUserId: accountAdminA._id,
+      adminName: accountAdminA.name,
+      adminEmail: accountAdminA.email,
+      status: "active",
+    })
+
+    rawApiKeyA = `lf_live_test_${crypto.randomBytes(16).toString("hex")}`
+    const keyHashA = crypto.createHash("sha256").update(rawApiKeyA).digest("hex")
+
+    feedConfigA = await LeadFeedConfig.create({
+      tenantId: TENANT_A_ID,
+      websiteSource: {
+        enabled: true,
+        apiKeyHash: keyHashA,
+        apiKeyMasked: `lf_live_••••••••${rawApiKeyA.slice(-4)}`,
+        duplicateHandling: "reject",
+      },
     })
 
     // 5. Ensure baseline permissions
@@ -224,14 +258,11 @@ async function runAllSecurityTests() {
       recordTest("Suite 2", "Account Admin B queries /api/leads and receives ONLY Tenant B leads", passed, passed ? undefined : `Leads count: ${leads.length}, leaked A=${hasTenantALead}`)
     }
 
-    // Test 2.3: Unauthenticated caller receives ONLY default-tenant leads
+    // Test 2.3: Anonymous request to /api/leads is rejected with 401 Unauthorized
     {
       const res = await request(app).get("/api/leads")
-      const leads = res.body.data?.leads || []
-      const hasTenantALead = leads.some((l) => l._id === leadTenantA._id.toString())
-      const hasTenantBLead = leads.some((l) => l._id === leadTenantB._id.toString())
-      const passed = res.status === 200 && !hasTenantALead && !hasTenantBLead
-      recordTest("Suite 2", "Unauthenticated request receives ONLY default-tenant leads (never Tenant A or B)", passed, passed ? undefined : `Leaked A=${hasTenantALead}, B=${hasTenantBLead}`)
+      const passed = res.status === 401 && res.body.success === false
+      recordTest("Suite 2", "Anonymous request to /api/leads is rejected with 401 Unauthorized", passed, passed ? undefined : `Expected 401, got ${res.status}`)
     }
 
     // Test 2.4: Account Admin A attempting to query with ?tenantId=TENANT_B_ID is blocked (403)
@@ -243,11 +274,11 @@ async function runAllSecurityTests() {
       recordTest("Suite 2", "Account Admin A passing ?tenantId=Tenant_B in query is blocked (403 Forbidden)", passed, passed ? undefined : `Expected 403, got ${res.status}`)
     }
 
-    // Test 2.5: Unauthenticated caller attempting to query ?tenantId=TENANT_A_ID is blocked (403)
+    // Test 2.5: Anonymous caller attempting to query ?tenantId=TENANT_A_ID is blocked (401)
     {
       const res = await request(app).get(`/api/leads?tenantId=${TENANT_A_ID}`)
-      const passed = res.status === 403 && res.body.success === false
-      recordTest("Suite 2", "Unauthenticated caller passing ?tenantId=Tenant_A is blocked (403 Forbidden)", passed, passed ? undefined : `Expected 403, got ${res.status}`)
+      const passed = res.status === 401 && res.body.success === false
+      recordTest("Suite 2", "Anonymous request passing ?tenantId=Tenant_A is blocked (401 Unauthorized)", passed, passed ? undefined : `Expected 401, got ${res.status}`)
     }
 
     // Test 2.6: Account Admin A cannot read Tenant B's lead by ID (404 Not Found)
@@ -309,6 +340,15 @@ async function runAllSecurityTests() {
         .send({ name: "Injected Lead", email: `injected_${TEST_TAG}@test.com`, tenantId: TENANT_B_ID })
       const passed = res.status === 403 && res.body.success === false
       recordTest("Suite 2", "Account Admin A body tenantId injection attempt is rejected (403 Forbidden)", passed, passed ? undefined : `Expected 403, got ${res.status}`)
+    }
+
+    // Test 2.10: Anonymous lead write/update/delete requests are strictly rejected with 401
+    {
+      const postRes = await request(app).post("/api/leads").send({ name: "Anon Lead", email: "anon@test.com" })
+      const putRes = await request(app).put(`/api/leads/${leadTenantA._id}`).send({ name: "Anon Update" })
+      const deleteRes = await request(app).delete(`/api/leads/${leadTenantA._id}`)
+      const passed = postRes.status === 401 && putRes.status === 401 && deleteRes.status === 401
+      recordTest("Suite 2", "Anonymous POST, PUT, DELETE requests to /api/leads are all rejected with 401", passed, passed ? undefined : `Statuses: POST=${postRes.status}, PUT=${putRes.status}, DEL=${deleteRes.status}`)
     }
 
     // =========================================================================
@@ -490,6 +530,166 @@ async function runAllSecurityTests() {
       recordTest("Suite 5", "Server-defined allowlist rejects invalid permission keys (400 Bad Request)", passed, passed ? undefined : `Expected 400, got ${res.status}`)
     }
 
+    // =========================================================================
+    // SUITE 6: Production Hardening, Startup Sequencing & Health Checks
+    // =========================================================================
+    console.log("\n📋 Suite 6: Production Hardening, Startup Sequencing & Health Checks")
+
+    // Test 6.1: Missing or insecure JWT_SECRET throws in production mode
+    {
+      const { getJwtSecret } = require("../middleware/authMiddleware")
+      const originalEnv = process.env.NODE_ENV
+      const originalSecret = process.env.JWT_SECRET
+
+      let missingFailed = false
+      let weakFailed = false
+
+      try {
+        process.env.NODE_ENV = "production"
+        delete process.env.JWT_SECRET
+        getJwtSecret()
+      } catch (err) {
+        missingFailed = err.message.includes("missing or empty")
+      }
+
+      try {
+        process.env.NODE_ENV = "production"
+        process.env.JWT_SECRET = "leadflow-superadmin-secret-key-2026-secure"
+        getJwtSecret()
+      } catch (err) {
+        weakFailed = err.message.includes("Insecure or weak JWT_SECRET")
+      }
+
+      process.env.NODE_ENV = originalEnv
+      if (originalSecret) {
+        process.env.JWT_SECRET = originalSecret
+      } else {
+        delete process.env.JWT_SECRET
+      }
+
+      const passed = missingFailed && weakFailed
+      recordTest("Suite 6", "In production mode, missing or insecure JWT_SECRET fails startup validation", passed, passed ? undefined : `missingFailed=${missingFailed}, weakFailed=${weakFailed}`)
+    }
+
+    // Test 6.2: GET /health returns 200 with status 'healthy' when database is connected
+    {
+      const res = await request(app).get("/health")
+      const passed = res.status === 200 && res.body.status === "healthy" && res.body.database === "connected"
+      recordTest("Suite 6", "GET /health returns 200 OK with database 'connected' status", passed, passed ? undefined : `Expected 200 healthy, got ${res.status}: ${JSON.stringify(res.body)}`)
+    }
+
+    // Test 6.3: /health returns 503 if database connection is unavailable
+    {
+      const originalReadyState = mongoose.connection.readyState
+      Object.defineProperty(mongoose.connection, "readyState", { value: 0, configurable: true })
+
+      const res = await request(app).get("/health")
+      const passed = res.status === 503 && res.body.status === "degraded" && res.body.database === "disconnected"
+
+      Object.defineProperty(mongoose.connection, "readyState", { value: originalReadyState, configurable: true })
+
+      recordTest("Suite 6", "GET /health returns 503 Service Unavailable when database is disconnected", passed, passed ? undefined : `Expected 503 degraded, got ${res.status}: ${JSON.stringify(res.body)}`)
+    }
+
+    // Test 6.4: Graceful shutdown handler functions are exported and configured
+    {
+      const { setupGracefulShutdown } = require("../start")
+      const passed = typeof setupGracefulShutdown === "function"
+      recordTest("Suite 6", "Graceful shutdown lifecycle handler is properly exported and configured", passed, passed ? undefined : "setupGracefulShutdown is not a function")
+    }
+
+    // Test 6.5: Public integration webhook endpoint enforces API key authentication
+    {
+      const res = await request(app)
+        .post("/api/integrations/leads/website")
+        .send({ name: "External Website Lead", email: `external_${TEST_TAG}@test.com` })
+      const passed = res.status === 401 && res.body.success === false
+      recordTest("Suite 6", "Public integration webhook requires valid API key (returns 401 without key)", passed, passed ? undefined : `Expected 401, got ${res.status}`)
+    }
+
+    // =========================================================================
+    // SUITE 7: Phase 5 Security Hardening & Concurrency Checks
+    // =========================================================================
+    console.log("\n📋 Suite 7: Phase 5 Security Hardening & Concurrency Checks")
+
+    // Test 7.1: CORS denies unauthorized origin for credentialed requests
+    {
+      const res = await request(app)
+        .get("/api/leads")
+        .set("Origin", "https://malicious-attacker.com")
+        .set("Authorization", `Bearer ${accountAdminAToken}`)
+
+      const passed = res.headers["access-control-allow-origin"] !== "https://malicious-attacker.com"
+      recordTest("Suite 7", "CORS policy denies unauthorized origin from accessing credentialed endpoints", passed, passed ? undefined : `Expected origin not reflected, got ${res.headers["access-control-allow-origin"]}`)
+    }
+
+    // Test 7.2: CSRF protection blocks mutating request with client_token from untrusted origin
+    {
+      const res = await request(app)
+        .post("/api/leads")
+        .set("Cookie", `client_token=${accountAdminAToken}`)
+        .set("Origin", "https://malicious-attacker.com")
+        .send({ name: "CSRF Test Lead", email: `csrf_${TEST_TAG}@test.com` })
+
+      const passed = res.status === 403 && res.body.error && res.body.error.includes("CSRF")
+      recordTest("Suite 7", "CSRF middleware blocks mutating request with client_token from untrusted origin", passed, passed ? undefined : `Expected 403 CSRF error, got ${res.status}: ${JSON.stringify(res.body)}`)
+    }
+
+    // Test 7.3: Suspended tenant account blocks active session in authenticate middleware
+    {
+      accountA.status = "suspended"
+      await accountA.save()
+
+      const res = await request(app)
+        .get("/api/leads")
+        .set("Authorization", `Bearer ${accountAdminAToken}`)
+
+      const passed = res.status === 403 && res.body.error && res.body.error.includes("suspended")
+      recordTest("Suite 7", "Suspended tenant account immediately blocks active user sessions (403)", passed, passed ? undefined : `Expected 403 suspended, got ${res.status}: ${JSON.stringify(res.body)}`)
+    }
+
+    // Test 7.4: Suspended tenant account blocks incoming webhook in receiveWebsiteLead
+    {
+      const res = await request(app)
+        .post("/api/integrations/leads/website")
+        .set("x-api-key", rawApiKeyA)
+        .send({ name: "Suspended Tenant Webhook Lead", email: `suspended_wh_${TEST_TAG}@test.com` })
+
+      const passed = res.status === 403 && res.body.error && res.body.error.includes("suspended")
+      recordTest("Suite 7", "Suspended tenant account immediately rejects incoming webhook submissions (403)", passed, passed ? undefined : `Expected 403 suspended, got ${res.status}: ${JSON.stringify(res.body)}`)
+
+      // Restore account status to active for subsequent tests
+      accountA.status = "active"
+      await accountA.save()
+    }
+
+    // Test 7.5: Webhook idempotency returns HTTP 200 idempotent response on duplicate delivery
+    {
+      const testIdempKey = `idemp_key_${TEST_TAG}`
+      const payload = {
+        name: "Idempotent Lead",
+        email: `idemp_${TEST_TAG}@test.com`,
+        phone: "+15550192834",
+      }
+
+      // First delivery: creates lead
+      const res1 = await request(app)
+        .post("/api/integrations/leads/website")
+        .set("x-api-key", rawApiKeyA)
+        .set("x-idempotency-key", testIdempKey)
+        .send(payload)
+
+      // Second delivery (simulating concurrent retry): must be handled idempotently
+      const res2 = await request(app)
+        .post("/api/integrations/leads/website")
+        .set("x-api-key", rawApiKeyA)
+        .set("x-idempotency-key", testIdempKey)
+        .send(payload)
+
+      const passed = res1.status === 201 && res2.status === 200 && res2.body.idempotent === true
+      recordTest("Suite 7", "Webhook delivery retry with identical idempotency key returns HTTP 200 idempotent response", passed, passed ? undefined : `Expected 201 then 200 idempotent, got res1=${res1.status}, res2=${res2.status}: ${JSON.stringify(res2.body)}`)
+    }
+
   } catch (unexpectedError) {
     console.error("Fatal test runner error:", unexpectedError)
   } finally {
@@ -498,6 +698,8 @@ async function runAllSecurityTests() {
       if (superAdminUser) await User.findByIdAndDelete(superAdminUser._id)
       if (accountAdminA) await User.findByIdAndDelete(accountAdminA._id)
       if (accountAdminB) await User.findByIdAndDelete(accountAdminB._id)
+      if (accountA) await Account.findByIdAndDelete(accountA._id)
+      if (feedConfigA) await LeadFeedConfig.findByIdAndDelete(feedConfigA._id)
       if (leadDefault) await Lead.findByIdAndDelete(leadDefault._id)
       if (leadTenantA) await Lead.findByIdAndDelete(leadTenantA._id)
       if (leadTenantB) await Lead.findByIdAndDelete(leadTenantB._id)

@@ -1,8 +1,8 @@
 const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Account = require("../models/Account")
+const { getJwtSecret } = require("../middleware/authMiddleware")
 
-const JWT_SECRET = process.env.JWT_SECRET || "leadflow-superadmin-secret-key-2026-secure"
 const JWT_EXPIRES_IN = "24h"
 
 const login = async (req, res) => {
@@ -76,7 +76,7 @@ const login = async (req, res) => {
       return invalidCredentialsResponse()
     }
 
-    // Sign JWT
+    // Sign JWT using validated secret
     const token = jwt.sign(
       {
         id: user._id.toString(),
@@ -84,7 +84,7 @@ const login = async (req, res) => {
         role: user.role,
         tenantId: user.tenantId,
       },
-      JWT_SECRET,
+      getJwtSecret(),
       { expiresIn: JWT_EXPIRES_IN },
     )
 
@@ -97,14 +97,20 @@ const login = async (req, res) => {
       maxAge: 24 * 60 * 60 * 1000,
       path: "/",
     }
+    const clearOptions = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+      path: "/",
+    }
 
     if (user.role === "super_admin") {
       res.cookie("superadmin_token", token, cookieOptions)
-      res.clearCookie("client_token", { path: "/" })
+      res.clearCookie("client_token", clearOptions)
     } else {
       res.cookie("client_token", token, cookieOptions)
       // Clear any prior Super Admin session to prevent identity leakage
-      res.clearCookie("superadmin_token", { path: "/" })
+      res.clearCookie("superadmin_token", clearOptions)
     }
 
     const roleTitle =

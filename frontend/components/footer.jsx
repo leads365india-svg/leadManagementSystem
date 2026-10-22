@@ -7,7 +7,11 @@ export default function Footer() {
   const pathname = usePathname()
   const currentYear = new Date().getFullYear()
 
-  if (pathname?.startsWith("/super-admin") || pathname?.startsWith("/portal")) {
+  if (
+    pathname?.startsWith("/super-admin") ||
+    pathname?.startsWith("/portal") ||
+    pathname === "/login"
+  ) {
     return null
   }
 
