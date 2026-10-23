@@ -19,6 +19,8 @@ import {
   ArrowRight,
   Sparkles,
   Building2,
+  Activity,
+  XCircle,
 } from "lucide-react"
 
 export default function HomePage() {
@@ -145,50 +147,93 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Lead Statistics Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
-            <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-5 hover:shadow-md transition-shadow">
+          {/* Lead Statistics Pipeline Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 mb-10">
+            {/* 1. Total Leads */}
+            <Link
+              href="/leads"
+              className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 hover:shadow-md hover:border-blue-200 transition-all group"
+            >
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Leads</h3>
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-                  <Users className="w-4 h-4" />
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-blue-600">Total Leads</h3>
+                <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <Users className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="text-3xl font-extrabold text-slate-900">{stats.total}</div>
-              <p className="text-xs text-slate-400 mt-1">Active prospects in database</p>
-            </div>
+              <div className="text-2xl font-extrabold text-slate-900">{stats.total}</div>
+              <p className="text-[10px] text-slate-400 mt-1">All database leads</p>
+            </Link>
 
-            <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-5 hover:shadow-md transition-shadow">
+            {/* 2. New Leads */}
+            <Link
+              href="/leads?status=New"
+              className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 hover:shadow-md hover:border-emerald-200 transition-all group"
+            >
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">New Leads</h3>
-                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4" />
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-emerald-600">New Leads</h3>
+                <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <Sparkles className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="text-3xl font-extrabold text-emerald-600">{stats.statusCounts.New || 0}</div>
-              <p className="text-xs text-slate-400 mt-1">Awaiting initial outreach</p>
-            </div>
+              <div className="text-2xl font-extrabold text-emerald-600">{stats.statusCounts.New || 0}</div>
+              <p className="text-[10px] text-slate-400 mt-1">Awaiting outreach</p>
+            </Link>
 
-            <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-5 hover:shadow-md transition-shadow">
+            {/* 3. Active Leads */}
+            <Link
+              href="/leads?status=Engaged"
+              className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 hover:shadow-md hover:border-amber-200 transition-all group"
+            >
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Closed Won</h3>
-                <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-                  <CheckCircle2 className="w-4 h-4" />
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-amber-600">Active Leads</h3>
+                <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+                  <Activity className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="text-3xl font-extrabold text-purple-600">{stats.statusCounts["Closed-Won"] || 0}</div>
-              <p className="text-xs text-slate-400 mt-1">Successfully converted deals</p>
-            </div>
+              <div className="text-2xl font-extrabold text-amber-600">{stats.statusCounts.Engaged || 0}</div>
+              <p className="text-[10px] text-slate-400 mt-1">Engaged in discussion</p>
+            </Link>
 
-            <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-5 hover:shadow-md transition-shadow">
+            {/* 4. Order Placed */}
+            <Link
+              href="/leads?status=Closed-Won"
+              className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 hover:shadow-md hover:border-purple-200 transition-all group"
+            >
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Conversion Rate</h3>
-                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-                  <TrendingUp className="w-4 h-4" />
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-purple-600">Order Placed</h3>
+                <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="text-3xl font-extrabold text-amber-600">{stats.conversionRate || 0}%</div>
-              <p className="text-xs text-slate-400 mt-1">Lead to customer win ratio</p>
+              <div className="text-2xl font-extrabold text-purple-600">{stats.statusCounts["Closed-Won"] || 0}</div>
+              <p className="text-[10px] text-slate-400 mt-1">Converted deals</p>
+            </Link>
+
+            {/* 5. Lost Leads */}
+            <Link
+              href="/leads?status=Closed-Lost"
+              className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 hover:shadow-md hover:border-rose-200 transition-all group"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-rose-600">Lost Leads</h3>
+                <div className="w-7 h-7 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <XCircle className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div className="text-2xl font-extrabold text-rose-600">{stats.statusCounts["Closed-Lost"] || 0}</div>
+              <p className="text-[10px] text-slate-400 mt-1">Disqualified records</p>
+            </Link>
+
+            {/* 6. Conversion Rate */}
+            <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 hover:shadow-md transition-shadow">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Win Rate</h3>
+                <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <TrendingUp className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div className="text-2xl font-extrabold text-indigo-600">{stats.conversionRate || 0}%</div>
+              <p className="text-[10px] text-slate-400 mt-1">Lead to win ratio</p>
             </div>
           </div>
 

@@ -8,24 +8,45 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
+// Helper to sanitize domain strings (strips protocol, port, paths)
+const sanitizeDomain = (domain) => {
+  if (!domain || typeof domain !== "string") return ""
+  return domain
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .trim()
+}
+
 // Helper to validate domain name format (e.g. crm.domain.com or client-portal.io)
 const isValidDomain = (domain) => {
   if (!domain || typeof domain !== "string") return false
-  const clean = domain.trim().toLowerCase()
-  if (clean.includes("://") || clean.includes("/") || clean.includes(":") || clean.includes("?")) {
+  const clean = sanitizeDomain(domain)
+  if (!clean || clean.includes("://") || clean.includes("/") || clean.includes(":") || clean.includes("?")) {
     return false
   }
   const domainRegex = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
   return domainRegex.test(clean)
 }
 
+// Helper to sanitize and normalize Indian mobile numbers
+const normalizeIndianMobile = (number) => {
+  if (!number || typeof number !== "string") return ""
+  let clean = number.replace(/[\s\-+()]/g, "")
+  if (clean.startsWith("91") && clean.length === 12) {
+    clean = clean.slice(2)
+  } else if (clean.startsWith("0")) {
+    clean = clean.replace(/^0+/, "")
+  }
+  return clean
+}
+
 // Helper to validate Indian mobile numbers (10 digits starting with 6, 7, 8, or 9)
 const isValidIndianMobile = (number) => {
   if (!number || typeof number !== "string") return false
-  const clean = number.replace(/[\s\-+]/g, "")
-  if (clean.length === 12 && clean.startsWith("91")) {
-    return /^[6-9]\d{9}$/.test(clean.slice(2))
-  }
+  const clean = normalizeIndianMobile(number)
   return /^[6-9]\d{9}$/.test(clean)
 }
 
@@ -237,12 +258,24 @@ const createAccount = async (req, res) => {
     res.status(400).json({ success: false, error: "Company name is required" })
     return
   }
+  if (companyName.trim().length < 2) {
+    res.status(400).json({ success: false, error: "Company name must be at least 2 characters long" })
+    return
+  }
   if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
     res.status(400).json({ success: false, error: "Display name is required" })
     return
   }
+  if (displayName.trim().length < 2) {
+    res.status(400).json({ success: false, error: "Display name must be at least 2 characters long" })
+    return
+  }
   if (!adminName || typeof adminName !== "string" || !adminName.trim()) {
     res.status(400).json({ success: false, error: "Account admin full name is required" })
+    return
+  }
+  if (adminName.trim().length < 2) {
+    res.status(400).json({ success: false, error: "Account admin full name must be at least 2 characters long" })
     return
   }
   if (!adminEmail || typeof adminEmail !== "string" || !adminEmail.trim()) {
@@ -250,7 +283,8 @@ const createAccount = async (req, res) => {
     return
   }
 
-  const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/
+  // Modern RFC-compliant email validation (supports all valid TLDs and aliases)
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/
   if (!emailRegex.test(adminEmail.trim())) {
     res.status(400).json({ success: false, error: "Please enter a valid admin email address" })
     return
@@ -258,6 +292,7 @@ const createAccount = async (req, res) => {
 
   // Mobile number validation (Indian 10-digit rule when countryCode is IN, general phone rule otherwise)
   const trimmedContact = typeof contactNumber === "string" ? contactNumber.trim() : ""
+  let savedContact = trimmedContact
   if (trimmedContact) {
     if (countryCode === "IN") {
       if (!isValidIndianMobile(trimmedContact)) {
@@ -267,6 +302,7 @@ const createAccount = async (req, res) => {
         })
         return
       }
+      savedContact = normalizeIndianMobile(trimmedContact)
     } else {
       const digitsOnly = trimmedContact.replace(/[\s\-+()]/g, "")
       if (!/^\d{7,15}$/.test(digitsOnly)) {
@@ -279,10 +315,10 @@ const createAccount = async (req, res) => {
     }
   }
 
-  // Custom domain validation
+  // Custom domain validation & sanitization
   let cleanDomain = ""
   if (customDomain && typeof customDomain === "string" && customDomain.trim()) {
-    cleanDomain = customDomain.trim().toLowerCase()
+    cleanDomain = sanitizeDomain(customDomain)
     if (!isValidDomain(cleanDomain)) {
       res.status(400).json({
         success: false,
@@ -310,9 +346,11 @@ const createAccount = async (req, res) => {
     return
   }
 
-  // Pre-check for duplicate user email
-  const existingUser = await User.findOne({ email: adminEmail.toLowerCase().trim() })
-  if (existingUser) {
+  // Pre-check for duplicate user email in User and Account models
+  const normalizedAdminEmail = adminEmail.toLowerCase().trim()
+  const existingUser = await User.findOne({ email: normalizedAdminEmail })
+  const existingAccount = await Account.findOne({ adminEmail: normalizedAdminEmail })
+  if (existingUser || existingAccount) {
     res.status(400).json({
       success: false,
       error: "An account or user with this email address already exists",
@@ -331,12 +369,12 @@ const createAccount = async (req, res) => {
     // 1. Create the Leads Account Admin User with Super Admin chosen password
     createdUser = new User({
       name: adminName.trim(),
-      email: adminEmail.toLowerCase().trim(),
+      email: normalizedAdminEmail,
       password: password, // Hashed automatically by userSchema.pre('save')
       role: "account_admin",
       tenantId: accountId,
       status: normalizedStatus,
-      contactNumber: trimmedContact,
+      contactNumber: savedContact,
     })
     await createdUser.save()
 
@@ -348,7 +386,7 @@ const createAccount = async (req, res) => {
       adminUserId: createdUser._id,
       adminName: createdUser.name,
       adminEmail: createdUser.email,
-      contactNumber: trimmedContact,
+      contactNumber: savedContact,
       status: normalizedStatus,
       customDomain: cleanDomain,
       domainStatus: cleanDomain ? "pending_verification" : "unconfigured",
@@ -394,6 +432,15 @@ const createAccount = async (req, res) => {
       }
     } catch (cleanupError) {
       console.error("Rollback cleanup error:", cleanupError)
+    }
+
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((e) => e.message)
+      res.status(400).json({
+        success: false,
+        error: messages.join(", "),
+      })
+      return
     }
 
     if (error.code === 11000) {
@@ -471,6 +518,7 @@ const updateAccount = async (req, res) => {
 
     if (contactNumber !== undefined) {
       const trimmedContact = typeof contactNumber === "string" ? contactNumber.trim() : ""
+      let savedContact = trimmedContact
       if (trimmedContact) {
         if (countryCode === "IN") {
           if (!isValidIndianMobile(trimmedContact)) {
@@ -480,6 +528,7 @@ const updateAccount = async (req, res) => {
             })
             return
           }
+          savedContact = normalizeIndianMobile(trimmedContact)
         } else {
           const digitsOnly = trimmedContact.replace(/[\s\-+()]/g, "")
           if (!/^\d{7,15}$/.test(digitsOnly)) {
@@ -491,11 +540,11 @@ const updateAccount = async (req, res) => {
           }
         }
       }
-      account.contactNumber = trimmedContact
+      account.contactNumber = savedContact
     }
 
     if (customDomain !== undefined) {
-      const cleanDomain = typeof customDomain === "string" ? customDomain.trim().toLowerCase() : ""
+      const cleanDomain = typeof customDomain === "string" ? sanitizeDomain(customDomain) : ""
       if (cleanDomain) {
         if (!isValidDomain(cleanDomain)) {
           res.status(400).json({
@@ -571,6 +620,24 @@ const updateAccount = async (req, res) => {
     })
   } catch (error) {
     console.error("Error updating account:", error)
+
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((e) => e.message)
+      res.status(400).json({
+        success: false,
+        error: messages.join(", "),
+      })
+      return
+    }
+
+    if (error.code === 11000) {
+      res.status(400).json({
+        success: false,
+        error: "An account with this ID or domain already exists",
+      })
+      return
+    }
+
     res.status(500).json({
       success: false,
       error: "Failed to update account details",

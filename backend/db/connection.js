@@ -3,11 +3,6 @@ const dotenv = require("dotenv")
 const dns = require("dns")
 const { bootstrapSuperAdmin } = require("./seedSuperAdmin")
 
-// Ensure reliable DNS resolution for MongoDB Atlas SRV records
-try {
-  dns.setServers(["8.8.8.8", "1.1.1.1"])
-} catch (_) {}
-
 dotenv.config()
 
 let isConnecting = false

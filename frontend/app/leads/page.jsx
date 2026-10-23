@@ -15,9 +15,7 @@ export default function LeadsPage() {
   ]
 
   return (
-    <>
-      <Breadcrumb items={breadcrumbItems} />
-      <Suspense
+    <Suspense
         fallback={
           <div className="w-full px-4 sm:px-6 lg:px-8 py-12 flex items-center justify-center min-h-[400px]">
             <div className="flex flex-col items-center space-y-3">
@@ -27,8 +25,7 @@ export default function LeadsPage() {
           </div>
         }
       >
-        <LeadsClient />
-      </Suspense>
-    </>
+      <LeadsClient />
+    </Suspense>
   )
 }

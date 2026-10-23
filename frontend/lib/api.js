@@ -82,6 +82,64 @@ class ApiClient {
     })
   }
 
+  async updateLeadStatus(id, status) {
+    return this.request(`/leads/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    })
+  }
+
+  async getLeadById(id) {
+    return this.request(`/leads/${id}`)
+  }
+
+  // --- Follow-ups Management Endpoints ---
+  async getFollowUps(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/follow-ups${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getFollowUpStats() {
+    return this.request("/follow-ups/stats")
+  }
+
+  async getFollowUpById(id) {
+    return this.request(`/follow-ups/${id}`)
+  }
+
+  async createFollowUp(data) {
+    return this.request("/follow-ups", {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async updateFollowUp(id, data) {
+    return this.request(`/follow-ups/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async completeFollowUp(id, data = {}) {
+    return this.request(`/follow-ups/${id}/complete`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteFollowUp(id) {
+    return this.request(`/follow-ups/${id}`, {
+      method: "DELETE",
+    })
+  }
+
   // --- Authentication Endpoints ---
   async login(credentials) {
     return this.request("/auth/login", {
