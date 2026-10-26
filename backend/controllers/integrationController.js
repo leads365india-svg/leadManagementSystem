@@ -466,6 +466,8 @@ const sendTestLead = async (req, res) => {
  * Public Webhook: Ingest lead from website forms/integrations
  */
 const receiveWebsiteLead = async (req, res) => {
+  let tenantId = null
+  let idempotencyKey = ""
   try {
     // 1. Authenticate via API key in header (x-api-key or Authorization Bearer)
     const rawApiKey =
@@ -496,7 +498,7 @@ const receiveWebsiteLead = async (req, res) => {
     }
 
     // Derived strictly from authenticated credential
-    const tenantId = config.tenantId
+    tenantId = config.tenantId
 
     // Verify tenant account is active
     const account = await Account.findOne({ accountId: tenantId }).lean()
@@ -524,7 +526,7 @@ const receiveWebsiteLead = async (req, res) => {
     }
 
     // 3.5 Check Webhook Idempotency (prevent duplicate creates on automated retries)
-    const idempotencyKey = (
+    idempotencyKey = (
       req.headers["x-idempotency-key"] ||
       req.headers["idempotency-key"] ||
       req.body?.idempotencyKey ||
