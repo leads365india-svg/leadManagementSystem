@@ -196,13 +196,15 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
     setTimeout(() => setCopiedKey(null), 3000)
   }
 
-  // Validation helper for Indian mobile numbers (10 digits starting with 6-9)
+  // Validation helper for Indian mobile numbers (10 digits starting with 6-9, handles +91, 0 prefix, spaces)
   const validateMobile = (number, countryCode) => {
     if (!number || !number.trim()) return true // Optional
-    const clean = number.trim().replace(/[\s\-+]/g, "")
+    let clean = number.trim().replace(/[\s\-+()]/g, "")
     if (countryCode === "IN") {
-      if (clean.length === 12 && clean.startsWith("91")) {
-        return /^[6-9]\d{9}$/.test(clean.slice(2))
+      if (clean.startsWith("91") && clean.length === 12) {
+        clean = clean.slice(2)
+      } else if (clean.startsWith("0")) {
+        clean = clean.replace(/^0+/, "")
       }
       return /^[6-9]\d{9}$/.test(clean)
     }
@@ -210,11 +212,23 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
     return /^\d{7,15}$/.test(clean)
   }
 
+  // Domain sanitization helper (strips protocol, paths, and ports)
+  const sanitizeDomain = (domain) => {
+    if (!domain || !domain.trim()) return ""
+    return domain
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/.*$/, "")
+      .replace(/:\d+$/, "")
+      .trim()
+  }
+
   // Domain format validation helper
   const validateDomain = (domain) => {
     if (!domain || !domain.trim()) return true // Optional
-    const clean = domain.trim().toLowerCase()
-    if (clean.includes("://") || clean.includes("/") || clean.includes(":") || clean.includes("?")) {
+    const clean = sanitizeDomain(domain)
+    if (!clean || clean.includes("://") || clean.includes("/") || clean.includes(":") || clean.includes("?")) {
       return false
     }
     return /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(clean)
@@ -225,17 +239,26 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
     const errors = {}
     if (!formData.companyName.trim()) {
       errors.companyName = "Company / Leads Account name is required"
+    } else if (formData.companyName.trim().length < 2) {
+      errors.companyName = "Company name must be at least 2 characters long"
     }
+
     if (!formData.displayName.trim()) {
       errors.displayName = "Display name is required"
+    } else if (formData.displayName.trim().length < 2) {
+      errors.displayName = "Display name must be at least 2 characters long"
     }
+
     if (!formData.adminName.trim()) {
       errors.adminName = "Account Admin full name is required"
+    } else if (formData.adminName.trim().length < 2) {
+      errors.adminName = "Account Admin full name must be at least 2 characters long"
     }
+
     if (!formData.adminEmail.trim()) {
       errors.adminEmail = "Admin email address is required"
     } else {
-      const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/
       if (!emailRegex.test(formData.adminEmail.trim())) {
         errors.adminEmail = "Please enter a valid email address"
       }
@@ -275,13 +298,22 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
     const errors = {}
     if (!editFormData.companyName.trim()) {
       errors.companyName = "Company name is required"
+    } else if (editFormData.companyName.trim().length < 2) {
+      errors.companyName = "Company name must be at least 2 characters long"
     }
+
     if (!editFormData.displayName.trim()) {
       errors.displayName = "Display name is required"
+    } else if (editFormData.displayName.trim().length < 2) {
+      errors.displayName = "Display name must be at least 2 characters long"
     }
+
     if (!editFormData.adminName.trim()) {
       errors.adminName = "Admin full name is required"
+    } else if (editFormData.adminName.trim().length < 2) {
+      errors.adminName = "Admin full name must be at least 2 characters long"
     }
+
     if (editFormData.contactNumber.trim()) {
       if (!validateMobile(editFormData.contactNumber, editFormData.countryCode)) {
         errors.contactNumber =
@@ -309,12 +341,26 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
       return
     }
 
+    let toastId = null
     try {
       setIsSubmitting(true)
-      const toastId = toast.loading("Creating Leads Account & Admin user...")
+      toastId = toast.loading("Creating Leads Account & Admin user...")
       const { confirmPassword, ...payload } = formData
+      
+      // Sanitize custom domain if provided
+      if (payload.customDomain) {
+        payload.customDomain = sanitizeDomain(payload.customDomain)
+      }
+
+      // Normalize Indian mobile number format before sending
+      if (payload.countryCode === "IN" && payload.contactNumber) {
+        let clean = payload.contactNumber.trim().replace(/[\s\-+()]/g, "")
+        if (clean.startsWith("91") && clean.length === 12) clean = clean.slice(2)
+        else if (clean.startsWith("0")) clean = clean.replace(/^0+/, "")
+        payload.contactNumber = clean
+      }
+
       const response = await apiClient.createSuperAdminAccount(payload)
-      toast.dismiss(toastId)
 
       if (response.success && response.data) {
         const acc = response.data.account
@@ -364,6 +410,7 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
       setActionError(errMsg)
       toast.error(errMsg)
     } finally {
+      if (toastId) toast.dismiss(toastId)
       setIsSubmitting(false)
     }
   }

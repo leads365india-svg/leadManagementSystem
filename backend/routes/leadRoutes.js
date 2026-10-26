@@ -29,6 +29,12 @@ router.post("/", checkPermission("leads.create"), createLead)
 // PUT /api/leads/:id - Edit lead
 router.put("/:id", checkPermission("leads.edit"), updateLead)
 
+// PATCH /api/leads/:id - Quick update / status change
+router.patch("/:id", checkPermission("leads.edit"), updateLead)
+
+// PATCH /api/leads/:id/status - Dedicated status transition endpoint
+router.patch("/:id/status", checkPermission("leads.edit"), updateLead)
+
 // DELETE /api/leads/:id - Delete lead
 router.delete("/:id", checkPermission("leads.delete"), deleteLead)
 

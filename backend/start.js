@@ -11,6 +11,7 @@ const leadRoutes = require("./routes/leadRoutes")
 const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
 const integrationRoutes = require("./routes/integrationRoutes")
+const followUpRoutes = require("./routes/followUpRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
 
@@ -159,6 +160,8 @@ app.use("/api", checkDbConnection)
 app.use("/api/auth", authRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/leads", leadRoutes)
+app.use("/api/follow-ups", followUpRoutes)
+app.use("/api/followups", followUpRoutes)
 app.use("/api/integrations", integrationRoutes)
 
 // Error handling middleware

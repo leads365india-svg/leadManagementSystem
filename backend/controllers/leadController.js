@@ -61,7 +61,7 @@ const getLeads = async (req, res) => {
     }
 
     const pageNum = Math.max(1, Number(page) || 1)
-    const limitNum = Math.max(1, Math.min(50, Number(limit) || 10))
+    const limitNum = Math.max(1, Math.min(100, Number(limit) || 10))
     const skip = (pageNum - 1) * limitNum
 
     // Build query with tenant isolation
@@ -73,18 +73,47 @@ const getLeads = async (req, res) => {
       query.tenantId = effectiveTenantId
     }
 
-    // Search functionality with sanitized regex
+    // Search functionality across name, email, phone, and company with sanitized regex
     if (typeof search === "string" && search.trim()) {
       const sanitizedSearch = escapeRegex(search.trim())
       query.$or = [
         { name: { $regex: sanitizedSearch, $options: "i" } },
         { email: { $regex: sanitizedSearch, $options: "i" } },
+        { phone: { $regex: sanitizedSearch, $options: "i" } },
+        { "metadata.company": { $regex: sanitizedSearch, $options: "i" } },
       ]
     }
 
-    // Status filter
+    // Direct phone filter
+    if (typeof req.query?.phone === "string" && req.query.phone.trim()) {
+      query.phone = { $regex: escapeRegex(req.query.phone.trim()), $options: "i" }
+    }
+
+    // Direct email filter
+    if (typeof req.query?.email === "string" && req.query.email.trim()) {
+      query.email = { $regex: escapeRegex(req.query.email.trim()), $options: "i" }
+    }
+
+    // Status filter with alias normalization
     if (status && status !== "all") {
-      query.status = status
+      const normalizedStatus = status.trim().toLowerCase()
+      if (normalizedStatus === "active" || normalizedStatus === "active leads" || normalizedStatus === "active-leads" || normalizedStatus === "engaged") {
+        query.status = "Engaged"
+      } else if (normalizedStatus === "order-placed" || normalizedStatus === "order placed" || normalizedStatus === "closed-won" || normalizedStatus === "closed won" || normalizedStatus === "won") {
+        query.status = "Closed-Won"
+      } else if (normalizedStatus === "lost" || normalizedStatus === "lost leads" || normalizedStatus === "lost-leads" || normalizedStatus === "closed-lost" || normalizedStatus === "closed lost") {
+        query.status = "Closed-Lost"
+      } else if (normalizedStatus === "new" || normalizedStatus === "new leads" || normalizedStatus === "new-leads") {
+        query.status = "New"
+      } else if (normalizedStatus === "proposal sent" || normalizedStatus === "proposal-sent") {
+        query.status = "Proposal Sent"
+      } else {
+        query.status = status.trim()
+      }
+    } else if (req.query?.leadType === "Fresh") {
+      query.status = "New"
+    } else if (req.query?.leadType === "Existing") {
+      query.status = { $ne: "New" }
     }
 
     // Source filter
@@ -95,6 +124,27 @@ const getLeads = async (req, res) => {
     // AssignedTo filter
     if (assignedTo && assignedTo !== "all") {
       query.assignedTo = assignedTo
+    }
+
+    // Date range filter
+    if (req.query?.fromDate || req.query?.toDate) {
+      query.createdAt = {}
+      if (req.query.fromDate) {
+        const from = new Date(req.query.fromDate)
+        if (!isNaN(from.getTime())) {
+          query.createdAt.$gte = from
+        }
+      }
+      if (req.query.toDate) {
+        const to = new Date(req.query.toDate)
+        if (!isNaN(to.getTime())) {
+          to.setHours(23, 59, 59, 999)
+          query.createdAt.$lte = to
+        }
+      }
+      if (Object.keys(query.createdAt).length === 0) {
+        delete query.createdAt
+      }
     }
 
     // Sort configuration with allowlist validation
@@ -112,9 +162,11 @@ const getLeads = async (req, res) => {
 
     const transformedLeads = leads.map((lead) => ({
       _id: lead._id.toString(),
+      id: lead._id.toString(),
       name: lead.name,
       email: lead.email || "",
       phone: lead.phone || "",
+      company: lead.metadata?.company || lead.metadata?.companyName || "",
       source: lead.source || "Website Form",
       assignedTo: lead.assignedTo || "Unassigned",
       assignedStaffId: lead.assignedStaffId || "unassigned",
@@ -125,6 +177,7 @@ const getLeads = async (req, res) => {
       isEmailVerified: Boolean(lead.isEmailVerified),
       verificationStatus: lead.verificationStatus || "unverified",
       tenantId: lead.tenantId,
+      metadata: lead.metadata || {},
       createdAt: lead.createdAt,
       updatedAt: lead.updatedAt,
     }))
@@ -203,6 +256,11 @@ const createLead = async (req, res) => {
       return
     }
 
+    const leadMetadata = typeof req.body.metadata === "object" && req.body.metadata !== null ? { ...req.body.metadata } : {}
+    if (typeof req.body.company === "string" && req.body.company.trim()) {
+      leadMetadata.company = req.body.company.trim()
+    }
+
     const lead = new Lead({
       name: name.trim(),
       email: email.toLowerCase().trim(),
@@ -210,6 +268,8 @@ const createLead = async (req, res) => {
       source: (source || "Manual Entry").trim(),
       assignedTo: (assignedTo || "Unassigned").trim(),
       status: status || "New",
+      message: typeof req.body.message === "string" ? req.body.message.trim() : "",
+      metadata: leadMetadata,
       tenantId: assignedTenant,
     })
 
@@ -297,7 +357,7 @@ const getLeadById = async (req, res) => {
 const updateLead = async (req, res) => {
   try {
     const { id } = req.params
-    const { name, email, status } = req.body
+    const { name, email, phone, status, source, assignedTo, message } = req.body
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       res.status(400).json({
@@ -333,8 +393,53 @@ const updateLead = async (req, res) => {
       return
     }
 
+    // If status is provided, validate against allowed enum and map aliases
+    let targetStatus = undefined
+    if (status !== undefined) {
+      const STATUS_MAP = {
+        new: "New",
+        "new leads": "New",
+        "new-leads": "New",
+        engaged: "Engaged",
+        active: "Engaged",
+        "active leads": "Engaged",
+        "active-leads": "Engaged",
+        "proposal sent": "Proposal Sent",
+        "proposal-sent": "Proposal Sent",
+        "closed-won": "Closed-Won",
+        "closed won": "Closed-Won",
+        won: "Closed-Won",
+        "order placed": "Closed-Won",
+        "order-placed": "Closed-Won",
+        "closed-lost": "Closed-Lost",
+        "closed lost": "Closed-Lost",
+        lost: "Closed-Lost",
+        "lost leads": "Closed-Lost",
+        "lost-leads": "Closed-Lost",
+      }
+      const canonical = typeof status === "string" ? STATUS_MAP[status.toLowerCase().trim()] || status : status
+      const ALLOWED_STATUSES = ["New", "Engaged", "Proposal Sent", "Closed-Won", "Closed-Lost"]
+      if (!ALLOWED_STATUSES.includes(canonical)) {
+        res.status(400).json({
+          success: false,
+          error: `Invalid status. Must be one of: ${ALLOWED_STATUSES.join(", ")}`,
+        })
+        return
+      }
+      targetStatus = canonical
+    }
+
     // Check if email is being changed and if it already exists within the tenant
     if (email && email.toLowerCase().trim() !== lead.email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/
+      if (!emailRegex.test(email.trim())) {
+        res.status(400).json({
+          success: false,
+          error: "Please enter a valid email address",
+        })
+        return
+      }
+
       const existingLead = await Lead.findOne({
         email: email.toLowerCase().trim(),
         tenantId: lead.tenantId,
@@ -350,13 +455,53 @@ const updateLead = async (req, res) => {
       }
     }
 
+    const updates = {}
+    if (name && typeof name === "string" && name.trim()) updates.name = name.trim()
+    if (email && typeof email === "string" && email.trim()) updates.email = email.toLowerCase().trim()
+    if (phone !== undefined) updates.phone = typeof phone === "string" ? phone.trim() : ""
+
+    let newMetadata = null
+    const getMetadataObject = () => {
+      if (!newMetadata) {
+        newMetadata = { ...(lead.metadata || {}) }
+      }
+      return newMetadata
+    }
+
+    if (targetStatus !== undefined) {
+      updates.status = targetStatus
+      // Track status transition history if the status changed
+      if (targetStatus !== lead.status) {
+        const transitionRecord = {
+          fromStatus: lead.status,
+          toStatus: targetStatus,
+          transitionedAt: new Date(),
+          transitionedBy: req.user?.email || req.user?.name || "User",
+        }
+        const existingHistory = Array.isArray(lead.metadata?.statusHistory) ? lead.metadata.statusHistory : []
+        const meta = getMetadataObject()
+        meta.statusHistory = [...existingHistory, transitionRecord]
+      }
+    }
+    if (source !== undefined) updates.source = typeof source === "string" && source.trim() ? source.trim() : "Website"
+    if (assignedTo !== undefined) updates.assignedTo = typeof assignedTo === "string" && assignedTo.trim() ? assignedTo.trim() : "Unassigned"
+    if (message !== undefined) updates.message = typeof message === "string" ? message.trim() : ""
+    if (req.body.company !== undefined) {
+      const meta = getMetadataObject()
+      meta.company = typeof req.body.company === "string" ? req.body.company.trim() : ""
+    }
+    if (req.body.metadata !== undefined && typeof req.body.metadata === "object" && req.body.metadata !== null) {
+      const meta = getMetadataObject()
+      Object.assign(meta, req.body.metadata)
+    }
+
+    if (newMetadata) {
+      updates.metadata = newMetadata
+    }
+
     const updatedLead = await Lead.findOneAndUpdate(
       query,
-      {
-        ...(name && typeof name === "string" && { name: name.trim() }),
-        ...(email && typeof email === "string" && { email: email.toLowerCase().trim() }),
-        ...(status && { status }),
-      },
+      updates,
       { new: true, runValidators: true },
     )
 
