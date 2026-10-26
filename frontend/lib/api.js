@@ -232,10 +232,158 @@ class ApiClient {
     })
   }
 
-  async sendLeadFeedTest() {
-    return this.request("/integrations/settings/website/test", {
-      method: "POST",
+  // --- Staff & Team Management Endpoints (Phase 4) ---
+  async getStaff(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
     })
+    const queryString = searchParams.toString()
+    return this.request(`/staff${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async createStaff(payload) {
+    return this.request("/staff", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getStaffById(id) {
+    return this.request(`/staff/${id}`)
+  }
+
+  async updateStaff(id, payload) {
+    return this.request(`/staff/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async toggleStaffStatus(id) {
+    return this.request(`/staff/${id}/deactivate`, {
+      method: "PATCH",
+    })
+  }
+
+  async resetStaffPassword(id, payload = {}) {
+    return this.request(`/staff/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getTeams() {
+    return this.request("/teams")
+  }
+
+  async createTeam(payload) {
+    return this.request("/teams", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async updateTeam(id, payload) {
+    return this.request(`/teams/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async deleteTeam(id) {
+    return this.request(`/teams/${id}`, {
+      method: "DELETE",
+    })
+  }
+
+  // --- Roles & Scoped Permissions Endpoints (Phase 5: RBAC v2) ---
+  async getRoles() {
+    return this.request("/roles")
+  }
+
+  async getAvailableRolePermissions() {
+    return this.request("/roles/permissions/available")
+  }
+
+  async getRoleById(id) {
+    return this.request(`/roles/${id}`)
+  }
+
+  async createRole(payload) {
+    return this.request("/roles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async updateRole(id, payload) {
+    return this.request(`/roles/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async deleteRole(id) {
+    return this.request(`/roles/${id}`, {
+      method: "DELETE",
+    })
+  }
+
+  // --- Lead Assignment & Rules Endpoints (Phase 7: Lead Ownership & Assignment) ---
+  async assignLead(leadId, payload) {
+    return this.request(`/leads/${leadId}/assign`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async bulkAssignLeads(payload) {
+    return this.request("/leads/bulk-assign", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getUnassignedPoolStats() {
+    return this.request("/leads/pool/stats")
+  }
+
+  async getAssignmentRules() {
+    return this.request("/assignment-rules")
+  }
+
+  async createAssignmentRule(payload) {
+    return this.request("/assignment-rules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async updateAssignmentRule(id, payload) {
+    return this.request(`/assignment-rules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async deleteAssignmentRule(id) {
+    return this.request(`/assignment-rules/${id}`, {
+      method: "DELETE",
+    })
+  }
+
+  async reorderAssignmentRules(ruleIds) {
+    return this.request("/assignment-rules/reorder", {
+      method: "POST",
+      body: JSON.stringify({ ruleIds }),
+    })
+  }
+
+  async getStaffOpenLeads(staffId) {
+    return this.request(`/staff/${staffId}/open-leads`)
   }
 }
 

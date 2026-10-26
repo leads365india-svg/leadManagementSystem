@@ -12,7 +12,14 @@ const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
 const integrationRoutes = require("./routes/integrationRoutes")
 const followUpRoutes = require("./routes/followUpRoutes")
+const staffRoutes = require("./routes/staffRoutes")
+const teamRoutes = require("./routes/teamRoutes")
+const roleRoutes = require("./routes/roleRoutes")
+const assignmentRuleRoutes = require("./routes/assignmentRuleRoutes")
+const auditRoutes = require("./routes/auditRoutes")
+const queueMonitorRoutes = require("./routes/queueMonitorRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
+const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
 
 // Load environment variables
@@ -23,9 +30,7 @@ try {
   getJwtSecret()
 } catch (configErr) {
   console.error("❌ Fatal Configuration Error:", configErr.message)
-  if (process.env.NODE_ENV === "production") {
-    process.exit(1)
-  }
+  process.exit(1)
 }
 
 const app = express()
@@ -38,10 +43,20 @@ const configuredFrontendUrls = (process.env.FRONTEND_URL || "")
   .map((url) => url.trim())
   .filter(Boolean)
 
-const allowedOrigins = [
-  ...configuredFrontendUrls,
+const defaultLocalOrigins = [
   "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
   "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  "http://127.0.0.1:3002",
+]
+
+const allowedOrigins = [
+  ...new Set([
+    ...configuredFrontendUrls,
+    ...defaultLocalOrigins,
+  ]),
 ]
 
 // Specific CORS for public integration webhook (allows external client websites without credentials)
@@ -61,12 +76,24 @@ const webhookCors = cors({
 app.use("/api/integrations/leads/website", webhookCors)
 app.options("/api/integrations/leads/website", webhookCors)
 
+const isDevelopment = process.env.NODE_ENV !== "production"
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true
+  if (allowedOrigins.includes(origin)) return true
+  // In development, dynamically allow any localhost / 127.0.0.1 port
+  if (isDevelopment && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return true
+  }
+  return false
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, curl, or server-to-server proxies)
     if (!origin) return callback(null, true)
 
-    if (allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       return callback(null, true)
     }
 
@@ -116,16 +143,9 @@ app.use(
   })
 )
 
-// Global rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
-  message: {
-    success: false,
-    error: "Too many requests from this IP, please try again later",
-  },
-})
-app.use(limiter)
+// Rate limiting middleware
+const { dashboardLimiter, integrationLimiter } = require("./middleware/rateLimiters")
+app.use("/api", dashboardLimiter)
 
 // Body and Cookie parsing middleware (hardened 2mb request-size limit)
 app.use(express.json({ limit: "2mb" }))
@@ -155,14 +175,20 @@ app.get("/health", (_req, res) => {
 
 // Ensure DB is ready for API calls
 app.use("/api", checkDbConnection)
+app.use("/api", tenantContextMiddleware)
 
 // API routes
 app.use("/api/auth", authRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/leads", leadRoutes)
 app.use("/api/follow-ups", followUpRoutes)
-app.use("/api/followups", followUpRoutes)
-app.use("/api/integrations", integrationRoutes)
+app.use("/api/staff", staffRoutes)
+app.use("/api/teams", teamRoutes)
+app.use("/api/roles", roleRoutes)
+app.use("/api/assignment-rules", assignmentRuleRoutes)
+app.use("/api/audit-logs", auditRoutes)
+app.use("/api/admin/queues", queueMonitorRoutes)
+app.use("/api/integrations", integrationLimiter, integrationRoutes)
 
 // Error handling middleware
 app.use(notFound)
@@ -229,6 +255,9 @@ const startServer = async () => {
     console.log("⏳ Connecting to database before starting HTTP server...")
     await connectDB()
     console.log("✅ Database connected successfully.")
+
+    const { registerAllHandlers } = require("./jobs")
+    registerAllHandlers()
 
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server is running on port ${PORT}`)

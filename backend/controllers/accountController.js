@@ -160,19 +160,36 @@ const getAccounts = async (req, res) => {
 // GET /api/super-admin/stats - Summary metrics for Super Admin Dashboard
 const getAccountStats = async (_req, res) => {
   try {
-    const [totalAccounts, activeAccounts, suspendedAccounts, totalAdmins] = await Promise.all([
-      Account.countDocuments(),
-      Account.countDocuments({ status: "active" }),
-      Account.countDocuments({ status: "suspended" }),
+    const [accountStats, totalAdmins] = await Promise.all([
+      Account.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalAccounts: { $sum: 1 },
+            activeAccounts: {
+              $sum: { $cond: [{ $eq: ["$status", "active"] }, 1, 0] },
+            },
+            suspendedAccounts: {
+              $sum: { $cond: [{ $eq: ["$status", "suspended"] }, 1, 0] },
+            },
+          },
+        },
+      ]),
       User.countDocuments({ role: "account_admin" }),
     ])
+
+    const stats = accountStats[0] || {
+      totalAccounts: 0,
+      activeAccounts: 0,
+      suspendedAccounts: 0,
+    }
 
     res.status(200).json({
       success: true,
       data: {
-        totalAccounts,
-        activeAccounts,
-        suspendedAccounts,
+        totalAccounts: stats.totalAccounts,
+        activeAccounts: stats.activeAccounts,
+        suspendedAccounts: stats.suspendedAccounts,
         totalAdmins,
       },
     })

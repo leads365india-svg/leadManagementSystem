@@ -6,6 +6,9 @@ const {
   updateLead,
   deleteLead,
   getLeadStats,
+  assignSingleLead,
+  bulkAssignLeads,
+  getUnassignedPoolStats,
 } = require("../controllers/leadController")
 const { authenticate, checkPermission } = require("../middleware/authMiddleware")
 
@@ -20,11 +23,21 @@ router.get("/", checkPermission("leads.view"), getLeads)
 // GET /api/leads/stats - View lead statistics
 router.get("/stats", checkPermission("dashboard.view"), getLeadStats)
 
+// GET /api/leads/pool/stats - View unassigned pool statistics
+router.get("/pool/stats", checkPermission("leads.view"), getUnassignedPoolStats)
+
+// POST /api/leads/assign & /api/leads/bulk-assign - Bulk assign leads
+router.post("/assign", checkPermission("leads.assign"), bulkAssignLeads)
+router.post("/bulk-assign", checkPermission("leads.assign"), bulkAssignLeads)
+
 // GET /api/leads/:id - View single lead by ID
 router.get("/:id", checkPermission("leads.view"), getLeadById)
 
 // POST /api/leads - Create new lead
 router.post("/", checkPermission("leads.create"), createLead)
+
+// PATCH /api/leads/:id/assign - Assign / reassign single lead
+router.patch("/:id/assign", checkPermission("leads.assign"), assignSingleLead)
 
 // PUT /api/leads/:id - Edit lead
 router.put("/:id", checkPermission("leads.edit"), updateLead)

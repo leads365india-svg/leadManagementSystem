@@ -3,6 +3,9 @@ const Lead = require("../models/Lead")
 const LeadFeedConfig = require("../models/LeadFeedConfig")
 const User = require("../models/User")
 const Account = require("../models/Account")
+const { runWithTenantContext } = require("../middleware/tenantContext")
+const leadService = require("../services/leadService")
+const audit = require("../services/auditService")
 
 // Helper: Generate secure API credential
 const generateIntegrationKey = () => {
@@ -323,6 +326,21 @@ const updateWebsiteConfig = async (req, res) => {
 
     await config.save()
 
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.INTEGRATION_CONFIG_UPDATE,
+      entity: "integration",
+      entityId: config._id,
+      summary: "Updated website lead feed integration configuration",
+      details: {
+        enabled: config.websiteSource.enabled,
+        assignedStaffName: config.websiteSource.assignedStaffName,
+        duplicateHandling: config.websiteSource.duplicateHandling,
+      },
+      req,
+    })
+
     res.status(200).json({
       success: true,
       message: "Lead feed settings saved successfully",
@@ -373,6 +391,20 @@ const rotateApiKey = async (req, res) => {
     config.websiteSource.apiKeyLastRotatedAt = new Date()
 
     await config.save()
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.INTEGRATION_KEY_ROTATE,
+      entity: "integration",
+      entityId: config._id,
+      summary: `Rotated website lead feed API key (${maskedKey})`,
+      details: {
+        maskedKey,
+        apiKeyLastRotatedAt: config.websiteSource.apiKeyLastRotatedAt,
+      },
+      req,
+    })
 
     res.status(200).json({
       success: true,
@@ -466,39 +498,45 @@ const sendTestLead = async (req, res) => {
  * Public Webhook: Ingest lead from website forms/integrations
  */
 const receiveWebsiteLead = async (req, res) => {
-  try {
-    // 1. Authenticate via API key in header (x-api-key or Authorization Bearer)
-    const rawApiKey =
-      req.headers["x-api-key"] ||
-      (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")
-        ? req.headers.authorization.slice(7).trim()
-        : null)
+  // 1. Authenticate via API key in header (x-api-key or Authorization Bearer)
+  const rawApiKey =
+    req.headers["x-api-key"] ||
+    (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7).trim()
+      : null)
 
-    if (!rawApiKey) {
-      return res.status(401).json({
-        success: false,
-        error: "Missing API key. Provide credential via 'x-api-key' header or 'Authorization: Bearer <key>'",
-      })
-    }
-
-    // 2. Hash incoming credential for secure constant-time lookup
-    const incomingKeyHash = crypto.createHash("sha256").update(rawApiKey.trim()).digest("hex")
-
-    const config = await LeadFeedConfig.findOne({
-      "websiteSource.apiKeyHash": incomingKeyHash,
+  if (!rawApiKey) {
+    return res.status(401).json({
+      success: false,
+      error: "Missing API key. Provide credential via 'x-api-key' header or 'Authorization: Bearer <key>'",
     })
+  }
 
-    if (!config) {
-      return res.status(401).json({
-        success: false,
-        error: "Unauthorized: Invalid or revoked integration API key",
-      })
-    }
+  // 2. Hash incoming credential for secure constant-time lookup
+  const incomingKeyHash = crypto.createHash("sha256").update(rawApiKey.trim()).digest("hex")
 
-    // Derived strictly from authenticated credential
-    const tenantId = config.tenantId
+  let config
+  try {
+    config = await LeadFeedConfig.findOne({
+      "websiteSource.apiKeyHash": incomingKeyHash,
+    }).setOptions({ skipTenantFilter: true })
+  } catch (err) {
+    return res.status(500).json({ success: false, error: "Database error" })
+  }
 
-    // Verify tenant account is active
+  if (!config) {
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorized: Invalid or revoked integration API key",
+    })
+  }
+
+  // Derived strictly from authenticated credential
+  const tenantId = config.tenantId
+
+  return await runWithTenantContext({ tenantId, isSuperAdmin: false }, async () => {
+    try {
+      // Verify tenant account is active
     const account = await Account.findOne({ accountId: tenantId }).lean()
     if (account && account.status === "suspended") {
       return res.status(403).json({
@@ -733,66 +771,8 @@ const receiveWebsiteLead = async (req, res) => {
       }
     }
 
-    // 9. Lead Validation & Duplicate Handling (Tenant Scoped)
+    // 9. Lead Validation & Duplicate Handling (Tenant Scoped) using Shared Lead Service
     const duplicateHandling = config.websiteSource.duplicateHandling || "reject"
-
-    // Check for existing lead strictly in the caller's tenant
-    const orConditions = []
-    if (rawEmail) orConditions.push({ email: rawEmail })
-    if (normalizedPhone) orConditions.push({ phone: normalizedPhone })
-
-    let existingLead = null
-    if (orConditions.length > 0) {
-      existingLead = await Lead.findOne({
-        tenantId,
-        $or: orConditions,
-      })
-    }
-
-    if (existingLead) {
-      if (duplicateHandling === "reject") {
-        config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-        config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-        config.websiteSource.stats.lastReceivedAt = new Date()
-        config.websiteSource.stats.lastErrorAt = new Date()
-        config.websiteSource.stats.lastErrorMessage = "Duplicate lead rejected"
-        await config.save()
-
-        return res.status(409).json({
-          success: false,
-          duplicate: true,
-          error: "Duplicate lead detected: A lead with this email or phone number already exists in this account.",
-        })
-      } else if (duplicateHandling === "update") {
-        // Update existing lead without overwriting assignment
-        if (message) {
-          existingLead.message = existingLead.message
-            ? `${existingLead.message}\n[New Note ${new Date().toLocaleDateString()}]: ${message}`
-            : message
-        }
-        if (landingPage) existingLead.landingPage = landingPage
-        if (formId) existingLead.formId = formId
-        if (isVerified) {
-          existingLead.isEmailVerified = true
-          existingLead.verificationStatus = verificationStatus
-        }
-        await existingLead.save()
-
-        config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-        config.websiteSource.stats.totalSuccess = (config.websiteSource.stats.totalSuccess || 0) + 1
-        config.websiteSource.stats.lastReceivedAt = new Date()
-        config.websiteSource.stats.lastSuccessAt = new Date()
-        await config.save()
-
-        return res.status(200).json({
-          success: true,
-          message: "Existing lead record updated successfully",
-          leadId: existingLead._id.toString(),
-          updated: true,
-        })
-      }
-      // If duplicateHandling === "allow", proceed to create a new lead
-    }
 
     // 10. Handle Test Leads
     if (isTest) {
@@ -815,36 +795,111 @@ const receiveWebsiteLead = async (req, res) => {
       })
     }
 
-    // 11. Create and Persist Lead
-    const newLead = new Lead({
-      name,
-      email: rawEmail,
-      phone: normalizedPhone,
-      status: leadStatus,
+    const leadMetadata = {
+      receivedVia: "website_webhook",
+      submittedAt: new Date(),
+      ipAddress: req.ip || req.headers["x-forwarded-for"] || "unknown",
+      idempotencyKey: idempotencyKey || null,
+      verificationTokenHash: verificationToken
+        ? crypto.createHash("sha256").update(verificationToken.trim()).digest("hex")
+        : null,
+    }
+
+    // Offload heavy lead creation to background queue if async requested
+    if (req.headers["x-queue-async"] === "true" || req.query.async === "true") {
+      const queue = require("../services/queueService")
+      const queued = await queue.addJob({
+        name: "webhook.process",
+        tenantId,
+        idempotencyKey: idempotencyKey || null,
+        payload: {
+          tenantId,
+          source: "Website",
+          payload: {
+            name,
+            email: rawEmail,
+            phone: rawPhone,
+            status: leadStatus,
+            assignedTo,
+            assignedStaffId,
+            message,
+            formId,
+            landingPage,
+            metadata: leadMetadata,
+          },
+        },
+      })
+      return res.status(202).json({
+        success: true,
+        queued: true,
+        jobId: queued.job.jobId,
+        message: "Webhook accepted and queued for background processing",
+      })
+    }
+
+    const serviceResult = await leadService.createOrMergeLead({
       tenantId,
       source: "Website",
-      assignedTo,
-      assignedStaffId,
-      message,
-      formId,
-      landingPage,
-      isEmailVerified: isVerified,
-      verificationStatus,
-      isTest: false,
-      metadata: {
-        receivedVia: "website_webhook",
-        submittedAt: new Date(),
-        ipAddress: req.ip || req.headers["x-forwarded-for"] || "unknown",
-        idempotencyKey: idempotencyKey || null,
-        verificationTokenHash: verificationToken
-          ? crypto.createHash("sha256").update(verificationToken.trim()).digest("hex")
-          : null,
+      payload: {
+        name,
+        email: rawEmail,
+        phone: rawPhone,
+        status: leadStatus,
+        assignedTo,
+        assignedStaffId,
+        ownerId: (assignedStaffId && assignedStaffId !== "unassigned") ? assignedStaffId : null,
+        message,
+        formId,
+        landingPage,
+        isEmailVerified: isVerified,
+        verificationStatus,
+        isTest: false,
+        metadata: leadMetadata,
+        utm_source: body.utm_source,
+        utm_medium: body.utm_medium,
+        utm_campaign: body.utm_campaign,
+        utm_term: body.utm_term,
+        utm_content: body.utm_content,
+        gclid: body.gclid,
+        fbclid: body.fbclid,
+        referrer: body.referrer || req.headers.referer,
+      },
+      options: {
+        duplicateHandling,
       },
     })
 
-    const savedLead = await newLead.save()
+    if (serviceResult.action === "duplicate_rejected") {
+      config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
+      config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
+      config.websiteSource.stats.lastReceivedAt = new Date()
+      config.websiteSource.stats.lastErrorAt = new Date()
+      config.websiteSource.stats.lastErrorMessage = "Duplicate lead rejected"
+      await config.save()
 
-    // Update stats
+      return res.status(409).json({
+        success: false,
+        duplicate: true,
+        error: "Duplicate lead detected: A lead with this email or phone number already exists in this account.",
+      })
+    }
+
+    if (serviceResult.action === "merged") {
+      config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
+      config.websiteSource.stats.totalSuccess = (config.websiteSource.stats.totalSuccess || 0) + 1
+      config.websiteSource.stats.lastReceivedAt = new Date()
+      config.websiteSource.stats.lastSuccessAt = new Date()
+      await config.save()
+
+      return res.status(200).json({
+        success: true,
+        message: "Existing lead record updated successfully",
+        leadId: serviceResult.lead._id.toString(),
+        updated: true,
+      })
+    }
+
+    // Created new lead
     config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
     config.websiteSource.stats.totalSuccess = (config.websiteSource.stats.totalSuccess || 0) + 1
     config.websiteSource.stats.lastReceivedAt = new Date()
@@ -855,13 +910,13 @@ const receiveWebsiteLead = async (req, res) => {
       success: true,
       message: "Lead received and created successfully",
       data: {
-        id: savedLead._id.toString(),
-        name: savedLead.name,
-        email: savedLead.email,
-        phone: savedLead.phone,
-        status: savedLead.status,
-        assignedTo: savedLead.assignedTo,
-        createdAt: savedLead.createdAt,
+        id: serviceResult.lead._id.toString(),
+        name: serviceResult.lead.name,
+        email: serviceResult.lead.email,
+        phone: serviceResult.lead.phone,
+        status: serviceResult.lead.status,
+        assignedTo: serviceResult.lead.assignedTo,
+        createdAt: serviceResult.lead.createdAt,
       },
     })
   } catch (error) {
@@ -896,6 +951,7 @@ const receiveWebsiteLead = async (req, res) => {
       error: "Internal server error while processing lead ingestion",
     })
   }
+})
 }
 
 module.exports = {

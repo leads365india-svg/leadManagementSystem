@@ -17,7 +17,7 @@ export default function CrmPlaceholderPage({
         <nav className="flex items-center space-x-2 text-xs text-slate-500">
           <Link href="/" className="hover:text-indigo-600 transition-colors flex items-center space-x-1">
             <LayoutDashboard className="w-3.5 h-3.5" />
-            <span>Dashboard</span>
+            <span>Home</span>
           </Link>
           <ChevronRight className="w-3 h-3 text-slate-400" />
           <span className="text-slate-600 font-medium">{category}</span>

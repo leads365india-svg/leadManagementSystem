@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { apiClient } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import { toast } from "react-hot-toast"
 import {
   LogOut,
@@ -14,8 +14,7 @@ import {
 export default function SuperAdminLayout({ children }) {
   const pathname = usePathname()
   const router = useRouter()
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const { user, status, loading, logout } = useAuth()
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const profileMenuRef = useRef(null)
@@ -36,57 +35,28 @@ export default function SuperAdminLayout({ children }) {
   }, [])
 
   useEffect(() => {
-    if (isLoginPage) {
-      setLoading(false)
+    if (isLoginPage) return
+
+    if (status === "unauthenticated") {
+      router.replace("/super-admin/login")
       return
     }
 
-    let isMounted = true
-
-    const verifyAuth = async () => {
-      try {
-        const response = await apiClient.getMe()
-        if (response.success && response.data?.user) {
-          if (response.data.user.role !== "super_admin") {
-            router.replace("/super-admin/login?error=unauthorized")
-            return
-          }
-          if (isMounted) {
-            setUser(response.data.user)
-          }
-        } else {
-          router.replace("/super-admin/login")
-        }
-      } catch (error) {
-        router.replace("/super-admin/login")
-      } finally {
-        if (isMounted) {
-          setLoading(false)
-        }
-      }
+    if (status === "authenticated" && user?.role !== "super_admin") {
+      router.replace("/super-admin/login?error=unauthorized")
+      return
     }
-
-    verifyAuth()
-
-    return () => {
-      isMounted = false
-    }
-  }, [pathname, isLoginPage, router])
+  }, [isLoginPage, status, user, router])
 
   const handleLogout = async () => {
     try {
       setLoggingOut(true)
-      const toastId = toast.loading("Signing out...")
-      await apiClient.logout()
-      toast.dismiss(toastId)
-      toast.success("Signed out of Super Admin Console")
+      await logout("/super-admin/login")
     } catch (error) {
       console.error("Logout error:", error)
     } finally {
-      setUser(null)
       setLoggingOut(false)
       setProfileDropdownOpen(false)
-      router.replace("/super-admin/login")
     }
   }
 
@@ -96,7 +66,7 @@ export default function SuperAdminLayout({ children }) {
   }
 
   // Loading state while checking authentication
-  if (loading) {
+  if (loading || status === "idle") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center space-y-4">
@@ -129,6 +99,30 @@ export default function SuperAdminLayout({ children }) {
                 </div>
               </Link>
             </div>
+
+            {/* Center: Designated Navigation Tabs */}
+            <nav className="flex items-center space-x-1 sm:space-x-2">
+              <Link
+                href="/super-admin"
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  pathname === "/super-admin"
+                    ? "bg-indigo-50 text-indigo-700 font-bold"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                }`}
+              >
+                Dashboard Overview
+              </Link>
+              <Link
+                href="/super-admin/roles-permissions"
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  pathname === "/super-admin/roles-permissions"
+                    ? "bg-indigo-50 text-indigo-700 font-bold"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                }`}
+              >
+                Roles & Permissions
+              </Link>
+            </nav>
 
             {/* Right: Avatar / Profile Dropdown Menu */}
             <div className="flex items-center flex-shrink-0 space-x-3">

@@ -9,10 +9,10 @@ export default function Breadcrumb({ items }) {
   // Generate breadcrumbs from pathname if items not provided
   const generateBreadcrumbs = () => {
     const pathSegments = pathname.split("/").filter(Boolean)
-    const breadcrumbs = [{ label: "Dashboard", href: "/" }]
+    const breadcrumbs = [{ label: "Home", href: "/" }]
 
     if (pathSegments.length === 0) {
-      return [{ label: "Dashboard" }]
+      return [{ label: "Home" }]
     }
 
     let currentPath = ""
@@ -45,7 +45,10 @@ export default function Breadcrumb({ items }) {
     return breadcrumbs
   }
 
-  const breadcrumbItems = items || generateBreadcrumbs()
+  const rawItems = items || generateBreadcrumbs()
+  const breadcrumbItems = rawItems.map((item) =>
+    item.label === "Dashboard" ? { ...item, label: "Home" } : item
+  )
 
   return (
     <nav className="bg-gray-50 border-b border-gray-200">

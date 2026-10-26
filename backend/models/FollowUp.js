@@ -1,4 +1,5 @@
 const mongoose = require("mongoose")
+const tenantIsolationPlugin = require("../plugins/tenantIsolationPlugin")
 
 const followUpSchema = new mongoose.Schema(
   {
@@ -100,5 +101,7 @@ const followUpSchema = new mongoose.Schema(
 followUpSchema.index({ tenantId: 1, scheduledAt: 1 })
 followUpSchema.index({ tenantId: 1, status: 1, scheduledAt: 1 })
 followUpSchema.index({ tenantId: 1, leadId: 1 })
+
+followUpSchema.plugin(tenantIsolationPlugin)
 
 module.exports = mongoose.model("FollowUp", followUpSchema)

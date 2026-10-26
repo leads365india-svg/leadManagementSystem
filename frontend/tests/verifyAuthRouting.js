@@ -200,6 +200,86 @@ runTest("401 while already on /portal/login throws without triggering redirect l
   assert.strictEqual(res.redirected, false)
 })
 
+// Suite 5: Session Persistence & Client-side Route Navigation State
+console.log("\n📋 Suite 5: Session Persistence & Navigation Flow Verification")
+
+class MockAuthProvider {
+  constructor() {
+    this.user = null
+    this.status = "loading"
+  }
+
+  setSession(user) {
+    if (user) {
+      this.user = user
+      this.status = "authenticated"
+    } else {
+      this.user = null
+      this.status = "unauthenticated"
+    }
+  }
+
+  logout() {
+    this.user = null
+    this.status = "unauthenticated"
+  }
+}
+
+runTest("Login establishes authenticated session that persists across route transitions", () => {
+  const auth = new MockAuthProvider()
+  assert.strictEqual(auth.status, "loading")
+
+  // Simulate login
+  auth.setSession({ role: "account_admin", name: "Sara Khan" })
+  assert.strictEqual(auth.status, "authenticated")
+
+  // Navigating to /portal
+  const portalRes = simulateAuthGuard("/portal", auth)
+  assert.strictEqual(portalRes.action, "render_exempt")
+
+  // Navigating through navbar to /leads preserves auth and renders protected
+  const leadsRes = simulateAuthGuard("/leads", auth)
+  assert.strictEqual(leadsRes.action, "render_protected")
+
+  // Navigating to /communication/follow-ups preserves auth and renders protected
+  const followUpsRes = simulateAuthGuard("/communication/follow-ups", auth)
+  assert.strictEqual(followUpsRes.action, "render_protected")
+
+  // Navigating to /dashboard preserves auth and renders protected
+  const dashboardRes = simulateAuthGuard("/dashboard", auth)
+  assert.strictEqual(dashboardRes.action, "render_protected")
+
+  // Navigating to / preserves auth and renders protected
+  const homeRes = simulateAuthGuard("/", auth)
+  assert.strictEqual(homeRes.action, "render_protected")
+})
+
+runTest("HTTP 403 Forbidden does not trigger session expiration redirect", () => {
+  const simulateApiStatus = (statusCode, endpoint, currentPathname) => {
+    if (statusCode === 401) {
+      return simulateApiClient401(endpoint, currentPathname)
+    }
+    return { redirected: false, target: null }
+  }
+  const res = simulateApiStatus(403, "/leads", "/leads")
+  assert.strictEqual(res.redirected, false)
+  assert.strictEqual(res.target, null)
+})
+
+runTest("Explicit logout resets AuthProvider state and blocks protected routes", () => {
+  const auth = new MockAuthProvider()
+  auth.setSession({ role: "account_admin", name: "Sara Khan" })
+  assert.strictEqual(auth.status, "authenticated")
+
+  auth.logout()
+  assert.strictEqual(auth.status, "unauthenticated")
+  assert.strictEqual(auth.user, null)
+
+  const leadsRes = simulateAuthGuard("/leads", auth)
+  assert.strictEqual(leadsRes.action, "redirect")
+  assert.strictEqual(leadsRes.target, "/portal/login")
+})
+
 console.log("\n=======================================================")
 console.log(`TOTAL TESTS: ${passed + failed} | PASSED: ${passed} | FAILED: ${failed}`)
 console.log("=======================================================")

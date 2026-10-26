@@ -1,4 +1,5 @@
 const mongoose = require("mongoose")
+const tenantIsolationPlugin = require("../plugins/tenantIsolationPlugin")
 
 const leadFeedConfigSchema = new mongoose.Schema(
   {
@@ -125,5 +126,7 @@ const leadFeedConfigSchema = new mongoose.Schema(
     },
   },
 )
+
+leadFeedConfigSchema.plugin(tenantIsolationPlugin)
 
 module.exports = mongoose.model("LeadFeedConfig", leadFeedConfigSchema)

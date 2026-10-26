@@ -584,7 +584,7 @@ function FollowUpsContent() {
     <>
       <Breadcrumb
         items={[
-          { label: "Dashboard", href: "/" },
+          { label: "Home", href: "/" },
           { label: "Communication", href: "/communication/call-reports" },
           { label: "Follow Ups" },
         ]}

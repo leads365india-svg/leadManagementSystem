@@ -1,203 +1,116 @@
-# 🚀 LeadFlow - Lead Management System
+# 🚀 Leads-365 — Multi-Tenant Lead Management & CRM Platform
 
-A modern, full-stack lead management application built with Next.js, TypeScript, Express, and MongoDB. Streamline your sales process with comprehensive lead tracking, filtering, and analytics.
+A robust, multi-tenant lead management CRM engineered with Next.js 15, React 19, Node.js, Express, and MongoDB Mongoose. Built for sales agencies and lead-driven enterprises with strict multi-tenant isolation, role-based access control (RBAC), and automated communication workflows.
 
-## ✨ Features
+Repository: `teammedical365-coder/Leads-365`
 
-### 🎯 Core Functionality
-- **Lead Management**: Create, view, update, and delete leads
-- **Advanced Filtering**: Search by name/email, filter by status
-- **Smart Sorting**: Sort by name, email, or creation date
-- **Pagination**: Efficient data loading with customizable page sizes
-- **Real-time Search**: Debounced search with instant feedback
+---
 
-### 📊 Analytics & Insights
-- **Dashboard Overview**: Key metrics and conversion rates
-- **Status Distribution**: Visual breakdown of lead pipeline
-- **Recent Activity**: Latest lead updates and changes
-- **Performance Tracking**: Monitor your sales funnel
+## ✨ System Architecture & Core Capabilities
 
-### 🎨 User Experience
-- **Responsive Design**: Works perfectly on desktop, tablet, and mobile
-- **Modern UI**: Clean, professional interface with Tailwind CSS
-- **Sticky Navigation**: Always-accessible header and breadcrumbs
-- **Loading States**: Smooth loading indicators and skeleton screens
-- **Error Handling**: Graceful error messages and retry options
+### 🏢 Multi-Tenant Agency Isolation
+- **Tenant Partitioning**: Strict tenant separation across all operational data (Leads, Follow-ups, Integrations, and future Calls/Recordings).
+- **White-Label Support**: Account-level branding, company names, contact information, and customized portal endpoints.
+- **Super Admin Governance**: Global administrative portal for agency provisioning, suspension management, and RBAC permission policy control.
 
-## 🛠️ Tech Stack
+### 👥 Role-Based Access Control (RBAC)
+- **Role Hierarchy**: Super Admin, Account Admin, Manager, and Sales Agent roles.
+- **Granular Permissions**: Module-level permission gates (`leads.view`, `leads.create`, `leads.edit`, `leads.delete`, `followups.view`, `followups.manage`, `integrations.manage`, etc.).
+- **In-Memory Permission Cache**: High-performance TTL caching (30–60s) preventing repetitive database queries on high-throughput requests.
 
-### Frontend
-- **Next.js 14** - React framework with App Router
-- **TypeScript** - Type-safe development
-- **Tailwind CSS** - Utility-first CSS framework
-- **Shadcn/ui** - Modern component library
-- **Lucide React** - Beautiful icons
+### 🎯 Lead Pipeline & Workflow Engine
+- **Lifecycle Pipeline**: Structured canonical status stages (`New`, `Engaged`, `Proposal Sent`, `Closed-Won`, `Closed-Lost`) with dropdown alias mapping.
+- **Audit Trajectory**: Automatic state transition history tracking timestamp, actor, and status transitions.
+- **Multi-criteria Filtering**: Full-text and keyword search, phone/email search, date range selectors, and pagination.
 
-### Backend
-- **Node.js** - JavaScript runtime
-- **Express.js** - Web application framework
-- **TypeScript** - Type-safe backend development
-- **MongoDB** - NoSQL database
-- **Mongoose** - MongoDB object modeling
+### 📅 Communication & Follow-ups Management
+- **Touchpoint Types**: Scheduled phone calls, email outreach, meeting demos, tasks, and touchpoints.
+- **Timeline Views**: Real-time filtering by status (`Upcoming`, `Due Today`, `Overdue`, `Completed`), priority, and touchpoint type.
+- **Outcome Tracking**: Outcome recording with timestamps, completion notes, and actor attribution.
 
-## 🚀 Quick Start
+### 🔌 Inbound Lead Feeds & Webhooks
+- **Website Ingestion Webhook**: High-throughput public webhook (`/api/integrations/leads/website`) supporting server-to-server snippets (PHP, Node.js, cURL).
+- **Cryptographic Security**: Per-tenant hashed API credentials (`lf_live_...`), HMAC-SHA256 verification tokens, and idempotency key duplicate deduplication.
+- **Domain Guardrails**: Blocked disposable email domains, strict phone normalization, and accepted form filters.
+
+---
+
+## 🛠️ Technology Stack
+
+- **Frontend**: Next.js 15 (App Router), React 19, JavaScript / JSX, Tailwind CSS, Radix UI, Lucide React.
+- **Backend**: Node.js, Express 4.18, Mongoose 8.0, MongoDB Atlas.
+- **Security**: Cookie-based JWT sessions, exact-origin CSRF validation, Helmet security headers, rate limiting (dashboard, auth, integration tiers), fail-closed secret enforcement.
+
+---
+
+## 🚦 Getting Started Locally
 
 ### Prerequisites
-- Node.js 18+ installed
-- MongoDB Atlas account (or local MongoDB)
-- Git
+- Node.js 18+ (Node.js 20+ recommended)
+- MongoDB Atlas cluster or local MongoDB instance
+- npm 9+
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/fedhako7/lead-management.git
-cd lead-management
-```
+### 1. Environment Configuration
 
-### 2. Setup Frontend
-```bash
-# Move to lead-management/frontend
-cd frontend
-# Install dependencies
-npm install
-
-# Create environment file
-cp .env
-
-# Add your environment variables
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
-```
-
-### 3. Setup Backend
-```bash
-# Move to lead-management/backend
-cd backend
-
-# Install dependencies
-npm install
-
-# Create environment file
-cp .env
-
-# Add your MongoDB connection string
-MONGODB_URI=your_mongodb_connection_string
+#### Backend (`backend/.env`):
+```env
 PORT=5000
 NODE_ENV=development
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/leads_management?retryWrites=true&w=majority
+JWT_SECRET=your-minimum-32-character-secure-jwt-secret-here
 FRONTEND_URL=http://localhost:3000
 ```
 
-### 4. Start Development Servers
-
-**Terminal 1 - Backend:**
-```bash
-# Move to lead-management/backend
-
-cd backend
-npm run dev
-```
-
-**Terminal 2 - Frontend:**
-```bash
-# Move to lead-management/frontend
-
-npm run dev
-```
-
-### 5. Access the Application
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:5000
-- **Health Check**: http://localhost:5000/health
-
-## 📁 Project Structure
-
-```
-lead-management/
-├── app/                    # Next.js app directory
-│   ├── leads/             # Lead management pages
-│   ├── globals.css        # Global styles
-│   ├── layout.tsx         # Root layout
-│   └── page.tsx           # Homepage
-├── components/            # Reusable components
-│   ├── ui/               # Shadcn/ui components
-│   ├── header.tsx        # Navigation header
-│   ├── footer.tsx        # Site footer
-│   └── breadcrumb.tsx    # Breadcrumb navigation
-├── lib/                  # Utility libraries
-│   ├── api.ts           # API client
-│   └── utils.ts         # Helper functions
-├── types/               # TypeScript type definitions
-├── backend/            # Express.js backend
-│   ├── src/
-│   │   ├── controllers/ # Route controllers
-│   │   ├── models/     # Mongoose models
-│   │   ├── routes/     # API routes
-│   │   ├── middleware/ # Custom middleware
-│   │   ├── types/      # Backend types
-│   │   └── db/         # Database connection
-│   ├── package.json
-│   └── tsconfig.json
-└── README.md
-```
-
-## 🔧 Environment Variables
-
-### Frontend (`.env.local`)
+#### Frontend (`frontend/.env.local`):
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:5000/api
 ```
 
-### Backend (`backend/.env`)
-```env
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database
-PORT=5000
-NODE_ENV=development
-FRONTEND_URL=http://localhost:3000
+### 2. Install Dependencies
+
+```bash
+# Backend
+cd backend
+npm install
+
+# Frontend
+cd ../frontend
+npm install
 ```
 
-## 📊 API Endpoints
+### 3. Run Development Servers
 
-### Leads
-- `POST /api/leads` - Create new lead
-- `GET /api/leads` - Get all leads (with pagination, search, filter)
+```bash
+# Start backend (Port 5000)
+cd backend
+npm start
 
-### Query Parameters
+# Start frontend (Port 3000)
+cd ../frontend
+npm run dev
 ```
-GET /api/leads?page=1&limit=10&search=john&status=New&sortBy=createdAt&sortOrder=desc
+
+### 4. Running Verification Test Suites
+
+```bash
+cd backend
+
+# Security & Phase 1 verification
+node tests/verifyPhase1Security.js
+
+# All Leads management verification
+node tests/verifyAllLeadsFeature.js
+
+# Pipeline workflow verification
+node tests/verifyPhase2Pipeline.js
+
+# Follow-ups management verification
+node tests/verifyPhase3FollowUps.js
 ```
 
-## 🎨 UI Components
+---
 
-### Pages
-- **Dashboard** - Overview with stats and recent activity
-- **Lead List** - Paginated table with filtering and search
-- **Add Lead** - Form to create new leads
+## 🗺️ Roadmap & Phase Execution
 
-### Components
-- **Header** - Sticky navigation with active states
-- **Footer** - Links and social media
-- **Breadcrumbs** - Navigation trail
-- **Search Bar** - Debounced search input
-- **Status Badges** - Color-coded lead status
-- **Pagination** - Navigate through lead pages
-
-## 🚀 Deployment
-
-### 🔹 Frontend (Vercel)  
-🌐 [Lead Management Frontend](https://lead-management-frontend-fedesas-projects.vercel.app/)
-
-### 🔹 Backend (Render)  
-🌐 [Lead Management Backend](https://lead-management-backend-at71.onrender.com/)
-
-
-### Database (MongoDB Atlas)
-1. Create cluster
-2. Setup database user
-3. Configure network access
-4. Get connection string
-
-## 👨‍💻 Author
-
-**Fedesa Yelmachew**
-- GitHub: [@fedhako7](https://github.com/fedhako7)
-- LinkedIn: [linkfedhako7](https://linkedin.com/in/linkfedhako7)
-- Twitter: [@nuyi_fi_siyi](https://twitter.com/nuyi_fi_siyi)
-- LeetCode: [fedhasayel](https://leetcode.com/u/fedhasayel/)
+Detailed engineering roadmap and phase-by-phase specifications are maintained in `LEADS365_NEXT_ROADMAP.md`.
+Live execution status is tracked in `leads365_roadmap_execution_status.md`.

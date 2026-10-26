@@ -9,6 +9,35 @@ const bootstrapSuperAdmin = async () => {
     // Check persistent bootstrap history in system configuration
     const bootstrapMarker = await SystemConfig.findOne({ key: "superadmin_bootstrap_completed" })
 
+    // Bootstrap default Account Admin permissions template if not present or missing audit.view
+    let permissionsConfig = await RolePermission.findOne({ targetRole: "account_admin" })
+    if (!permissionsConfig) {
+      await RolePermission.create({
+        targetRole: "account_admin",
+        permissions: DEFAULT_ACCOUNT_ADMIN_PERMISSIONS,
+        updatedBy: "system_bootstrap",
+      })
+      console.log("✅ Default Leads Account Admin permissions configured.")
+    } else {
+      let changed = false
+      for (const perm of DEFAULT_ACCOUNT_ADMIN_PERMISSIONS) {
+        if (!permissionsConfig.permissions.includes(perm)) {
+          permissionsConfig.permissions.push(perm)
+          changed = true
+        }
+      }
+      if (changed) {
+        await permissionsConfig.save()
+      }
+    }
+
+    // Ensure all existing system account_admin roles in the database possess audit.view
+    const Role = require("../models/Role")
+    await Role.updateMany(
+      { isSystem: true, slug: "account_admin" },
+      { $addToSet: { permissions: "audit.view" } },
+    ).setOptions({ skipTenantFilter: true })
+
     // If already bootstrapped in the past and not explicitly forced, do not recreate default credentials
     if (bootstrapMarker && !isForceReseed) {
       return
@@ -47,16 +76,7 @@ const bootstrapSuperAdmin = async () => {
       )
     }
 
-    // Bootstrap default Account Admin permissions template if not present
-    const permissionsConfig = await RolePermission.findOne({ targetRole: "account_admin" })
-    if (!permissionsConfig) {
-      await RolePermission.create({
-        targetRole: "account_admin",
-        permissions: DEFAULT_ACCOUNT_ADMIN_PERMISSIONS,
-        updatedBy: "system_bootstrap",
-      })
-      console.log("✅ Default Leads Account Admin permissions configured.")
-    }
+
   } catch (error) {
     console.error("⚠️ Error bootstrapping Super Admin account:", error)
   }

@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { toast } from "react-hot-toast"
 import {
@@ -32,31 +31,30 @@ import {
   Rss,
   MessageSquare,
   Shield,
+  History,
   PhoneOff,
   Search,
-  Settings,
   Maximize,
   Minimize,
   LogOut,
   ChevronDown,
   ChevronRight,
-  ChevronLeft,
   Menu,
   X,
   Plus,
 } from "lucide-react"
 
-// Complete Six-Category CRM Navigation Structure (26 child items)
+// Complete Six-Category CRM Navigation Structure (All 26 child items preserved)
 const NAV_CATEGORIES = [
   {
     id: "main",
-    label: "Dashboard",
+    label: "Home",
     icon: LayoutDashboard,
     href: "/",
     items: [
       {
         id: "main-dashboard",
-        label: "Dashboard",
+        label: "Home",
         href: "/",
         description: "Pipeline KPIs, metrics & lead velocity",
         icon: LayoutDashboard,
@@ -271,6 +269,20 @@ const NAV_CATEGORIES = [
         icon: Shield,
       },
       {
+        id: "settings-roles",
+        label: "Roles & Permissions",
+        href: "/settings/roles",
+        description: "Configure custom roles and granular permission scopes",
+        icon: Shield,
+      },
+      {
+        id: "settings-audit-log",
+        label: "Audit Log",
+        href: "/settings/audit-log",
+        description: "Inspect chronological trail of security & CRM actions",
+        icon: History,
+      },
+      {
         id: "settings-do-not-record",
         label: "Do-Not-Record",
         href: "/settings/do-not-record",
@@ -279,17 +291,6 @@ const NAV_CATEGORIES = [
       },
     ],
   },
-]
-
-// Dedicated Client CRM Settings List for Header Gear Popover
-const CLIENT_SETTINGS = [
-  { label: "Custom Fields", href: "/settings/custom-fields", icon: Sliders, desc: "Lead parameters & custom tags" },
-  { label: "Field Arrangement", href: "/settings/field-arrangement", icon: Layers, desc: "Form layout & field ordering" },
-  { label: "Report Builder", href: "/settings/report-builder", icon: FileSpreadsheet, desc: "Custom SQL & automated metrics" },
-  { label: "Lead Feeds", href: "/settings/lead-feeds", icon: Rss, desc: "Webhook endpoints & advertising APIs" },
-  { label: "Message Templates", href: "/settings/message-templates", icon: MessageSquare, desc: "SMS & Email follow-up macros" },
-  { label: "Staff & Permissions", href: "/settings/staff", icon: Shield, desc: "Team members & role access" },
-  { label: "Do-Not-Record List", href: "/settings/do-not-record", icon: PhoneOff, desc: "Compliance & restricted numbers" },
 ]
 
 export default function Header() {
@@ -301,7 +302,6 @@ export default function Header() {
   const [dropdownCoords, setDropdownCoords] = useState({ top: 0, left: 0 })
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [expandedMobileCategory, setExpandedMobileCategory] = useState(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -310,9 +310,8 @@ export default function Header() {
 
   const dropdownTimeoutRef = useRef(null)
   const navRef = useRef(null)
-  const navScrollRef = useRef(null)
   const categoryButtonRefs = useRef({})
-  const settingsRef = useRef(null)
+  const searchInputRef = useRef(null)
 
   // Redirect Super Admin if they access Client CRM
   useEffect(() => {
@@ -336,16 +335,16 @@ export default function Header() {
   useEffect(() => {
     setActiveDropdown(null)
     setMobileMenuOpen(false)
-    setSettingsOpen(false)
     setUserDropdownOpen(false)
   }, [pathname])
 
-  // Close menus on outside click or escape
+  // Close menus on outside click, handle Escape and keyboard shortcut (Ctrl/Cmd + K)
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (navRef.current && !navRef.current.contains(event.target)) {
+      const dropdownEl = document.getElementById("navbar-category-dropdown")
+      const isInsideDropdown = dropdownEl && dropdownEl.contains(event.target)
+      if (navRef.current && !navRef.current.contains(event.target) && !isInsideDropdown) {
         setActiveDropdown(null)
-        setSettingsOpen(false)
         setUserDropdownOpen(false)
       }
     }
@@ -353,9 +352,14 @@ export default function Header() {
     const handleKeyDown = (e) => {
       if (e.key === "Escape") {
         setActiveDropdown(null)
-        setSettingsOpen(false)
         setUserDropdownOpen(false)
         setMobileMenuOpen(false)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        if (searchInputRef.current) {
+          searchInputRef.current.focus()
+        }
       }
     }
 
@@ -367,18 +371,39 @@ export default function Header() {
     }
   }, [])
 
-  // Smooth scroll handler for compact navigation container
-  const scrollNav = (direction) => {
-    if (navScrollRef.current) {
-      const scrollAmount = direction === "left" ? -160 : 160
-      navScrollRef.current.scrollBy({ left: scrollAmount, behavior: "smooth" })
+  // Dynamic dropdown repositioning on scroll/resize
+  useEffect(() => {
+    const handleScrollOrResize = () => {
+      if (activeDropdown) {
+        const buttonEl = categoryButtonRefs.current[activeDropdown]
+        if (buttonEl) {
+          const rect = buttonEl.getBoundingClientRect()
+          const dropdownWidth = 288
+          let left = rect.left
+          if (left + dropdownWidth > window.innerWidth - 16) {
+            left = window.innerWidth - dropdownWidth - 16
+          }
+          if (left < 16) left = 16
+          setDropdownCoords({
+            top: Math.round(rect.bottom + 6),
+            left: Math.round(left),
+          })
+        }
+      }
     }
-  }
+    window.addEventListener("scroll", handleScrollOrResize, { passive: true })
+    window.addEventListener("resize", handleScrollOrResize, { passive: true })
+    return () => {
+      window.removeEventListener("scroll", handleScrollOrResize)
+      window.removeEventListener("resize", handleScrollOrResize)
+    }
+  }, [activeDropdown])
 
-  // Calculate safe fixed dropdown positioning to prevent clipping by overflow-x container
+  // Dropdown open/leave handlers with generous hover bridge
   const handleOpenDropdown = (categoryId) => {
     if (dropdownTimeoutRef.current) {
       clearTimeout(dropdownTimeoutRef.current)
+      dropdownTimeoutRef.current = null
     }
 
     const buttonEl = categoryButtonRefs.current[categoryId]
@@ -389,18 +414,30 @@ export default function Header() {
       if (left + dropdownWidth > window.innerWidth - 16) {
         left = window.innerWidth - dropdownWidth - 16
       }
+      if (left < 16) left = 16
       setDropdownCoords({
         top: Math.round(rect.bottom + 6),
-        left: Math.round(Math.max(12, left)),
+        left: Math.round(left),
       })
     }
     setActiveDropdown(categoryId)
+    setUserDropdownOpen(false)
   }
 
   const handleDropdownLeave = () => {
+    if (dropdownTimeoutRef.current) {
+      clearTimeout(dropdownTimeoutRef.current)
+    }
     dropdownTimeoutRef.current = setTimeout(() => {
       setActiveDropdown(null)
-    }, 150)
+    }, 220)
+  }
+
+  const handleDropdownEnter = () => {
+    if (dropdownTimeoutRef.current) {
+      clearTimeout(dropdownTimeoutRef.current)
+      dropdownTimeoutRef.current = null
+    }
   }
 
   const toggleFullscreen = () => {
@@ -454,7 +491,7 @@ export default function Header() {
     return pathname === href
   }
 
-  // Display user identity: actual logged-in Admin's details from session, no hardcoded strings
+  // Display user identity: actual authenticated user session details
   const userName = user?.name || user?.username || "Account Admin"
   const userEmail = user?.email || ""
   const userRole = user?.roleTitle || (user?.role === "account_admin" ? "Leads Account Admin" : "Account Admin")
@@ -482,21 +519,20 @@ export default function Header() {
   return (
     <header
       ref={navRef}
-      className="sticky top-0 z-50 bg-white border-b border-slate-200/90 shadow-2xs select-none"
+      className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-colors"
     >
-      {/* =========================================================================
-          ONE UNIFIED TOP HEADER ROW (64–72px height)
-          Contains Logo, Search, compact 3-4 scrollable Categories, and icon buttons
-      ========================================================================= */}
       <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6">
-        <div className="flex items-center justify-between h-16 sm:h-17 gap-2 lg:gap-4">
+        <div className="flex items-center justify-between h-16 gap-2 sm:gap-4 lg:gap-6">
           
-          {/* LEFT: Brand Logo & App Name (links to Client CRM dashboard) */}
-          <div className="flex items-center space-x-2 shrink-0">
+          {/* =========================================================================
+              LEFT SECTION: Brand Logo + Spacious, Left-positioned Search Bar
+          ========================================================================= */}
+          <div className="flex items-center space-x-3 sm:space-x-4 lg:space-x-5 min-w-0">
+            {/* Brand Logo & Name */}
             <Link
               href="/"
-              className="flex items-center space-x-2.5 group"
-              title="LeadFlow CRM Dashboard"
+              className="flex items-center space-x-2.5 group shrink-0"
+              title="LeadFlow CRM Home"
             >
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-indigo-100 group-hover:scale-105 transition-all duration-200">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -517,182 +553,111 @@ export default function Header() {
                 </span>
               </div>
             </Link>
-          </div>
 
-          {/* CENTER: Compact Search Bar + Compact 3-4 Categories Navbar with Horizontal Overflow */}
-          <div className="flex items-center space-x-2 lg:space-x-3 flex-1 min-w-0 justify-center">
-            
-            {/* Global Search Bar (Compact) */}
-            <form onSubmit={handleGlobalSearch} className="relative w-32 sm:w-36 lg:w-44 shrink-0">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            {/* Spacious Search Bar — Positioned to the left, generous responsive width */}
+            <form
+              onSubmit={handleGlobalSearch}
+              className="relative w-36 sm:w-48 md:w-52 lg:w-64 xl:w-80 shrink transition-all duration-200"
+            >
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none transition-colors" />
               <input
+                ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search leads..."
-                className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 hover:bg-slate-100/70 focus:bg-white text-slate-800 placeholder-slate-400 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50/90 hover:bg-slate-100/70 focus:bg-white text-slate-800 placeholder-slate-400 border border-slate-200/90 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 shadow-2xs transition-all duration-200"
               />
+              <div className="hidden xl:flex items-center absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <kbd className="text-[10px] font-medium text-slate-400 bg-white border border-slate-200/90 rounded px-1.5 py-0.5 shadow-2xs">
+                  ⌘K
+                </kbd>
+              </div>
             </form>
-
-            {/* Compact Navbar with Horizontal Overflow (Displays 3-4 categories at once) */}
-            <div className="hidden md:flex items-center max-w-[340px] sm:max-w-[380px] lg:max-w-[440px] xl:max-w-[500px] shrink-0 border border-slate-200/60 rounded-xl px-1 py-0.5 bg-slate-50/50">
-              {/* Left scroll button */}
-              <button
-                type="button"
-                onClick={() => scrollNav("left")}
-                className="shrink-0 p-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded-md transition-colors"
-                title="Scroll categories left"
-                aria-label="Scroll left"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Scrollable categories container */}
-              <nav
-                ref={navScrollRef}
-                onScroll={() => {
-                  if (activeDropdown) setActiveDropdown(null)
-                }}
-                className="flex items-center space-x-1 overflow-x-auto scroll-smooth py-0.5 px-0.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
-              >
-                {NAV_CATEGORIES.map((category) => {
-                  const CategoryIcon = category.icon
-                  const isActive = isCategoryActive(category)
-                  const isDropdownOpen = activeDropdown === category.id
-
-                  return (
-                    <div
-                      key={category.id}
-                      className="shrink-0"
-                      onMouseEnter={() => handleOpenDropdown(category.id)}
-                      onMouseLeave={handleDropdownLeave}
-                    >
-                      <button
-                        type="button"
-                        ref={(el) => (categoryButtonRefs.current[category.id] = el)}
-                        onClick={() =>
-                          isDropdownOpen ? setActiveDropdown(null) : handleOpenDropdown(category.id)
-                        }
-                        className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-150 focus:outline-none cursor-pointer ${
-                          isActive || isDropdownOpen
-                            ? "bg-white text-indigo-700 shadow-2xs border border-indigo-200/80"
-                            : "text-slate-600 hover:text-slate-900 hover:bg-white/80"
-                        }`}
-                      >
-                        <CategoryIcon
-                          className={`w-3.5 h-3.5 ${
-                            isActive || isDropdownOpen ? "text-indigo-600" : "text-slate-400"
-                          }`}
-                        />
-                        <span>{category.label}</span>
-                        <ChevronDown
-                          className={`w-3 h-3 text-slate-400 transition-transform duration-200 ${
-                            isDropdownOpen ? "rotate-180 text-indigo-600" : ""
-                          }`}
-                        />
-                      </button>
-                    </div>
-                  )
-                })}
-              </nav>
-
-              {/* Right scroll button */}
-              <button
-                type="button"
-                onClick={() => scrollNav("right")}
-                className="shrink-0 p-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded-md transition-colors"
-                title="Scroll categories right"
-                aria-label="Scroll right"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
           </div>
 
-          {/* RIGHT: Icon Buttons ONLY (Add Lead, Fullscreen, Single Functional Settings, Profile Avatar) */}
-          <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
-            
-            {/* 1. Add Lead Icon Button (+) */}
-            <Link
-              href="/leads/new"
-              title="Add New Lead"
-              aria-label="Add New Lead"
-              className="p-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 shadow-xs hover:shadow-sm transition-all duration-150 active:scale-95 flex items-center justify-center"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-            </Link>
+          {/* =========================================================================
+              CENTER: ALL PRIMARY NAVIGATION ITEMS IN ONE NAVBAR (NO ARROWS, NO SCROLL)
+          ========================================================================= */}
+          <nav className="hidden md:flex items-center space-x-0.5 lg:space-x-1 xl:space-x-1.5 shrink-0">
+            {NAV_CATEGORIES.map((category) => {
+              const CategoryIcon = category.icon
+              const isActive = isCategoryActive(category)
+              const isDropdownOpen = activeDropdown === category.id
+              const hasDropdown = category.items.length > 1
 
-            {/* 2. Fullscreen Toggle Icon Button */}
+              return (
+                <div
+                  key={category.id}
+                  className="relative shrink-0"
+                  onMouseEnter={() => {
+                    if (hasDropdown) handleOpenDropdown(category.id)
+                  }}
+                  onMouseLeave={() => {
+                    if (hasDropdown) handleDropdownLeave()
+                  }}
+                >
+                  <button
+                    type="button"
+                    ref={(el) => (categoryButtonRefs.current[category.id] = el)}
+                    onClick={() => {
+                      if (!hasDropdown) {
+                        setActiveDropdown(null)
+                        router.push(category.href)
+                      } else {
+                        if (isDropdownOpen) {
+                          setActiveDropdown(null)
+                        } else {
+                          handleOpenDropdown(category.id)
+                        }
+                      }
+                    }}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 lg:px-3 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-150 focus:outline-none cursor-pointer ${
+                      isActive || isDropdownOpen
+                        ? "bg-indigo-50/80 text-indigo-700 shadow-2xs border border-indigo-200/80"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 border border-transparent"
+                    }`}
+                  >
+                    <CategoryIcon
+                      className={`w-3.5 h-3.5 transition-colors ${
+                        isActive || isDropdownOpen ? "text-indigo-600" : "text-slate-400"
+                      }`}
+                    />
+                    <span>{category.label}</span>
+                    {hasDropdown && (
+                      <ChevronDown
+                        className={`w-3 h-3 text-slate-400 transition-transform duration-200 ${
+                          isDropdownOpen ? "rotate-180 text-indigo-600" : ""
+                        }`}
+                      />
+                    )}
+                  </button>
+                </div>
+              )
+            })}
+          </nav>
+
+          {/* =========================================================================
+              RIGHT SECTION: Fullscreen & User Profile (Standalone Plus & Settings Removed)
+          ========================================================================= */}
+          <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+            {/* Fullscreen Toggle */}
             <button
               type="button"
               onClick={toggleFullscreen}
               title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
               aria-label="Toggle Fullscreen"
-              className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors focus:outline-none"
+              className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors focus:outline-none cursor-pointer"
             >
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
             </button>
 
-            {/* 3. Settings Quick Icon with Dedicated Client Settings Popover */}
-            <div className="relative" ref={settingsRef}>
-              <button
-                type="button"
-                onClick={() => {
-                  setSettingsOpen(!settingsOpen)
-                  setUserDropdownOpen(false)
-                  setActiveDropdown(null)
-                }}
-                title="Client CRM Settings"
-                aria-label="Client CRM Settings"
-                className={`p-2 rounded-lg transition-colors focus:outline-none ${
-                  settingsOpen
-                    ? "bg-indigo-50 text-indigo-600"
-                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-100"
-                }`}
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-
-              {/* Client-scoped Settings Popover */}
-              {settingsOpen && (
-                <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 py-2.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="px-4 py-2 border-b border-slate-100">
-                    <p className="text-xs font-bold text-slate-900">Client CRM Settings</p>
-                    <p className="text-[10px] text-slate-400">Configure lead forms, automation & team</p>
-                  </div>
-                  <div className="py-1 text-xs text-slate-700 max-h-80 overflow-y-auto">
-                    {CLIENT_SETTINGS.map((item) => {
-                      const ItemIcon = item.icon
-                      const itemActive = pathname === item.href
-                      return (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          onClick={() => setSettingsOpen(false)}
-                          className={`flex items-start space-x-2.5 px-4 py-2 hover:bg-slate-50 transition-colors ${
-                            itemActive ? "bg-indigo-50/70 text-indigo-700 font-semibold" : ""
-                          }`}
-                        >
-                          <ItemIcon className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-slate-900 truncate">{item.label}</p>
-                            <p className="text-[10px] text-slate-400 leading-tight">{item.desc}</p>
-                          </div>
-                        </Link>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 4. User Profile / Avatar Icon Button (No text in header) */}
+            {/* User Profile Avatar */}
             <div className="relative pl-1">
               <button
                 type="button"
                 onClick={() => {
                   setUserDropdownOpen(!userDropdownOpen)
-                  setSettingsOpen(false)
                   setActiveDropdown(null)
                 }}
                 title="Account Profile"
@@ -704,16 +669,14 @@ export default function Header() {
                 </div>
               </button>
 
-              {/* Profile Dropdown: Displays actual authenticated session details */}
+              {/* Profile Dropdown */}
               {userDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 py-2.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  {/* Authenticated User & Account Details */}
                   <div className="px-4 py-2.5 border-b border-slate-100">
                     <p className="text-xs font-bold text-slate-900 leading-snug">{userName}</p>
                     {userEmail && (
                       <p className="text-[11px] text-slate-500 font-mono truncate">{userEmail}</p>
                     )}
-
                     <div className="mt-2 flex flex-wrap gap-1.5 items-center">
                       <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                         {userRole}
@@ -726,7 +689,6 @@ export default function Header() {
                     </div>
                   </div>
 
-                  {/* Profile Actions (Duplicate CRM Dashboard link removed) */}
                   <div className="py-1 text-xs text-slate-700">
                     <Link
                       href="/settings/staff"
@@ -736,7 +698,6 @@ export default function Header() {
                       <Shield className="w-3.5 h-3.5 text-slate-400" />
                       <span>Staff & Team Profile</span>
                     </Link>
-
                     <Link
                       href="/settings/custom-fields"
                       onClick={() => setUserDropdownOpen(false)}
@@ -747,7 +708,6 @@ export default function Header() {
                     </Link>
                   </div>
 
-                  {/* Sign Out Action */}
                   <div className="pt-1.5 border-t border-slate-100">
                     <button
                       type="button"
@@ -767,7 +727,7 @@ export default function Header() {
               type="button"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               aria-label="Toggle CRM Menu"
-              className="md:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 focus:outline-none ml-0.5"
+              className="md:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 focus:outline-none ml-0.5 cursor-pointer"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
@@ -777,32 +737,33 @@ export default function Header() {
 
       {/* =========================================================================
           SAFE FIXED-POSITION CATEGORY DROPDOWN MENU
-          Rendered outside the scrollable container so it is NEVER clipped
+          Max 4 items visible at a time with subtle vertical scrolling for overflow
       ========================================================================= */}
-      {activeCategoryData && (
+      {activeCategoryData && activeCategoryData.items.length > 1 && (
         <div
+          id="navbar-category-dropdown"
           style={{
             position: "fixed",
             top: `${dropdownCoords.top}px`,
             left: `${dropdownCoords.left}px`,
             zIndex: 9999,
           }}
-          className="w-72 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in slide-in-from-top-1 duration-150"
-          onMouseEnter={() => {
-            if (dropdownTimeoutRef.current) clearTimeout(dropdownTimeoutRef.current)
-          }}
+          className="w-72 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in slide-in-from-top-1 duration-150 before:content-[''] before:absolute before:-top-3 before:left-0 before:right-0 before:h-3"
+          onMouseEnter={handleDropdownEnter}
           onMouseLeave={handleDropdownLeave}
         >
-          <div className="px-3 pb-2 mb-1 border-b border-slate-100 flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          {/* Stable Header */}
+          <div className="px-3.5 py-2 mb-1 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 rounded-t-lg select-none">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
               {activeCategoryData.label}
             </span>
-            <span className="text-[10px] text-slate-400 font-semibold">
+            <span className="text-[10px] text-slate-400 font-medium">
               {activeCategoryData.items.length} items
             </span>
           </div>
 
-          <div className="space-y-0.5 px-1.5 max-h-[70vh] overflow-y-auto">
+          {/* Max 4 items visible, scrollable if more */}
+          <div className="px-1.5 py-0.5 space-y-0.5 max-h-[224px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:bg-transparent">
             {activeCategoryData.items.map((item) => {
               const ItemIcon = item.icon
               const itemActive = isItemActive(item.href)
@@ -814,14 +775,14 @@ export default function Header() {
                   onClick={() => setActiveDropdown(null)}
                   className={`flex items-start space-x-2.5 p-2 rounded-lg text-xs transition-colors group ${
                     itemActive
-                      ? "bg-indigo-50 text-indigo-900 font-semibold"
+                      ? "bg-indigo-50/90 text-indigo-900 font-semibold"
                       : "text-slate-700 hover:bg-slate-50 hover:text-indigo-600"
                   }`}
                 >
                   <div
                     className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
                       itemActive
-                        ? "bg-indigo-600 text-white"
+                        ? "bg-indigo-600 text-white shadow-2xs"
                         : "bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600"
                     }`}
                   >
@@ -850,8 +811,7 @@ export default function Header() {
       )}
 
       {/* =========================================================================
-          MOBILE NAVIGATION DRAWER (Phones & Small Tablets)
-          Exposes all SIX categories and all 26 child items with no loss
+          MOBILE NAVIGATION DRAWER
       ========================================================================= */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 md:hidden animate-in fade-in duration-200">
@@ -877,7 +837,7 @@ export default function Header() {
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -903,6 +863,25 @@ export default function Header() {
                 const CategoryIcon = category.icon
                 const isExpanded = expandedMobileCategory === category.id
                 const isCatActive = isCategoryActive(category)
+                const hasChildren = category.items.length > 1
+
+                if (!hasChildren) {
+                  return (
+                    <Link
+                      key={category.id}
+                      href={category.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition-colors ${
+                        isCatActive ? "text-indigo-700 bg-indigo-50/60" : "text-slate-800 hover:bg-slate-100"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2">
+                        <CategoryIcon className="w-4 h-4 text-indigo-600" />
+                        <span>{category.label}</span>
+                      </div>
+                    </Link>
+                  )
+                }
 
                 return (
                   <div
@@ -914,7 +893,7 @@ export default function Header() {
                       onClick={() =>
                         setExpandedMobileCategory(isExpanded ? null : category.id)
                       }
-                      className={`w-full flex items-center justify-between p-2.5 text-xs font-bold transition-colors ${
+                      className={`w-full flex items-center justify-between p-2.5 text-xs font-bold transition-colors cursor-pointer ${
                         isCatActive ? "text-indigo-700 bg-indigo-50/50" : "text-slate-800 hover:bg-slate-100"
                       }`}
                     >
@@ -961,7 +940,7 @@ export default function Header() {
               })}
             </div>
 
-            {/* Mobile Drawer Footer with Quick Actions */}
+            {/* Mobile Drawer Footer */}
             <div className="p-3 border-t border-slate-100 bg-slate-50 space-y-2">
               <Link
                 href="/leads/new"
@@ -975,7 +954,7 @@ export default function Header() {
               <button
                 type="button"
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center space-x-1.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-rose-200"
+                className="w-full flex items-center justify-center space-x-1.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-rose-200 cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Sign Out</span>

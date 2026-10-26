@@ -6,25 +6,13 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-// Strict whitelist for sortable fields to prevent injection
 const ALLOWED_SORT_FIELDS = ["name", "email", "phone", "source", "status", "assignedTo", "createdAt", "updatedAt"]
-
-// Determine effective tenant partition based on authentication context
-const getEffectiveTenant = (req) => {
-  if (req.user?.role === "super_admin") {
-    // Super Admin can view all or filter by specific tenant if requested
-    const requestedTenant = typeof req.query?.tenantId === "string" ? req.query.tenantId.trim() : null
-    return { tenantId: requestedTenant, isSuperAdmin: true }
-  }
-
-  if (req.user?.tenantId) {
-    // Leads Account Admin is strictly locked to their tenant
-    return { tenantId: req.user.tenantId, isSuperAdmin: false }
-  }
-
-  // Unauthenticated requests have no tenant access
-  return { tenantId: null, isSuperAdmin: false }
-}
+const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { scopeFilter, checkDirectObjectAccess } = require("../utils/rbacScope")
+const leadService = require("../services/leadService")
+const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
+const assignmentService = require("../services/assignmentService")
+const audit = require("../services/auditService")
 
 const getLeads = async (req, res) => {
   try {
@@ -69,19 +57,38 @@ const getLeads = async (req, res) => {
     if (req.query?.includeTest !== "true") {
       query.isTest = { $ne: true }
     }
+    if (req.query?.includeDeleted !== "true") {
+      query.deletedAt = null
+    }
     if (effectiveTenantId) {
       query.tenantId = effectiveTenantId
+    }
+
+    // Apply RBAC scope filter (own / team / all)
+    const rbacQuery = await scopeFilter(req.user, "leads", "view")
+    if (rbacQuery._id !== undefined) {
+      query._id = rbacQuery._id // Fails closed if unauthorized
+    } else if (rbacQuery.$or) {
+      query.$or = rbacQuery.$or
     }
 
     // Search functionality across name, email, phone, and company with sanitized regex
     if (typeof search === "string" && search.trim()) {
       const sanitizedSearch = escapeRegex(search.trim())
-      query.$or = [
+      const searchConditions = [
         { name: { $regex: sanitizedSearch, $options: "i" } },
         { email: { $regex: sanitizedSearch, $options: "i" } },
         { phone: { $regex: sanitizedSearch, $options: "i" } },
         { "metadata.company": { $regex: sanitizedSearch, $options: "i" } },
       ]
+
+      if (query.$or) {
+        // Combine scope $or and search $or with $and
+        query.$and = [{ $or: query.$or }, { $or: searchConditions }]
+        delete query.$or
+      } else {
+        query.$or = searchConditions
+      }
     }
 
     // Direct phone filter
@@ -121,9 +128,25 @@ const getLeads = async (req, res) => {
       query.source = source
     }
 
-    // AssignedTo filter
+    // AssignedTo filter (supports unassigned pool)
     if (assignedTo && assignedTo !== "all") {
-      query.assignedTo = assignedTo
+      if (assignedTo.toLowerCase() === "unassigned") {
+        query.$or = [{ ownerId: null }, { assignedStaffId: "unassigned" }, { assignedTo: "Unassigned" }]
+      } else {
+        query.assignedTo = assignedTo
+      }
+    }
+
+    if (req.query?.ownerId && req.query.ownerId !== "all") {
+      if (req.query.ownerId === "unassigned" || req.query.ownerId === "null") {
+        query.ownerId = null
+      } else if (mongoose.Types.ObjectId.isValid(req.query.ownerId)) {
+        query.ownerId = new mongoose.Types.ObjectId(req.query.ownerId)
+      }
+    }
+
+    if (req.query?.teamId && req.query.teamId !== "all" && mongoose.Types.ObjectId.isValid(req.query.teamId)) {
+      query.teamId = new mongoose.Types.ObjectId(req.query.teamId)
     }
 
     // Date range filter
@@ -166,7 +189,17 @@ const getLeads = async (req, res) => {
       name: lead.name,
       email: lead.email || "",
       phone: lead.phone || "",
-      company: lead.metadata?.company || lead.metadata?.companyName || "",
+      phoneNormalized: lead.phoneNormalized || "",
+      company: lead.company || lead.metadata?.company || lead.metadata?.companyName || "",
+      city: lead.city || "",
+      alternatePhone: lead.alternatePhone || "",
+      ownerId: lead.ownerId ? lead.ownerId.toString() : null,
+      teamId: lead.teamId ? lead.teamId.toString() : null,
+      tags: lead.tags || [],
+      attribution: lead.attribution || null,
+      assignmentHistory: Array.isArray(lead.assignmentHistory) ? lead.assignmentHistory : [],
+      lastContactedAt: lead.lastContactedAt || null,
+      deletedAt: lead.deletedAt || null,
       source: lead.source || "Website Form",
       assignedTo: lead.assignedTo || "Unassigned",
       assignedStaffId: lead.assignedStaffId || "unassigned",
@@ -243,41 +276,27 @@ const createLead = async (req, res) => {
 
     const assignedTenant = isSuperAdmin ? (bodyTenantId || "default-tenant") : effectiveTenantId
 
-    // Check if email already exists within this tenant partition
-    const existingLead = await Lead.findOne({
-      email: email.toLowerCase().trim(),
+    const result = await leadService.createOrMergeLead({
       tenantId: assignedTenant,
+      source: source || "Manual Entry",
+      payload: req.body,
+      options: {
+        duplicateHandling: "reject",
+      },
+      actor: req.user,
     })
-    if (existingLead) {
+
+    if (result.action === "duplicate_rejected") {
       res.status(400).json({
         success: false,
-        error: "A lead with this email already exists in this account",
+        error: result.reason || "A lead with this email already exists in this account",
       })
       return
     }
 
-    const leadMetadata = typeof req.body.metadata === "object" && req.body.metadata !== null ? { ...req.body.metadata } : {}
-    if (typeof req.body.company === "string" && req.body.company.trim()) {
-      leadMetadata.company = req.body.company.trim()
-    }
-
-    const lead = new Lead({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      phone: (phone || "").trim(),
-      source: (source || "Manual Entry").trim(),
-      assignedTo: (assignedTo || "Unassigned").trim(),
-      status: status || "New",
-      message: typeof req.body.message === "string" ? req.body.message.trim() : "",
-      metadata: leadMetadata,
-      tenantId: assignedTenant,
-    })
-
-    const savedLead = await lead.save()
-
     res.status(201).json({
       success: true,
-      data: savedLead,
+      data: result.lead,
       message: "Lead created successfully",
     })
   } catch (error) {
@@ -297,7 +316,7 @@ const createLead = async (req, res) => {
     } else {
       res.status(500).json({
         success: false,
-        error: "Internal server error",
+        error: error.message || "Internal server error",
       })
     }
   }
@@ -337,6 +356,15 @@ const getLeadById = async (req, res) => {
       res.status(404).json({
         success: false,
         error: "Lead not found",
+      })
+      return
+    }
+
+    const access = await checkDirectObjectAccess(req.user, lead, "leads", "view")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
       })
       return
     }
@@ -389,6 +417,15 @@ const updateLead = async (req, res) => {
       res.status(404).json({
         success: false,
         error: "Lead not found",
+      })
+      return
+    }
+
+    const access = await checkDirectObjectAccess(req.user, lead, "leads", "edit")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
       })
       return
     }
@@ -458,7 +495,10 @@ const updateLead = async (req, res) => {
     const updates = {}
     if (name && typeof name === "string" && name.trim()) updates.name = name.trim()
     if (email && typeof email === "string" && email.trim()) updates.email = email.toLowerCase().trim()
-    if (phone !== undefined) updates.phone = typeof phone === "string" ? phone.trim() : ""
+    if (phone !== undefined) {
+      updates.phone = typeof phone === "string" ? phone.trim() : ""
+      updates.phoneNormalized = updates.phone ? normalizePhoneE164(updates.phone) : ""
+    }
 
     let newMetadata = null
     const getMetadataObject = () => {
@@ -487,8 +527,37 @@ const updateLead = async (req, res) => {
     if (assignedTo !== undefined) updates.assignedTo = typeof assignedTo === "string" && assignedTo.trim() ? assignedTo.trim() : "Unassigned"
     if (message !== undefined) updates.message = typeof message === "string" ? message.trim() : ""
     if (req.body.company !== undefined) {
+      const companyVal = typeof req.body.company === "string" ? req.body.company.trim() : ""
+      updates.company = companyVal
       const meta = getMetadataObject()
-      meta.company = typeof req.body.company === "string" ? req.body.company.trim() : ""
+      meta.company = companyVal
+    }
+    if (req.body.city !== undefined) {
+      updates.city = typeof req.body.city === "string" ? req.body.city.trim() : ""
+    }
+    if (req.body.alternatePhone !== undefined) {
+      updates.alternatePhone = typeof req.body.alternatePhone === "string" ? req.body.alternatePhone.trim() : ""
+    }
+    if (req.body.tags !== undefined && Array.isArray(req.body.tags)) {
+      updates.tags = req.body.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean)
+    }
+    if (req.body.ownerId !== undefined) {
+      if (req.body.ownerId && mongoose.Types.ObjectId.isValid(req.body.ownerId)) {
+        updates.ownerId = new mongoose.Types.ObjectId(req.body.ownerId)
+        updates.assignedStaffId = updates.ownerId.toString()
+      } else {
+        updates.ownerId = null
+      }
+    }
+    if (req.body.teamId !== undefined) {
+      if (req.body.teamId && mongoose.Types.ObjectId.isValid(req.body.teamId)) {
+        updates.teamId = new mongoose.Types.ObjectId(req.body.teamId)
+      } else {
+        updates.teamId = null
+      }
+    }
+    if (req.body.lastContactedAt !== undefined) {
+      updates.lastContactedAt = req.body.lastContactedAt ? new Date(req.body.lastContactedAt) : null
     }
     if (req.body.metadata !== undefined && typeof req.body.metadata === "object" && req.body.metadata !== null) {
       const meta = getMetadataObject()
@@ -550,13 +619,13 @@ const deleteLead = async (req, res) => {
       return
     }
 
-    // Enforce tenant scoping on deletion
+    // Enforce tenant scoping and RBAC authorization on deletion
     const query = { _id: id }
     if (!isSuperAdmin && effectiveTenantId) {
       query.tenantId = effectiveTenantId
     }
 
-    const lead = await Lead.findOneAndDelete(query)
+    const lead = await Lead.findOne(query)
 
     if (!lead) {
       res.status(404).json({
@@ -565,6 +634,39 @@ const deleteLead = async (req, res) => {
       })
       return
     }
+
+    const access = await checkDirectObjectAccess(req.user, lead, "leads", "delete")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
+      })
+      return
+    }
+
+    await Lead.findOneAndDelete({ _id: lead._id })
+
+    const maskedPhone = lead.phone
+      ? (lead.phone.length > 5 ? `${lead.phone.slice(0, 3)}••••${lead.phone.slice(-4)}` : "••••")
+      : null
+
+    await audit.log({
+      tenantId: lead.tenantId,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.LEAD_DELETE,
+      entity: "lead",
+      entityId: lead._id,
+      summary: `Deleted lead '${lead.name}' (${lead.email || maskedPhone || "No contact"})`,
+      details: {
+        name: lead.name,
+        email: lead.email || undefined,
+        phoneMasked: maskedPhone || undefined,
+        status: lead.status,
+        ownerId: lead.ownerId,
+        assignedTo: lead.assignedTo,
+      },
+      req,
+    })
 
     res.status(200).json({
       success: true,
@@ -601,6 +703,13 @@ const getLeadStats = async (req, res) => {
       matchQuery.tenantId = req.query.tenantId.trim()
     }
 
+    const rbacQuery = await scopeFilter(req.user, "leads", "view")
+    if (rbacQuery._id !== undefined) {
+      matchQuery._id = rbacQuery._id
+    } else if (rbacQuery.$or) {
+      matchQuery.$or = rbacQuery.$or
+    }
+
     const matchStage = Object.keys(matchQuery).length > 0 ? [{ $match: matchQuery }] : []
 
     const stats = await Lead.aggregate([
@@ -613,7 +722,7 @@ const getLeadStats = async (req, res) => {
       },
     ])
 
-    const total = await Lead.countDocuments(matchQuery)
+    const total = stats.reduce((sum, stat) => sum + (stat.count || 0), 0)
 
     const statusCounts = {
       New: 0,
@@ -648,6 +757,178 @@ const getLeadStats = async (req, res) => {
   }
 }
 
+/**
+ * PATCH /api/leads/:id/assign
+ * Assign or reassign single lead with audit history
+ */
+const assignSingleLead = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { targetOwnerId, teamId, reason } = req.body
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      return res.status(401).json({ success: false, error: "Authentication required to assign leads." })
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: "Invalid lead ID format" })
+    }
+
+    const lead = await Lead.findOne({ _id: id, ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}) })
+    if (!lead) {
+      return res.status(404).json({ success: false, error: "Lead not found" })
+    }
+
+    // Direct object check: user can only assign leads they have access to modify
+    const access = await checkDirectObjectAccess(req.user, lead, "leads", "edit")
+    if (!access.allowed) {
+      return res.status(403).json({ success: false, error: access.reason || "Access denied. Outside assigned scope." })
+    }
+
+    const assignedTenant = lead.tenantId
+
+    const result = await assignmentService.assignLead(lead._id, targetOwnerId || null, {
+      teamId: teamId || null,
+      actor: req.user,
+      reason: reason || "Manual assignment",
+      tenantId: assignedTenant,
+    })
+
+    await audit.log({
+      tenantId: assignedTenant,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.LEAD_ASSIGN,
+      entity: "lead",
+      entityId: lead._id,
+      summary: targetOwnerId
+        ? `Assigned lead '${lead.name}' to ${result.lead.assignedTo}`
+        : `Moved lead '${lead.name}' to unassigned pool`,
+      details: {
+        leadId: lead._id,
+        leadName: lead.name,
+        fromOwner: result.historyEntry?.fromOwnerName,
+        toOwner: result.historyEntry?.toOwnerName,
+        reason: result.historyEntry?.reason,
+      },
+      req,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: targetOwnerId ? `Lead assigned to ${result.lead.assignedTo}` : "Lead moved to unassigned pool",
+      data: result.lead,
+      historyEntry: result.historyEntry,
+    })
+  } catch (error) {
+    console.error("Error assigning lead:", error)
+    const statusCode = error.status || 500
+    res.status(statusCode).json({
+      success: false,
+      error: error.message || "Failed to assign lead",
+    })
+  }
+}
+
+/**
+ * POST /api/leads/bulk-assign
+ * Reassign multiple leads in bulk
+ */
+const bulkAssignLeads = async (req, res) => {
+  try {
+    const { leadIds, targetOwnerId, teamId, ruleId, reason } = req.body
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      return res.status(401).json({ success: false, error: "Authentication required to bulk assign leads." })
+    }
+
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one lead ID is required for bulk assignment" })
+    }
+
+    const assignedTenant = isSuperAdmin ? (req.body.tenantId || effectiveTenantId) : effectiveTenantId
+    if (!assignedTenant) {
+      return res.status(400).json({ success: false, error: "Tenant context is required" })
+    }
+
+    // Offload heavy batch assignment to background queue when requested
+    if (req.query.async === "true" || req.body.async === true) {
+      const queue = require("../services/queueService")
+      const queued = await queue.addJob({
+        name: "lead.bulk_assign",
+        tenantId: assignedTenant,
+        payload: {
+          leadIds,
+          targetOwnerId: targetOwnerId || null,
+          teamId: teamId || null,
+          ruleId: ruleId || null,
+          actor: req.user,
+          reason: reason || "Bulk reassignment",
+          tenantId: assignedTenant,
+        },
+        priority: 1,
+      })
+      return res.status(202).json({
+        success: true,
+        queued: true,
+        jobId: queued.job.jobId,
+        message: `Bulk assignment queued in background for ${leadIds.length} lead(s)`,
+      })
+    }
+
+    const result = await assignmentService.bulkAssignLeads({
+      leadIds,
+      targetOwnerId: targetOwnerId || null,
+      teamId: teamId || null,
+      ruleId: ruleId || null,
+      actor: req.user,
+      reason: reason || "Bulk reassignment",
+      tenantId: assignedTenant,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully processed bulk assignment for ${result.updatedCount} lead(s)`,
+      data: result,
+    })
+  } catch (error) {
+    console.error("Error bulk assigning leads:", error)
+    const statusCode = error.status || 500
+    res.status(statusCode).json({
+      success: false,
+      error: error.message || "Failed to bulk assign leads",
+    })
+  }
+}
+
+/**
+ * GET /api/leads/pool/stats
+ * Get counts for unassigned pool
+ */
+const getUnassignedPoolStats = async (req, res) => {
+  try {
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      return res.status(401).json({ success: false, error: "Authentication required to view pool statistics." })
+    }
+
+    const stats = await assignmentService.getUnassignedPoolStats(effectiveTenantId)
+
+    res.status(200).json({
+      success: true,
+      data: stats,
+    })
+  } catch (error) {
+    console.error("Error fetching unassigned pool stats:", error)
+    res.status(500).json({
+      success: false,
+      error: "Failed to load unassigned pool statistics",
+    })
+  }
+}
+
 module.exports = {
   getLeads,
   createLead,
@@ -655,4 +936,7 @@ module.exports = {
   updateLead,
   deleteLead,
   getLeadStats,
+  assignSingleLead,
+  bulkAssignLeads,
+  getUnassignedPoolStats,
 }

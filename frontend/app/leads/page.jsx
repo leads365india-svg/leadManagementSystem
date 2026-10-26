@@ -9,7 +9,7 @@ export const metadata = {
 
 export default function LeadsPage() {
   const breadcrumbItems = [
-    { label: "Dashboard", href: "/" },
+    { label: "Home", href: "/" },
     { label: "Leads", href: "/leads" },
     { label: "All Leads" },
   ]

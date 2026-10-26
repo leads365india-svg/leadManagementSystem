@@ -193,7 +193,7 @@ function LeadFormContent() {
   }
 
   const breadcrumbItems = [
-    { label: "Dashboard", href: "/" },
+    { label: "Home", href: "/" },
     { label: "Leads", href: "/leads" },
     { label: isEditMode ? "Edit Lead" : "Add New Lead" },
   ]

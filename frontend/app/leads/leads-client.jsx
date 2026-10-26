@@ -497,7 +497,7 @@ export default function LeadsClient() {
     <>
       <Breadcrumb
         items={[
-          { label: "Dashboard", href: "/" },
+          { label: "Home", href: "/" },
           { label: "Leads", href: "/leads" },
           { label: displayTitle },
         ]}
@@ -1098,8 +1098,10 @@ export default function LeadsClient() {
 
                       {/* 7. Assigned To */}
                       <td className="py-3 px-4 whitespace-nowrap text-slate-600">
-                        {lead.assignedTo && lead.assignedTo !== "Unassigned" ? (
-                          <span className="font-medium text-slate-800">{lead.assignedTo}</span>
+                        {lead.ownerId?.name || (lead.assignedTo && lead.assignedTo !== "Unassigned") ? (
+                          <span className="font-medium text-slate-800">
+                            {lead.ownerId?.name || lead.assignedTo}
+                          </span>
                         ) : (
                           <span className="text-slate-400 italic">Unassigned</span>
                         )}
