@@ -358,6 +358,7 @@ module.exports = {
   registerHandler,
   getHandler,
   addJob,
+  enqueue: addJob,
   claimNextJob,
   completeJob,
   failJob,

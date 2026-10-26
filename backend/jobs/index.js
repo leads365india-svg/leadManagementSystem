@@ -29,6 +29,75 @@ function registerAllHandlers() {
     }
   })
 
+  // Phase 11: Common Integration Intake Handler
+  queue.registerHandler("integration.intake", async (job) => {
+    const { eventId, tenantId, integrationId, body, headers, ip, rawApiKey } = job.payload || {}
+    if (!tenantId) {
+      throw new Error("Missing required tenantId in integration.intake payload")
+    }
+
+    const { Integration } = require("../models/Integration")
+    const { IntegrationEvent } = require("../models/IntegrationEvent")
+    const integrationService = require("../services/integrationService")
+
+    let event = null
+    if (eventId) {
+      event = await IntegrationEvent.findOne({ _id: eventId, tenantId }).setOptions({ skipTenantFilter: true })
+    }
+
+    let integration = null
+    if (integrationId) {
+      integration = await Integration.findOne({ _id: integrationId, tenantId }).setOptions({ skipTenantFilter: true })
+    }
+
+    if (!integration) {
+      throw new Error("Integration not found for background intake processing")
+    }
+
+    const result = await integrationService.processIntakePayload({
+      event,
+      integration,
+      tenantId,
+      body,
+      headers,
+      ip,
+      rawApiKey,
+      idempotencyKey: job.idempotencyKey,
+    })
+
+    if (!result.success && result.status >= 500) {
+      throw new Error(result.error || "Background integration intake failed with server error")
+    }
+
+    return result
+  })
+
+  // Phase 12: Meta Lead Ads Background Processing Handler
+  queue.registerHandler("meta.lead_process", async (job) => {
+    const metaService = require("../services/metaService")
+    return await metaService.processMetaLeadIntake(job.payload)
+  })
+
+  // Phase 12: Meta Form Leads Reconciliation Handler
+  queue.registerHandler("meta.reconcile_leads", async (job) => {
+    const metaService = require("../services/metaService")
+    const { integrationId, options } = job.payload || {}
+    if (!integrationId) {
+      throw new Error("Missing integrationId for meta.reconcile_leads job")
+    }
+    return await metaService.reconcileMetaLeads(integrationId, options)
+  })
+
+  // Phase 13: IndiaMART Lead Manager Sync Handler
+  queue.registerHandler("indiamart.sync_leads", async (job) => {
+    const indiamartService = require("../services/indiamartService")
+    const { integrationId, options } = job.payload || {}
+    if (!integrationId) {
+      throw new Error("Missing integrationId for indiamart.sync_leads job")
+    }
+    return await indiamartService.syncIndiaMartLeads(integrationId, options)
+  })
+
   // 2. Lead Bulk Assignment Handler
   queue.registerHandler("lead.bulk_assign", async (job) => {
     const { leadIds, targetOwnerId, teamId, ruleId, reason, actor, tenantId } = job.payload || {}
@@ -75,7 +144,13 @@ function registerAllHandlers() {
     }
   })
 
-  // 5. Sample Recurring Job Handler
+  // 5. Phase 15: Mobile Lead Assignment Push Notification Handler
+  queue.registerHandler("mobile.push_lead_assigned", async (job) => {
+    const pushService = require("../services/pushService")
+    return await pushService.executePushLeadAssigned(job.payload)
+  })
+
+  // 6. Sample Recurring Job Handler
   queue.registerHandler("recurring.sample", async (job) => {
     return {
       status: "success",

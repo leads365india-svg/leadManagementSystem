@@ -15,7 +15,8 @@ const tenantStorage = new AsyncLocalStorage()
  * Run an async function within a specific tenant context
  */
 const runWithTenantContext = (context, fn) => {
-  return tenantStorage.run(context, fn)
+  const store = typeof context === "string" ? { tenantId: context, isSuperAdmin: false } : context
+  return tenantStorage.run(store, fn)
 }
 
 /**

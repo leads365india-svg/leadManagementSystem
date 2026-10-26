@@ -316,6 +316,47 @@ async function createOrMergeLead({
 
   const savedLead = await newLead.save()
 
+  // Phase 10: Record lead.created activity event
+  try {
+    const { activity } = require("./activityService")
+    await activity.record({
+      tenantId: cleanTenantId,
+      leadId: savedLead._id,
+      type: "lead.created",
+      actor: actor
+        ? {
+            id: actor._id || actor.id,
+            name: actor.name || "System",
+            email: actor.email || "",
+            role: actor.role || "user",
+          }
+        : { name: source || "System", role: "system" },
+      payload: {
+        source: savedLead.source,
+        assignedTo: savedLead.assignedTo,
+        status: savedLead.status,
+        company: savedLead.company || "",
+        landingPage: savedLead.landingPage || "",
+      },
+    })
+  } catch (actErr) {
+    console.error("Failed to record lead.created activity:", actErr.message)
+  }
+
+  // Phase 15: Mobile lead assignment push notification
+  if (savedLead.ownerId) {
+    try {
+      const pushService = require("./pushService")
+      await pushService.sendLeadAssignedPush({
+        tenantId: cleanTenantId,
+        agentId: savedLead.ownerId,
+        lead: savedLead,
+      })
+    } catch (pushErr) {
+      console.error("Failed to trigger mobile push notification for new lead:", pushErr.message)
+    }
+  }
+
   return {
     action: "created",
     lead: savedLead,

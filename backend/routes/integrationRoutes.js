@@ -6,7 +6,31 @@ const {
   rotateApiKey,
   sendTestLead,
   receiveWebsiteLead,
+  listIntegrations,
+  createIntegration,
+  getIntegrationById,
+  updateIntegration,
+  rotateIntegrationKey,
+  deleteIntegration,
+  listSources,
+  upsertSource,
+  listEvents,
+  replayIntegrationEvent,
+  syncLegacyIntegrations,
 } = require("../controllers/integrationController")
+const {
+  handleMetaWebhookHandshake,
+  handleMetaWebhookNotification,
+  connectMetaIntegration,
+  getMetaAuthUrl,
+  triggerMetaBackfill,
+} = require("../controllers/metaController")
+const {
+  connectIndiaMartIntegration,
+  getIndiaMartStatus,
+  triggerIndiaMartSync,
+  handleIndiaMartWebhook,
+} = require("../controllers/indiamartController")
 const { authenticate, requireAccountAdmin } = require("../middleware/authMiddleware")
 
 const router = express.Router()
@@ -23,13 +47,45 @@ const webhookLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-// Public integration webhook route (authenticated via integration API key in header)
+// 1. Public Integration Webhook Route (Preserves exact URL, headers, and response contract)
 router.post("/leads/website", webhookLimiter, receiveWebsiteLead)
 
-// Authenticated Lead Feeds Settings routes
+// 2. Backward-Compatible Lead Feeds Settings routes
 router.get("/settings/website", authenticate, getWebsiteConfig)
 router.put("/settings/website", authenticate, requireAccountAdmin, updateWebsiteConfig)
 router.post("/settings/website/rotate-key", authenticate, requireAccountAdmin, rotateApiKey)
 router.post("/settings/website/test", authenticate, requireAccountAdmin, sendTestLead)
+
+// 3. Phase 11 Canonical Lead Source Registry
+router.get("/sources", authenticate, listSources)
+router.post("/sources", authenticate, requireAccountAdmin, upsertSource)
+
+// 4. Phase 11 Integration Event Ledger & Replay
+router.get("/events", authenticate, listEvents)
+router.post("/events/:id/replay", authenticate, requireAccountAdmin, replayIntegrationEvent)
+
+// 5. Phase 11 Legacy Sync Trigger
+router.post("/sync-legacy", authenticate, requireAccountAdmin, syncLegacyIntegrations)
+
+// 6. Phase 12 Meta Lead Ads Webhooks & Connect Endpoints
+router.get("/webhooks/meta", handleMetaWebhookHandshake)
+router.post("/webhooks/meta", webhookLimiter, handleMetaWebhookNotification)
+router.post("/meta/connect", authenticate, requireAccountAdmin, connectMetaIntegration)
+router.get("/meta/auth-url", authenticate, getMetaAuthUrl)
+router.post("/meta/:id/backfill", authenticate, requireAccountAdmin, triggerMetaBackfill)
+
+// 7. Phase 13 IndiaMART Lead Manager Endpoints
+router.post("/webhooks/indiamart", webhookLimiter, handleIndiaMartWebhook)
+router.post("/indiamart/connect", authenticate, requireAccountAdmin, connectIndiaMartIntegration)
+router.get("/indiamart/status", authenticate, getIndiaMartStatus)
+router.post("/indiamart/:id/sync", authenticate, requireAccountAdmin, triggerIndiaMartSync)
+
+// 8. Phase 11 Multi-Tenant Integration Connectors CRUD
+router.get("/", authenticate, listIntegrations)
+router.post("/", authenticate, requireAccountAdmin, createIntegration)
+router.get("/:id", authenticate, getIntegrationById)
+router.put("/:id", authenticate, requireAccountAdmin, updateIntegration)
+router.post("/:id/rotate-key", authenticate, requireAccountAdmin, rotateIntegrationKey)
+router.delete("/:id", authenticate, requireAccountAdmin, deleteIntegration)
 
 module.exports = router

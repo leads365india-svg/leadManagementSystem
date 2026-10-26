@@ -207,16 +207,25 @@ const scopeFilter = async (user, resourceType, action = "view") => {
     return { _id: null } // Fail closed: unauthenticated
   }
 
-  if (user.role === "super_admin") {
-    return {} // Super admin has global scope
+  if (user.role === "super_admin" || user.role === "tenant_admin") {
+    return {} // Super admin and Tenant admin have global/tenant-wide scope
   }
 
-  const scope = getUserScope(user.permissions || [], resourceType, action)
+  let userPerms = user.permissions
+  if ((!userPerms || userPerms.length === 0) && user.roleId) {
+    const Role = mongoose.models.Role || require("../models/Role")
+    const roleDoc = await Role.findById(user.roleId).lean()
+    if (roleDoc?.permissions) {
+      userPerms = roleDoc.permissions
+    }
+  }
+
+  const scope = getUserScope(userPerms || [], resourceType, action)
 
   if (!scope) {
     // If checking "manage" on follow-ups, also fallback to checking "view"
     if (action === "manage") {
-      const viewScope = getUserScope(user.permissions || [], resourceType, "view")
+      const viewScope = getUserScope(userPerms || [], resourceType, "view")
       if (viewScope) {
         return scopeFilter(user, resourceType, "view")
       }
@@ -228,7 +237,8 @@ const scopeFilter = async (user, resourceType, action = "view") => {
     return {} // No assignee filter constraint
   }
 
-  const userIdStr = user.id ? user.id.toString() : ""
+  const userIdStr = (user._id || user.id) ? (user._id || user.id).toString() : ""
+  const userObjId = mongoose.Types.ObjectId.isValid(userIdStr) ? new mongoose.Types.ObjectId(userIdStr) : null
   const userName = user.name || ""
   const userEmail = user.email || ""
 
@@ -237,9 +247,17 @@ const scopeFilter = async (user, resourceType, action = "view") => {
 
     const conditions = []
     if (memberIds.length > 0) {
+      const memberObjIds = memberIds.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id))
       conditions.push({ assignedStaffId: { $in: memberIds } })
       conditions.push({ ownerId: { $in: memberIds } })
       conditions.push({ managerId: { $in: memberIds } })
+      conditions.push({ agentId: { $in: memberIds } })
+      if (memberObjIds.length > 0) {
+        conditions.push({ assignedStaffId: { $in: memberObjIds } })
+        conditions.push({ ownerId: { $in: memberObjIds } })
+        conditions.push({ managerId: { $in: memberObjIds } })
+        conditions.push({ agentId: { $in: memberObjIds } })
+      }
     }
     if (memberNames.length > 0) {
       conditions.push({ assignedTo: { $in: memberNames } })
@@ -250,6 +268,11 @@ const scopeFilter = async (user, resourceType, action = "view") => {
 
     // Always include user's own items
     conditions.push({ assignedStaffId: userIdStr })
+    conditions.push({ agentId: userIdStr })
+    if (userObjId) {
+      conditions.push({ assignedStaffId: userObjId })
+      conditions.push({ agentId: userObjId })
+    }
     if (userName) conditions.push({ assignedTo: userName })
     if (userEmail) conditions.push({ createdBy: userEmail })
 
@@ -261,6 +284,12 @@ const scopeFilter = async (user, resourceType, action = "view") => {
   if (userIdStr) {
     ownConditions.push({ assignedStaffId: userIdStr })
     ownConditions.push({ ownerId: userIdStr })
+    ownConditions.push({ agentId: userIdStr })
+    if (userObjId) {
+      ownConditions.push({ assignedStaffId: userObjId })
+      ownConditions.push({ ownerId: userObjId })
+      ownConditions.push({ agentId: userObjId })
+    }
   }
   if (userName) {
     ownConditions.push({ assignedTo: userName })
@@ -299,11 +328,28 @@ const checkDirectObjectAccess = async (user, doc, resourceType, action = "view")
     return { allowed: false, reason: "Cross-tenant access prohibited" }
   }
 
+  // Account admin or tenant admin has tenant-wide all-scope by default if permissions array is not pre-populated
+  if (
+    (user.role === "account_admin" || user.role === "tenant_admin") &&
+    (!Array.isArray(user.permissions) || user.permissions.length === 0)
+  ) {
+    return { allowed: true }
+  }
+
+  let userPerms = user.permissions
+  if ((!userPerms || userPerms.length === 0) && user.roleId) {
+    const Role = mongoose.models.Role || require("../models/Role")
+    const roleDoc = await Role.findById(user.roleId).lean()
+    if (roleDoc?.permissions) {
+      userPerms = roleDoc.permissions
+    }
+  }
+
   // Resolve user scope for this action
-  let scope = getUserScope(user.permissions || [], resourceType, action)
+  let scope = getUserScope(userPerms || [], resourceType, action)
   if (!scope && (action === "edit" || action === "delete" || action === "manage")) {
     // If no specific edit/delete scope, check if general permission exists
-    scope = getUserScope(user.permissions || [], resourceType, "view")
+    scope = getUserScope(userPerms || [], resourceType, "view")
   }
 
   if (!scope) {
@@ -315,12 +361,14 @@ const checkDirectObjectAccess = async (user, doc, resourceType, action = "view")
   }
 
   const userIdStr = (user.id || user._id || "").toString()
+  const docAgentId = (doc.agentId || "").toString()
   const docAssignedStaffId = (doc.assignedStaffId || "").toString()
   const docOwnerId = (doc.ownerId || "").toString()
   const docAssignedTo = (doc.assignedTo || "").trim().toLowerCase()
   const docCreatedBy = (doc.createdBy || "").trim().toLowerCase()
 
   const isDirectOwner =
+    (docAgentId && docAgentId === userIdStr) ||
     (docAssignedStaffId && docAssignedStaffId === userIdStr) ||
     (docOwnerId && docOwnerId === userIdStr) ||
     (user.name && docAssignedTo === user.name.trim().toLowerCase()) ||
@@ -341,6 +389,7 @@ const checkDirectObjectAccess = async (user, doc, resourceType, action = "view")
     const { memberIds, memberNames, memberEmails } = await getTeamMemberContext(user)
 
     const isTeamRecord =
+      (docAgentId && memberIds.includes(docAgentId)) ||
       (docAssignedStaffId && memberIds.includes(docAssignedStaffId)) ||
       (docOwnerId && memberIds.includes(docOwnerId)) ||
       (docAssignedTo && memberNames.map((n) => n.toLowerCase()).includes(docAssignedTo)) ||

@@ -36,6 +36,10 @@ import {
   MapPin,
   Globe,
   Share2,
+  Plus,
+  PhoneIncoming,
+  PhoneOutgoing,
+  Mic,
 } from "lucide-react"
 
 // Status styling configuration
@@ -84,6 +88,9 @@ export default function LeadDetailDrawer({
   const [copiedField, setCopiedField] = useState(null)
   const [followUps, setFollowUps] = useState([])
   const [loadingFollowUps, setLoadingFollowUps] = useState(false)
+  const [activities, setActivities] = useState([])
+  const [loadingActivities, setLoadingActivities] = useState(false)
+  const [activitiesError, setActivitiesError] = useState(null)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [newNote, setNewNote] = useState("")
   const [savingNote, setSavingNote] = useState("")
@@ -96,7 +103,7 @@ export default function LeadDetailDrawer({
     }
   }, [initialLead])
 
-  // Fetch full lead details & follow-ups on drawer open
+  // Fetch full lead details on drawer open
   const fetchLeadDetails = useCallback(async () => {
     if (!leadId) return
     try {
@@ -131,12 +138,115 @@ export default function LeadDetailDrawer({
     }
   }, [leadId])
 
+  // Phase 10: Fetch real chronological activity timeline from API
+  const fetchLeadActivities = useCallback(async () => {
+    if (!leadId) return
+    try {
+      setLoadingActivities(true)
+      setActivitiesError(null)
+      const res = await apiClient.getLeadActivities(leadId, { limit: 100 })
+      if (res && res.success) {
+        if (Array.isArray(res.data?.activities)) {
+          setActivities(res.data.activities)
+        } else if (Array.isArray(res.activities)) {
+          setActivities(res.activities)
+        } else if (Array.isArray(res.data)) {
+          setActivities(res.data)
+        } else {
+          setActivities([])
+        }
+      } else {
+        setActivitiesError(res?.error || "Failed to load timeline activities")
+      }
+    } catch (err) {
+      console.error("Failed to fetch activities for lead:", err)
+      setActivitiesError(err.message || "Failed to load timeline activities")
+    } finally {
+      setLoadingActivities(false)
+    }
+  }, [leadId])
+
+  const [calls, setCalls] = useState([])
+  const [loadingCalls, setLoadingCalls] = useState(false)
+  const [showLogCallForm, setShowLogCallForm] = useState(false)
+  const [callFormData, setCallFormData] = useState({
+    direction: "outbound",
+    duration: 60,
+    status: "completed",
+    disposition: "Interested",
+    notes: "",
+  })
+  const [submittingCall, setSubmittingCall] = useState(false)
+
+  // Fetch calls for lead (Phase 14)
+  const fetchLeadCalls = useCallback(async () => {
+    if (!leadId) return
+    try {
+      setLoadingCalls(true)
+      const res = await apiClient.getCalls({ leadId, limit: 50 })
+      if (res && res.success && Array.isArray(res.data?.calls)) {
+        setCalls(res.data.calls)
+      } else if (Array.isArray(res?.data)) {
+        setCalls(res.data)
+      } else {
+        setCalls([])
+      }
+    } catch (err) {
+      console.error("Failed to fetch calls for lead:", err)
+      setCalls([])
+    } finally {
+      setLoadingCalls(false)
+    }
+  }, [leadId])
+
+  const handleLogCallSubmit = async (e) => {
+    e.preventDefault()
+    if (!lead) return
+    try {
+      setSubmittingCall(true)
+      const payload = {
+        leadId: lead._id || lead.id,
+        number: lead.phoneNormalized || lead.phone || "unknown",
+        direction: callFormData.direction,
+        duration: Number(callFormData.duration) || 0,
+        status: callFormData.status,
+        disposition: callFormData.disposition,
+        notes: callFormData.notes,
+        startedAt: new Date(Date.now() - (Number(callFormData.duration) || 0) * 1000).toISOString(),
+        endedAt: new Date().toISOString(),
+      }
+      const res = await apiClient.logCall(payload)
+      if (res && res.success) {
+        toast.success("Call logged successfully")
+        setShowLogCallForm(false)
+        setCallFormData({
+          direction: "outbound",
+          duration: 60,
+          status: "completed",
+          disposition: "Interested",
+          notes: "",
+        })
+        fetchLeadCalls()
+        fetchLeadActivities()
+        fetchLeadDetails()
+      } else {
+        toast.error(res?.message || "Failed to log call")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to log call")
+    } finally {
+      setSubmittingCall(false)
+    }
+  }
+
   useEffect(() => {
     if (isOpen && leadId) {
       fetchLeadDetails()
       fetchLeadFollowUps()
+      fetchLeadActivities()
+      fetchLeadCalls()
     }
-  }, [isOpen, leadId, fetchLeadDetails, fetchLeadFollowUps])
+  }, [isOpen, leadId, fetchLeadDetails, fetchLeadFollowUps, fetchLeadActivities, fetchLeadCalls])
 
   // Close on ESC key
   useEffect(() => {
@@ -183,6 +293,8 @@ export default function LeadDetailDrawer({
         setLead(updated)
         if (onLeadUpdated) onLeadUpdated(updated)
         toast.success(`Pipeline status updated to ${newStatus}`)
+        // Refresh activity timeline to display new status_changed event
+        fetchLeadActivities()
       }
     } catch (err) {
       toast.error(err.message || "Failed to update status")
@@ -214,6 +326,8 @@ export default function LeadDetailDrawer({
         if (onLeadUpdated) onLeadUpdated(updated)
         setNewNote("")
         toast.success("Note added successfully")
+        // Refresh activity timeline to display new note_added event
+        fetchLeadActivities()
       }
     } catch (err) {
       toast.error(err.message || "Failed to save note")
@@ -228,124 +342,238 @@ export default function LeadDetailDrawer({
 
     const events = []
 
-    // 1. Lead Creation Event
-    if (lead.createdAt) {
-      events.push({
-        id: "event-created",
-        type: "created",
-        title: "Lead Created",
-        description: `Lead ingested from ${lead.source || "Website Form"}${
-          lead.attribution?.firstTouch?.landingPage ? ` on ${lead.attribution.firstTouch.landingPage}` : ""
-        }`,
-        actor: lead.metadata?.receivedVia ? "Webhook / API" : "System / User",
-        timestamp: new Date(lead.createdAt),
-        icon: Sparkles,
-        iconBg: "bg-blue-100 text-blue-600 border-blue-200",
-        category: "status",
-      })
-    }
+    // 1. If real activities exist from backend API, map them directly
+    if (Array.isArray(activities) && activities.length > 0) {
+      activities.forEach((act, idx) => {
+        if (!act) return
+        const actId = act._id || act.id || `act-${idx}`
+        const actDate = act.createdAt ? new Date(act.createdAt) : new Date()
+        const actorName = act.actor?.name || "System"
+        const actType = act.type || ""
 
-    // 2. Status Transitions from metadata.statusHistory
-    if (Array.isArray(lead.metadata?.statusHistory)) {
-      lead.metadata.statusHistory.forEach((hist, idx) => {
-        if (!hist) return
-        const stName = hist.toStatus || hist.status
-        const timeVal = hist.transitionedAt || hist.changedAt
-        if (!stName) return
+        if (actType === "lead.created" || actType === "created") {
+          events.push({
+            id: actId,
+            type: "created",
+            title: "Lead Created",
+            description: act.payload?.source
+              ? `Lead ingested from ${act.payload.source}${act.payload?.company ? ` (${act.payload.company})` : ""}`
+              : "Lead record created",
+            actor: actorName,
+            timestamp: actDate,
+            icon: Sparkles,
+            iconBg: "bg-blue-100 text-blue-600 border-blue-200",
+            category: "status",
+          })
+        } else if (actType === "lead.status_changed" || actType === "status_changed") {
+          events.push({
+            id: actId,
+            type: "status_change",
+            title: act.payload?.toStatus ? `Status Changed to ${act.payload.toStatus}` : "Status Changed",
+            description: act.payload?.fromStatus && act.payload?.toStatus
+              ? `Transitioned from ${act.payload.fromStatus} to ${act.payload.toStatus}`
+              : act.payload?.note || "Stage updated in sales pipeline",
+            actor: actorName,
+            timestamp: actDate,
+            icon: History,
+            iconBg: "bg-purple-100 text-purple-600 border-purple-200",
+            category: "status",
+            badge: act.payload?.toStatus,
+          })
+        } else if (actType === "lead.owner_changed" || actType === "owner_changed") {
+          events.push({
+            id: actId,
+            type: "assignment",
+            title: `Assigned to ${act.payload?.toOwnerName || "Staff"}`,
+            description: act.payload?.reason
+              ? `Reason: ${act.payload.reason} (Previous: ${act.payload?.fromOwnerName || "Unassigned"})`
+              : `Reassigned from ${act.payload?.fromOwnerName || "Unassigned"}`,
+            actor: actorName,
+            timestamp: actDate,
+            icon: User,
+            iconBg: "bg-emerald-100 text-emerald-600 border-emerald-200",
+            category: "assignment",
+          })
+        } else if (actType === "lead.note_added" || actType === "note_added") {
+          events.push({
+            id: actId,
+            type: "note",
+            title: "Note Added",
+            description: act.payload?.note || "Note added to lead record",
+            actor: actorName,
+            timestamp: actDate,
+            icon: MessageSquare,
+            iconBg: "bg-indigo-100 text-indigo-600 border-indigo-200",
+            category: "notes",
+          })
+        } else if (actType.startsWith("lead.followup") || actType.startsWith("followup")) {
+          const isCompleted = actType.includes("completed")
+          events.push({
+            id: actId,
+            type: isCompleted ? "followup_completed" : "followup_scheduled",
+            title: isCompleted ? "Follow-up Completed" : "Follow-up Scheduled",
+            description: act.payload?.outcomeNotes || act.payload?.notes || act.payload?.title || "Follow-up touchpoint",
+            actor: actorName,
+            timestamp: actDate,
+            icon: isCompleted ? CheckCircle2 : CalendarClock,
+            iconBg: isCompleted ? "bg-teal-100 text-teal-600 border-teal-200" : "bg-amber-100 text-amber-600 border-amber-200",
+            category: "followup",
+          })
+        } else {
+          events.push({
+            id: actId,
+            type: actType,
+            title: actType.replace("lead.", "").replace("_", " ").toUpperCase(),
+            description: typeof act.payload === "object" ? JSON.stringify(act.payload) : String(act.payload || ""),
+            actor: actorName,
+            timestamp: actDate,
+            icon: Clock,
+            iconBg: "bg-slate-100 text-slate-600 border-slate-200",
+            category: "status",
+          })
+        }
+      })
+
+      // Combine with active/scheduled follow-ups that aren't already represented
+      if (Array.isArray(followUps)) {
+        followUps.forEach((fu) => {
+          if (!fu || !fu.createdAt) return
+          const fuTime = new Date(fu.createdAt).getTime()
+          const exists = events.some((e) => e.category === "followup" && Math.abs(e.timestamp.getTime() - fuTime) < 3000)
+          if (!exists) {
+            events.push({
+              id: `fu-sched-${fu._id || fu.id}`,
+              type: "followup_scheduled",
+              title: `Follow-up Scheduled: ${fu.title || fu.type || "Call"}`,
+              description: `Scheduled for ${new Date(fu.scheduledAt).toLocaleString()} with priority ${fu.priority || "medium"}`,
+              actor: fu.assignedTo || "Staff",
+              timestamp: new Date(fu.createdAt),
+              icon: CalendarClock,
+              iconBg: "bg-amber-100 text-amber-600 border-amber-200",
+              category: "followup",
+            })
+          }
+        })
+      }
+    } else {
+      // Fallback: Synthesize from lead metadata, statusHistory, assignmentHistory
+      // 1. Lead Creation Event
+      if (lead.createdAt) {
         events.push({
-          id: `status-${idx}`,
-          type: "status_change",
-          title: `Status Changed to ${stName}`,
-          description: hist.fromStatus
-            ? `Transitioned from ${hist.fromStatus} to ${stName}`
-            : hist.note || `Stage updated in sales pipeline`,
-          actor: hist.transitionedBy || hist.changedBy || "System User",
-          timestamp: timeVal ? new Date(timeVal) : new Date(),
-          icon: History,
-          iconBg: "bg-purple-100 text-purple-600 border-purple-200",
+          id: "event-created",
+          type: "created",
+          title: "Lead Created",
+          description: `Lead ingested from ${lead.source || "Website Form"}${
+            lead.attribution?.firstTouch?.landingPage ? ` on ${lead.attribution.firstTouch.landingPage}` : ""
+          }`,
+          actor: lead.metadata?.receivedVia ? "Webhook / API" : "System / User",
+          timestamp: new Date(lead.createdAt),
+          icon: Sparkles,
+          iconBg: "bg-blue-100 text-blue-600 border-blue-200",
           category: "status",
-          badge: stName,
         })
-      })
-    }
+      }
 
-    // 3. Ownership / Assignment Transitions from assignmentHistory
-    if (Array.isArray(lead.assignmentHistory)) {
-      lead.assignmentHistory.forEach((assign, idx) => {
-        if (!assign || !assign.assignedAt) return
+      // 2. Status Transitions from metadata.statusHistory
+      if (Array.isArray(lead.metadata?.statusHistory)) {
+        lead.metadata.statusHistory.forEach((hist, idx) => {
+          if (!hist) return
+          const stName = hist.toStatus || hist.status
+          const timeVal = hist.transitionedAt || hist.changedAt
+          if (!stName) return
+          events.push({
+            id: `status-${idx}`,
+            type: "status_change",
+            title: `Status Changed to ${stName}`,
+            description: hist.fromStatus
+              ? `Transitioned from ${hist.fromStatus} to ${stName}`
+              : hist.note || `Stage updated in sales pipeline`,
+            actor: hist.transitionedBy || hist.changedBy || "System User",
+            timestamp: timeVal ? new Date(timeVal) : new Date(),
+            icon: History,
+            iconBg: "bg-purple-100 text-purple-600 border-purple-200",
+            category: "status",
+            badge: stName,
+          })
+        })
+      }
+
+      // 3. Ownership / Assignment Transitions from assignmentHistory
+      if (Array.isArray(lead.assignmentHistory)) {
+        lead.assignmentHistory.forEach((assign, idx) => {
+          if (!assign || !assign.assignedAt) return
+          events.push({
+            id: `assignment-${idx}`,
+            type: "assignment",
+            title: `Assigned to ${assign.toOwnerName || "Staff Member"}`,
+            description: assign.reason
+              ? `Reason: ${assign.reason} (Previous: ${assign.fromOwnerName || "Unassigned"})`
+              : `Reassigned from ${assign.fromOwnerName || "Unassigned"}`,
+            actor: assign.assignedByName || "System",
+            timestamp: new Date(assign.assignedAt),
+            icon: User,
+            iconBg: "bg-emerald-100 text-emerald-600 border-emerald-200",
+            category: "assignment",
+          })
+        })
+      }
+
+      // 4. Follow-up Activities
+      if (Array.isArray(followUps)) {
+        followUps.forEach((fu) => {
+          if (!fu) return
+          if (fu.createdAt) {
+            events.push({
+              id: `fu-created-${fu._id || fu.id}`,
+              type: "followup_scheduled",
+              title: `Follow-up Scheduled: ${fu.title || fu.type || "Call"}`,
+              description: `Scheduled for ${new Date(fu.scheduledAt).toLocaleString()} with priority ${
+                fu.priority || "medium"
+              }`,
+              actor: fu.assignedTo || "Staff",
+              timestamp: new Date(fu.createdAt),
+              icon: CalendarClock,
+              iconBg: "bg-amber-100 text-amber-600 border-amber-200",
+              category: "followup",
+            })
+          }
+          if (fu.status === "completed" && (fu.completedAt || fu.updatedAt)) {
+            events.push({
+              id: `fu-completed-${fu._id || fu.id}`,
+              type: "followup_completed",
+              title: `Follow-up Completed: ${fu.title || fu.type}`,
+              description: fu.outcomeNotes || fu.notes || "Marked as completed",
+              actor: fu.assignedTo || "Staff",
+              timestamp: new Date(fu.completedAt || fu.updatedAt),
+              icon: CheckCircle2,
+              iconBg: "bg-teal-100 text-teal-600 border-teal-200",
+              category: "followup",
+            })
+          }
+        })
+      }
+
+      // 5. Notes / Inquiries
+      if (lead.message) {
         events.push({
-          id: `assignment-${idx}`,
-          type: "assignment",
-          title: `Assigned to ${assign.toOwnerName || "Staff Member"}`,
-          description: assign.reason
-            ? `Reason: ${assign.reason} (Previous: ${assign.fromOwnerName || "Unassigned"})`
-            : `Reassigned from ${assign.fromOwnerName || "Unassigned"}`,
-          actor: assign.assignedByName || "System",
-          timestamp: new Date(assign.assignedAt),
-          icon: User,
-          iconBg: "bg-emerald-100 text-emerald-600 border-emerald-200",
-          category: "assignment",
+          id: "event-note-primary",
+          type: "note",
+          title: "Inquiry / Note Added",
+          description: lead.message,
+          actor: lead.name || "Lead",
+          timestamp: new Date(lead.createdAt || Date.now()),
+          icon: MessageSquare,
+          iconBg: "bg-indigo-100 text-indigo-600 border-indigo-200",
+          category: "notes",
         })
-      })
-    }
-
-    // 4. Follow-up Activities
-    if (Array.isArray(followUps)) {
-      followUps.forEach((fu) => {
-        if (!fu) return
-        // Scheduled event
-        if (fu.createdAt) {
-          events.push({
-            id: `fu-created-${fu._id || fu.id}`,
-            type: "followup_scheduled",
-            title: `Follow-up Scheduled: ${fu.title || fu.type || "Call"}`,
-            description: `Scheduled for ${new Date(fu.scheduledAt).toLocaleString()} with priority ${
-              fu.priority || "medium"
-            }`,
-            actor: fu.assignedTo || "Staff",
-            timestamp: new Date(fu.createdAt),
-            icon: CalendarClock,
-            iconBg: "bg-amber-100 text-amber-600 border-amber-200",
-            category: "followup",
-          })
-        }
-        // Completed event
-        if (fu.status === "completed" && (fu.completedAt || fu.updatedAt)) {
-          events.push({
-            id: `fu-completed-${fu._id || fu.id}`,
-            type: "followup_completed",
-            title: `Follow-up Completed: ${fu.title || fu.type}`,
-            description: fu.outcomeNotes || fu.notes || "Marked as completed",
-            actor: fu.assignedTo || "Staff",
-            timestamp: new Date(fu.completedAt || fu.updatedAt),
-            icon: CheckCircle2,
-            iconBg: "bg-teal-100 text-teal-600 border-teal-200",
-            category: "followup",
-          })
-        }
-      })
-    }
-
-    // 5. Notes / Inquiries
-    if (lead.message) {
-      events.push({
-        id: "event-note-primary",
-        type: "note",
-        title: "Inquiry / Note Added",
-        description: lead.message,
-        actor: lead.name || "Lead",
-        timestamp: new Date(lead.createdAt || Date.now()),
-        icon: MessageSquare,
-        iconBg: "bg-indigo-100 text-indigo-600 border-indigo-200",
-        category: "notes",
-      })
+      }
     }
 
     // Sort descending by timestamp
     events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
 
     return events
-  }, [lead, followUps])
+  }, [lead, activities, followUps])
 
   const filteredTimeline = useMemo(() => {
     if (timelineFilter === "all") return activityTimeline
@@ -556,6 +784,9 @@ export default function LeadDetailDrawer({
             >
               <PhoneCall className="w-3.5 h-3.5" />
               <span>Calls & Recordings</span>
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+                {calls.length}
+              </span>
             </button>
 
             <button
@@ -605,7 +836,23 @@ export default function LeadDetailDrawer({
                   </span>
                 </div>
 
-                {filteredTimeline.length === 0 ? (
+                {loadingActivities && activities.length === 0 ? (
+                  <div className="py-12 text-center text-slate-500 space-y-2">
+                    <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                    <p className="text-xs font-medium">Loading timeline activities...</p>
+                  </div>
+                ) : activitiesError ? (
+                  <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-between">
+                    <span>{activitiesError}</span>
+                    <button
+                      type="button"
+                      onClick={fetchLeadActivities}
+                      className="px-2.5 py-1 bg-white border border-rose-300 rounded font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : filteredTimeline.length === 0 ? (
                   <div className="py-12 text-center text-slate-400 space-y-2">
                     <History className="w-8 h-8 mx-auto text-slate-300" />
                     <p className="text-xs font-medium">No activity events found for this filter</p>
@@ -788,26 +1035,223 @@ export default function LeadDetailDrawer({
               </div>
             )}
 
-            {/* TAB 4: CALLS & RECORDINGS (Empty state for Phase 19) */}
+            {/* TAB 4: CALLS & RECORDINGS (Phase 14) */}
             {activeTab === "calls" && (
-              <div className="py-12 text-center space-y-3 max-w-sm mx-auto">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center mx-auto shadow-2xs">
-                  <PhoneCall className="w-7 h-7" />
-                </div>
-                <h4 className="font-bold text-sm text-slate-900">Call Recordings & Telephony</h4>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  Call recording automation is planned for Phase 19. When agent phones record calls with this lead, audio playback and duration logs will appear here automatically.
-                </p>
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-left text-xs font-mono text-slate-600 space-y-1 mt-4">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Dialed Number:</span>
-                    <span className="font-bold">{lead?.phoneNormalized || lead?.phone || "—"}</span>
+              <div className="space-y-4">
+                {/* Header bar with count and Log Call toggle button */}
+                <div className="flex items-center justify-between bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <PhoneCall className="w-4 h-4 text-indigo-600" />
+                      <span>Telephony & Call Logs</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Target: <span className="font-mono font-semibold">{lead?.phoneNormalized || lead?.phone || "No phone"}</span>
+                    </p>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Retention Window:</span>
-                    <span>30 days MongoDB store</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowLogCallForm(!showLogCallForm)}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition cursor-pointer shadow-xs"
+                  >
+                    {showLogCallForm ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                    <span>{showLogCallForm ? "Cancel" : "Log Call"}</span>
+                  </button>
                 </div>
+
+                {/* Collapsible Log Call Form */}
+                {showLogCallForm && (
+                  <form
+                    onSubmit={handleLogCallSubmit}
+                    className="bg-indigo-50/40 p-4 rounded-xl border border-indigo-100 space-y-3 animate-in fade-in duration-200"
+                  >
+                    <div className="flex items-center justify-between border-b border-indigo-100/60 pb-2">
+                      <span className="text-xs font-bold text-indigo-900">Record a Call Interaction</span>
+                      <span className="text-[10px] text-slate-400">Updates lead timeline & last contact</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">Direction</label>
+                        <select
+                          value={callFormData.direction}
+                          onChange={(e) => setCallFormData({ ...callFormData, direction: e.target.value })}
+                          className="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="outbound">Outbound (Agent initiated)</option>
+                          <option value="inbound">Inbound (Client received)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">Duration (seconds)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={callFormData.duration}
+                          onChange={(e) => setCallFormData({ ...callFormData, duration: e.target.value })}
+                          className="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="60"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">Status</label>
+                        <select
+                          value={callFormData.status}
+                          onChange={(e) => setCallFormData({ ...callFormData, status: e.target.value })}
+                          className="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="completed">Completed (Connected)</option>
+                          <option value="busy">Busy</option>
+                          <option value="no-answer">No Answer</option>
+                          <option value="failed">Failed / Dropped</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">Disposition</label>
+                        <select
+                          value={callFormData.disposition}
+                          onChange={(e) => setCallFormData({ ...callFormData, disposition: e.target.value })}
+                          className="w-full text-xs rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="Interested">Interested / Qualified</option>
+                          <option value="Follow-up Required">Follow-up Required</option>
+                          <option value="Not Interested">Not Interested</option>
+                          <option value="Wrong Number">Wrong Number</option>
+                          <option value="Left Voicemail">Left Voicemail</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">Discussion Notes</label>
+                      <textarea
+                        rows={2}
+                        value={callFormData.notes}
+                        onChange={(e) => setCallFormData({ ...callFormData, notes: e.target.value })}
+                        placeholder="Add call outcome notes, customer feedback, next steps..."
+                        className="w-full text-xs rounded-lg border border-slate-300 bg-white p-2.5 font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowLogCallForm(false)}
+                        className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={submittingCall}
+                        className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs disabled:opacity-50"
+                      >
+                        {submittingCall ? "Saving..." : "Save Call Log"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Loading State */}
+                {loadingCalls && (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto text-indigo-500 mb-2" />
+                    Loading call interactions...
+                  </div>
+                )}
+
+                {/* Empty State */}
+                {!loadingCalls && calls.length === 0 && (
+                  <div className="py-10 text-center space-y-3 max-w-sm mx-auto">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto border border-indigo-100">
+                      <PhoneCall className="w-6 h-6" />
+                    </div>
+                    <h5 className="font-bold text-xs text-slate-800">No calls recorded yet</h5>
+                    <p className="text-[11px] text-slate-500">
+                      Log calls manually using the button above, or allow agent mobile devices to sync call logs automatically.
+                    </p>
+                  </div>
+                )}
+
+                {/* Call Logs List */}
+                {!loadingCalls && calls.length > 0 && (
+                  <div className="space-y-2.5">
+                    {calls.map((c) => {
+                      const isOutbound = c.direction === "outbound"
+                      const durationMinutes = Math.floor((c.duration || 0) / 60)
+                      const durationSeconds = (c.duration || 0) % 60
+                      const durationStr = durationMinutes > 0 ? `${durationMinutes}m ${durationSeconds}s` : `${durationSeconds}s`
+
+                      return (
+                        <div
+                          key={c._id || c.id}
+                          className="p-3.5 bg-white rounded-xl border border-slate-200 hover:border-slate-300 transition-colors shadow-2xs space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center space-x-2">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  isOutbound ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-blue-50 text-blue-700 border border-blue-200"
+                                }`}
+                              >
+                                {isOutbound ? <PhoneOutgoing className="w-3 h-3" /> : <PhoneIncoming className="w-3 h-3" />}
+                                <span className="capitalize">{c.direction}</span>
+                              </span>
+                              <span
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                  c.status === "completed"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : c.status === "busy"
+                                    ? "bg-amber-50 text-amber-700"
+                                    : "bg-rose-50 text-rose-700"
+                                }`}
+                              >
+                                {c.status}
+                              </span>
+                              {c.disposition && (
+                                <span className="text-[10px] font-medium bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200">
+                                  {c.disposition}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-500">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              <span>{durationStr}</span>
+                            </div>
+                          </div>
+
+                          {c.notes && (
+                            <p className="text-xs text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-100 font-sans leading-relaxed">
+                              {c.notes}
+                            </p>
+                          )}
+
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-100">
+                            <div className="flex items-center space-x-1.5">
+                              <User className="w-3 h-3 text-slate-400" />
+                              <span>{c.agentId?.name || "Agent"}</span>
+                            </div>
+                            <div className="flex items-center space-x-1.5">
+                              {c.recording?.status === "ready" ? (
+                                <span className="inline-flex items-center text-indigo-600 font-semibold gap-1">
+                                  <Mic className="w-3 h-3" /> Recording Available
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">No recording</span>
+                              )}
+                              <span>•</span>
+                              <span>{c.startedAt ? new Date(c.startedAt).toLocaleString() : "—"}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
 

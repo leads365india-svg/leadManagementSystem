@@ -574,6 +574,68 @@ const updateLead = async (req, res) => {
       { new: true, runValidators: true },
     )
 
+    // Phase 10: Record Activity Events for status changes, notes, and direct reassignments
+    const { activity } = require("../services/activityService")
+    const statusChanged = targetStatus !== undefined && targetStatus !== lead.status
+    const noteAdded = typeof message === "string" && message.trim() && message.trim() !== (lead.message || "").trim()
+    const directOwnerChanged = req.body.ownerId !== undefined && String(updates.ownerId || "") !== String(lead.ownerId || "")
+
+    if (statusChanged) {
+      try {
+        await activity.record({
+          tenantId: lead.tenantId,
+          leadId: lead._id,
+          type: "lead.status_changed",
+          actor: req.user,
+          payload: {
+            fromStatus: lead.status,
+            toStatus: targetStatus,
+          },
+          req,
+        })
+      } catch (actErr) {
+        console.error("Failed to record status_changed activity:", actErr.message)
+      }
+    }
+
+    if (noteAdded) {
+      try {
+        await activity.record({
+          tenantId: lead.tenantId,
+          leadId: lead._id,
+          type: "lead.note_added",
+          actor: req.user,
+          payload: {
+            note: message.trim(),
+          },
+          req,
+        })
+      } catch (actErr) {
+        console.error("Failed to record note_added activity:", actErr.message)
+      }
+    }
+
+    if (directOwnerChanged) {
+      try {
+        await activity.record({
+          tenantId: lead.tenantId,
+          leadId: lead._id,
+          type: "lead.owner_changed",
+          actor: req.user,
+          payload: {
+            fromOwnerId: lead.ownerId,
+            fromOwnerName: lead.assignedTo || "Unassigned",
+            toOwnerId: updates.ownerId || null,
+            toOwnerName: updates.assignedTo || "Unassigned",
+            reason: "Lead record update",
+          },
+          req,
+        })
+      } catch (actErr) {
+        console.error("Failed to record owner_changed activity:", actErr.message)
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: updatedLead,
@@ -929,10 +991,105 @@ const getUnassignedPoolStats = async (req, res) => {
   }
 }
 
+/**
+ * GET /api/leads/:id/activities
+ * Roadmap Phase 10: Lead Detail Drawer & Activity Timeline API
+ * Fetches chronological timeline activities for a lead within tenant boundaries.
+ */
+const getLeadActivities = async (req, res) => {
+  try {
+    const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid lead ID format",
+      })
+    }
+
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required to access lead activities.",
+      })
+    }
+
+    // Verify lead existence and tenant scope
+    const query = { _id: id }
+    if (!isSuperAdmin && effectiveTenantId) {
+      query.tenantId = effectiveTenantId
+    }
+
+    const lead = await Lead.findOne(query)
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        error: "Lead not found",
+      })
+    }
+
+    // RBAC Direct object access check: user can only view activities of leads in their view scope
+    const access = await checkDirectObjectAccess(req.user, lead, "leads", "view")
+    if (!access.allowed) {
+      return res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
+      })
+    }
+
+    const { activityService } = require("../services/activityService")
+    const { Activity } = require("../models/Activity")
+
+    const limitNum = Math.max(1, Math.min(100, Number(req.query.limit) || 50))
+    const pageNum = Math.max(1, Number(req.query.page) || 1)
+    const typeFilter = req.query.type && typeof req.query.type === "string" ? req.query.type.trim() : null
+
+    const activities = await activityService.getLeadActivities(id, {
+      tenantId: effectiveTenantId,
+      type: typeFilter,
+      limit: limitNum,
+      page: pageNum,
+    })
+
+    const countQuery = {
+      tenantId: effectiveTenantId,
+      leadId: id,
+      ...(typeFilter ? { type: typeFilter } : {}),
+    }
+    const total = await Activity.countDocuments(countQuery)
+    const totalPages = Math.ceil(total / limitNum)
+
+    res.status(200).json({
+      success: true,
+      data: {
+        activities,
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages,
+      },
+      activities,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages,
+    })
+  } catch (error) {
+    console.error("Error fetching lead activities:", error)
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    })
+  }
+}
+
 module.exports = {
   getLeads,
   createLead,
   getLeadById,
+  getLeadActivities,
   updateLead,
   deleteLead,
   getLeadStats,
@@ -940,3 +1097,4 @@ module.exports = {
   bulkAssignLeads,
   getUnassignedPoolStats,
 }
+

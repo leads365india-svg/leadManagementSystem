@@ -308,8 +308,34 @@ async function assignLead(leadId, targetOwnerId, { teamId = null, actor = null, 
     lead.assignmentHistory = []
   }
   lead.assignmentHistory.push(historyEntry)
-
   await lead.save()
+
+  // Phase 10: Record lead.owner_changed activity event
+  try {
+    const { activity } = require("./activityService")
+    await activity.record({
+      tenantId: cleanTenantId,
+      leadId: lead._id,
+      type: "lead.owner_changed",
+      actor: actor
+        ? {
+            id: actor._id || actor.id,
+            name: actor.name || "System",
+            email: actor.email || "",
+            role: actor.role || "user",
+          }
+        : { name: "System", role: "system" },
+      payload: {
+        fromOwnerId: prevOwnerId,
+        fromOwnerName: prevOwnerName,
+        toOwnerId: resolvedOwnerId,
+        toOwnerName: resolvedAssignedTo,
+        reason: reason || "Manual assignment",
+      },
+    })
+  } catch (actErr) {
+    console.error("Failed to record lead.owner_changed activity:", actErr.message)
+  }
 
   // Cascade to pending follow-ups: "Follow-ups follow the lead's owner unless explicitly assigned"
   await FollowUp.updateMany(
@@ -325,6 +351,20 @@ async function assignLead(leadId, targetOwnerId, { teamId = null, actor = null, 
       },
     },
   )
+
+  // Phase 15: Mobile lead assignment push notification
+  if (resolvedOwnerId) {
+    try {
+      const pushService = require("./pushService")
+      await pushService.sendLeadAssignedPush({
+        tenantId: cleanTenantId,
+        agentId: resolvedOwnerId,
+        lead,
+      })
+    } catch (pushErr) {
+      console.error("Failed to trigger mobile push notification for lead assignment:", pushErr.message)
+    }
+  }
 
   return {
     lead,
@@ -436,8 +476,32 @@ async function bulkAssignLeads({ leadIds = [], targetOwnerId = null, teamId = nu
       lead.assignmentHistory = []
     }
     lead.assignmentHistory.push(historyEntry)
-
     await lead.save()
+
+    // Phase 10: Record lead.owner_changed activity event
+    try {
+      const { activity } = require("./activityService")
+      await activity.record({
+        tenantId: cleanTenantId,
+        leadId: lead._id,
+        type: "lead.owner_changed",
+        actor: actor
+          ? {
+              id: actor._id || actor.id,
+              name: actor.name || "System",
+              email: actor.email || "",
+              role: actor.role || "user",
+            }
+          : { name: "System", role: "system" },
+        payload: {
+          fromOwnerId: prevOwnerId,
+          fromOwnerName: prevOwnerName,
+          toOwnerId: finalOwnerId,
+          toOwnerName: finalAssignedTo,
+          reason: finalReason || "Bulk reassignment",
+        },
+      })
+    } catch (_) {}
 
     // Cascade follow-ups
     await FollowUp.updateMany(
