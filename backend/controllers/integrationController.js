@@ -533,6 +533,7 @@ const receiveWebsiteLead = async (req, res) => {
 
   // Derived strictly from authenticated credential
   const tenantId = config.tenantId
+  let idempotencyKey = ""
 
   return await runWithTenantContext({ tenantId, isSuperAdmin: false }, async () => {
     try {
@@ -562,7 +563,7 @@ const receiveWebsiteLead = async (req, res) => {
     }
 
     // 3.5 Check Webhook Idempotency (prevent duplicate creates on automated retries)
-    const idempotencyKey = (
+    idempotencyKey = (
       req.headers["x-idempotency-key"] ||
       req.headers["idempotency-key"] ||
       req.body?.idempotencyKey ||
