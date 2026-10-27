@@ -1,15 +1,10 @@
-import CrmPlaceholderPage from "@/components/crm-placeholder-page"
+import StaffClient from "./staff-client"
 
 export const metadata = {
-  title: "Staff Management | LeadFlow CRM",
+  title: "Staff & Agent Management | Leads-365",
+  description: "Manage sales reps, managers, teams, and lead assignment capacity.",
 }
 
 export default function StaffPage() {
-  return (
-    <CrmPlaceholderPage
-      title="Staff"
-      category="Settings"
-      description="Manage sales reps, team leads, department assignments, agent working hours, and CRM seat licenses."
-    />
-  )
+  return <StaffClient />
 }

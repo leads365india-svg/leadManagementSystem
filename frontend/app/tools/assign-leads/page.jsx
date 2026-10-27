@@ -1,15 +1,11 @@
-import CrmPlaceholderPage from "@/components/crm-placeholder-page"
+import AssignLeadsClient from "./assign-leads-client"
 
 export const metadata = {
-  title: "Assign Leads | LeadFlow CRM",
+  title: "Lead Allocation & Assignment | Leads-365",
+  description: "Distribute leads across sales agents using automated routing rules, unassigned pool, or bulk reassignment.",
 }
 
 export default function AssignLeadsPage() {
-  return (
-    <CrmPlaceholderPage
-      title="Assign Leads"
-      category="Tools"
-      description="Distribute leads across sales agents using round-robin routing, territory rules, or manual reassignment."
-    />
-  )
+  return <AssignLeadsClient />
 }
+

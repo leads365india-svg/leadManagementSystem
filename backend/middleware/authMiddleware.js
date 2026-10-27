@@ -3,6 +3,84 @@ const User = require("../models/User")
 const Account = require("../models/Account")
 const RolePermission = require("../models/RolePermission")
 const Device = require("../models/Device")
+const { getEffectiveTenant, tenantStorage } = require("./tenantContext")
+
+const Role = require("../models/Role")
+const { ensureTenantRoles } = require("../models/Role")
+const { ALLOWED_PERMISSIONS } = require("../models/RolePermission")
+const {
+  hasPermission,
+  getUserScope,
+  scopeFilter,
+  checkDirectObjectAccess,
+  isPermissionCoveredByCeiling,
+} = require("../utils/rbacScope")
+
+// In-memory cache for tenant roles: Map<tenantId, { roles: Array, timestamp: number }>
+const tenantRoleCache = new Map()
+
+const getTenantRolesCached = async (tenantId) => {
+  if (!tenantId) return []
+  const now = Date.now()
+  const cached = tenantRoleCache.get(tenantId)
+  if (cached && now - cached.timestamp < 60000) {
+    return cached.roles
+  }
+  const roles = await ensureTenantRoles(tenantId)
+  tenantRoleCache.set(tenantId, {
+    roles,
+    timestamp: now,
+  })
+  return roles
+}
+
+const invalidateTenantRoleCache = (tenantId = null) => {
+  if (tenantId) {
+    tenantRoleCache.delete(tenantId)
+  } else {
+    tenantRoleCache.clear()
+  }
+}
+
+// Attach resolved permissions to user object
+const resolveUserPermissions = async (user) => {
+  let permissions = []
+  let roleName = user.role
+  let roleSlug = user.role
+
+  if (user.role === "super_admin") {
+    permissions = ALLOWED_PERMISSIONS
+    roleName = "Super Admin"
+  } else if (user.tenantId) {
+    if (user.role === "account_admin") {
+      const ceiling = await getCachedRolePermissions("account_admin")
+      permissions = ceiling
+      roleName = "Account Admin"
+      roleSlug = "account_admin"
+    } else {
+      const tenantRoles = await getTenantRolesCached(user.tenantId)
+      let userRoleDoc = null
+      if (user.roleId) {
+        userRoleDoc = tenantRoles.find(
+          (r) => (r.id || r._id)?.toString() === user.roleId.toString(),
+        )
+      }
+      if (!userRoleDoc) {
+        userRoleDoc = tenantRoles.find((r) => r.slug === user.role)
+      }
+      if (!userRoleDoc) {
+        userRoleDoc = tenantRoles.find((r) => r.slug === "agent")
+      }
+      if (userRoleDoc) {
+        permissions = userRoleDoc.permissions || []
+        roleName = userRoleDoc.name
+        roleSlug = userRoleDoc.slug
+      }
+    }
+  }
+
+  return { permissions, roleName, roleSlug }
+}
 
 const INSECURE_DEFAULT_SECRETS = [
   "leadflow-superadmin-secret-key-2026-secure",
@@ -14,21 +92,22 @@ const INSECURE_DEFAULT_SECRETS = [
 // Validate and retrieve JWT secret securely
 const getJwtSecret = () => {
   const secret = process.env.JWT_SECRET
-  const isProduction = process.env.NODE_ENV === "production"
+  const env = process.env.NODE_ENV
+  const isDevOrTest = env === "development" || env === "test"
 
-  if (isProduction) {
+  if (!isDevOrTest) {
     if (!secret || typeof secret !== "string" || !secret.trim()) {
-      throw new Error("FATAL: JWT_SECRET environment variable is missing or empty in production mode.")
+      throw new Error("FATAL: JWT_SECRET environment variable is missing or empty. Server refusing to start.")
     }
     if (INSECURE_DEFAULT_SECRETS.includes(secret.trim()) || secret.trim().length < 32) {
       throw new Error(
-        "FATAL: Insecure or weak JWT_SECRET configured in production. Must be at least 32 characters and not a known placeholder.",
+        "FATAL: Insecure or weak JWT_SECRET configured. Must be at least 32 characters and not a known placeholder.",
       )
     }
     return secret.trim()
   }
 
-  // Development / Test fallback
+  // Explicit Development / Test fallback
   return (secret && secret.trim()) || "leadflow-dev-secret-key-min32-chars-for-local-only"
 }
 
@@ -85,10 +164,22 @@ const authenticate = async (req, res, next) => {
       })
     }
 
-    if (user.status === "suspended") {
+    if (user.status === "suspended" || user.isActive === false) {
       return res.status(403).json({
         success: false,
-        error: "Your account is suspended. Please contact the administrator.",
+        error: "Your account is deactivated. Please contact your administrator.",
+      })
+    }
+
+    // Invalidate session if user tokenVersion has incremented (e.g., logout-all or deactivation)
+    if (
+      decoded.tokenVersion !== undefined &&
+      user.tokenVersion !== undefined &&
+      decoded.tokenVersion !== user.tokenVersion
+    ) {
+      return res.status(401).json({
+        success: false,
+        error: "Session has been invalidated. Please log in again.",
       })
     }
 
@@ -103,13 +194,20 @@ const authenticate = async (req, res, next) => {
       }
     }
 
+    const { permissions, roleName, roleSlug } = await resolveUserPermissions(user)
+
     req.user = {
       id: user._id.toString(),
       name: user.name,
       email: user.email,
       role: user.role,
+      roleSlug,
+      roleName,
       tenantId: user.tenantId,
       status: user.status,
+      teamId: user.teamId ? user.teamId.toString() : null,
+      managerId: user.managerId ? user.managerId.toString() : null,
+      permissions,
     }
 
     if (user.tenantId) {
@@ -119,17 +217,35 @@ const authenticate = async (req, res, next) => {
     // Check device revocation status if x-device-id header is provided
     const deviceIdHeader = req.headers["x-device-id"]
     if (deviceIdHeader) {
-      const device = await Device.findOne({ deviceId: deviceIdHeader.trim() }).lean()
-      if (device && device.status === "REVOKED") {
+      const device = await Device.findOne({
+        $or: [
+          { deviceId: deviceIdHeader.trim() },
+          { deviceUuid: deviceIdHeader.trim() },
+        ],
+      }).lean()
+      if (device && (device.status === "REVOKED" || device.status === "revoked")) {
         return res.status(403).json({
           success: false,
           error: "This device has been revoked by your agency administrator.",
           errorCode: "DEVICE_REVOKED",
+          code: "DEVICE_REVOKED",
         })
       }
     }
 
-    next()
+    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
+    const context = {
+      tenantId: tenantId || null,
+      isSuperAdmin,
+      userId: req.user.id,
+      userRole: req.user.role,
+      userEmail: req.user.email,
+    }
+    req.tenantContext = context
+
+    return tenantStorage.run(context, () => {
+      next()
+    })
   } catch (error) {
     res.status(401).json({
       success: false,
@@ -149,18 +265,45 @@ const optionalAuthenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, getJwtSecret())
     const user = await User.findById(decoded.id)
 
-    if (user && user.status !== "suspended") {
+    if (user && user.status !== "suspended" && user.isActive !== false) {
+      if (
+        decoded.tokenVersion !== undefined &&
+        user.tokenVersion !== undefined &&
+        decoded.tokenVersion !== user.tokenVersion
+      ) {
+        return next()
+      }
+      const { permissions, roleName, roleSlug } = await resolveUserPermissions(user)
+
       req.user = {
         id: user._id.toString(),
         name: user.name,
         email: user.email,
         role: user.role,
+        roleSlug,
+        roleName,
         tenantId: user.tenantId,
         status: user.status,
+        teamId: user.teamId ? user.teamId.toString() : null,
+        managerId: user.managerId ? user.managerId.toString() : null,
+        permissions,
       }
       if (user.tenantId) {
         req.tenantId = user.tenantId
       }
+      const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
+      const context = {
+        tenantId: tenantId || null,
+        isSuperAdmin,
+        userId: req.user.id,
+        userRole: req.user.role,
+        userEmail: req.user.email,
+      }
+      req.tenantContext = context
+
+      return tenantStorage.run(context, () => {
+        next()
+      })
     }
     next()
   } catch (error) {
@@ -193,11 +336,49 @@ const requireAccountAdmin = (req, res, next) => {
   next()
 }
 
-// Check specific permission key against configured permissions
-const checkPermission = (requiredPermission) => {
+// In-memory cache for role permissions (30-60 second TTL to prevent DB query on every request)
+let permissionCache = {
+  data: null,
+  timestamp: 0,
+}
+
+const getCachedRolePermissions = async (targetRole = "account_admin") => {
+  const now = Date.now()
+  if (permissionCache.data && now - permissionCache.timestamp < 60000) {
+    return permissionCache.data
+  }
+  const { getSuperAdminCeiling } = require("../models/RolePermission")
+  const activePermissions = await getSuperAdminCeiling()
+  permissionCache = {
+    data: activePermissions,
+    timestamp: now,
+  }
+  return activePermissions
+}
+
+const invalidatePermissionCache = () => {
+  permissionCache = {
+    data: null,
+    timestamp: 0,
+  }
+}
+
+// Automatically clear cache on any RolePermission update via Mongoose
+if (RolePermission && typeof RolePermission.onRolePermissionChange === "function") {
+  RolePermission.onRolePermissionChange(() => {
+    invalidatePermissionCache()
+    invalidateTenantRoleCache()
+  })
+}
+
+/**
+ * Reusable permission check middleware supporting RBAC v2 scopes and Super Admin ceiling.
+ * @param {string} requiredPermission e.g. "leads.view.own" or "leads.create"
+ * @param {Object} [options] { scope: "own" | "team" | "all" }
+ */
+const requirePermission = (requiredPermission, options = {}) => {
   return async (req, res, next) => {
     try {
-      // Require authentication for all protected CRM permission checks
       if (!req.user) {
         return res.status(401).json({
           success: false,
@@ -207,31 +388,61 @@ const checkPermission = (requiredPermission) => {
 
       // Super Admin always bypasses role-specific permission restrictions
       if (req.user.role === "super_admin") {
+        req.permissionScope = "all"
         return next()
       }
 
-      // Lookup active permissions configured for the role or default account_admin
-      const config =
-        (await RolePermission.findOne({ targetRole: req.user.role })) ||
-        (await RolePermission.findOne({ targetRole: "account_admin" }))
-      const activePermissions = config ? config.permissions : []
+      const permissionsToCheck = Array.isArray(requiredPermission)
+        ? requiredPermission
+        : [requiredPermission]
 
-      if (!activePermissions.includes(requiredPermission)) {
+      const ceiling = await getCachedRolePermissions("account_admin")
+
+      let anyAuthorized = false
+      let authorizedPermission = null
+
+      for (const perm of permissionsToCheck) {
+        if (ceiling && Array.isArray(ceiling)) {
+          if (!isPermissionCoveredByCeiling(perm, ceiling)) {
+            continue
+          }
+        }
+        if (hasPermission(req.user, perm, options.scope)) {
+          anyAuthorized = true
+          authorizedPermission = perm
+          break
+        }
+      }
+
+      if (!anyAuthorized) {
+        const primaryPerm = permissionsToCheck[0]
         return res.status(403).json({
           success: false,
-          error: `Permission denied. Missing required permission: '${requiredPermission}'`,
+          error: `Permission denied. Missing required permission: '${primaryPerm}'`,
         })
+      }
+
+      const parts = (authorizedPermission || permissionsToCheck[0]).split(".")
+      if (parts.length >= 2) {
+        const [resource, action] = parts
+        req.permissionScope = getUserScope(req.user.permissions || [], resource, action) || "own"
+      } else {
+        req.permissionScope = "all"
       }
 
       next()
     } catch (error) {
+      console.error("Permission check error:", error)
       res.status(500).json({ success: false, error: "Failed to verify permissions" })
     }
   }
 }
 
+// checkPermission is an alias to requirePermission for full backward compatibility
+const checkPermission = requirePermission
+
 // CSRF Protection Middleware for state-changing requests using cookie authentication
-const verifyCSRF = (allowedOrigins) => {
+const verifyCSRF = (allowedOrigins = []) => {
   return (req, res, next) => {
     const mutatingMethods = ["POST", "PUT", "PATCH", "DELETE"]
     if (!mutatingMethods.includes(req.method)) {
@@ -244,13 +455,26 @@ const verifyCSRF = (allowedOrigins) => {
     }
 
     if (req.cookies && (req.cookies.superadmin_token || req.cookies.client_token)) {
-      const origin = req.headers.origin || req.headers.referer
-      if (origin) {
-        const isAllowed = allowedOrigins.some((allowed) => origin.startsWith(allowed))
-        if (!isAllowed) {
+      const originHeader = req.headers.origin || req.headers.referer
+      if (originHeader) {
+        try {
+          // Exact-origin match check (parse with new URL(origin).origin) to block prefix-spoofed domains
+          const parsedOrigin = new URL(originHeader).origin
+          const isExplicitlyAllowed = allowedOrigins.includes(parsedOrigin)
+          const isDevLocalhost =
+            process.env.NODE_ENV !== "production" &&
+            /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(parsedOrigin)
+
+          if (!isExplicitlyAllowed && !isDevLocalhost) {
+            return res.status(403).json({
+              success: false,
+              error: "CSRF verification failed: Origin not allowed",
+            })
+          }
+        } catch (_) {
           return res.status(403).json({
             success: false,
-            error: "CSRF verification failed: Origin not allowed",
+            error: "CSRF verification failed: Malformed origin header",
           })
         }
       }
@@ -267,6 +491,14 @@ module.exports = {
   optionalAuthenticate,
   requireSuperAdmin,
   requireAccountAdmin,
+  requirePermission,
   checkPermission,
   verifyCSRF,
+  getCachedRolePermissions,
+  invalidatePermissionCache,
+  getTenantRolesCached,
+  invalidateTenantRoleCache,
+  resolveUserPermissions,
+  scopeFilter,
+  checkDirectObjectAccess,
 }

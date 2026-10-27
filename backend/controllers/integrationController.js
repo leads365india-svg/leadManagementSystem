@@ -3,6 +3,14 @@ const Lead = require("../models/Lead")
 const LeadFeedConfig = require("../models/LeadFeedConfig")
 const User = require("../models/User")
 const Account = require("../models/Account")
+const { Integration, ALLOWED_INTEGRATION_TYPES } = require("../models/Integration")
+const { LeadSource, seedDefaultSources, normalizeSource } = require("../models/LeadSource")
+const { IntegrationEvent } = require("../models/IntegrationEvent")
+const { runWithTenantContext } = require("../middleware/tenantContext")
+const leadService = require("../services/leadService")
+const integrationService = require("../services/integrationService")
+const audit = require("../services/auditService")
+const { generateApiKey, hashApiKey, maskSecret } = require("../utils/cryptoUtils")
 
 // Helper: Generate secure API credential
 const generateIntegrationKey = () => {
@@ -323,6 +331,28 @@ const updateWebsiteConfig = async (req, res) => {
 
     await config.save()
 
+    // Sync legacy config with Integration model
+    try {
+      await integrationService.syncLegacyToIntegration(config)
+    } catch (e) {
+      console.warn("Failed to sync legacy config to Integration model:", e.message)
+    }
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.INTEGRATION_CONFIG_UPDATE,
+      entity: "integration",
+      entityId: config._id,
+      summary: "Updated website lead feed integration configuration",
+      details: {
+        enabled: config.websiteSource.enabled,
+        assignedStaffName: config.websiteSource.assignedStaffName,
+        duplicateHandling: config.websiteSource.duplicateHandling,
+      },
+      req,
+    })
+
     res.status(200).json({
       success: true,
       message: "Lead feed settings saved successfully",
@@ -374,6 +404,35 @@ const rotateApiKey = async (req, res) => {
 
     await config.save()
 
+    // Sync rotated key with Integration model
+    try {
+      const integration = await Integration.findOne({ tenantId, type: "website" })
+      if (integration) {
+        integration.apiKeyHash = keyHash
+        integration.apiKeyMasked = maskedKey
+        integration.apiKeyLastRotatedAt = config.websiteSource.apiKeyLastRotatedAt
+        await integration.save()
+      } else {
+        await integrationService.syncLegacyToIntegration(config)
+      }
+    } catch (e) {
+      console.warn("Failed to sync rotated key to Integration model:", e.message)
+    }
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.INTEGRATION_KEY_ROTATE,
+      entity: "integration",
+      entityId: config._id,
+      summary: `Rotated website lead feed API key (${maskedKey})`,
+      details: {
+        maskedKey,
+        apiKeyLastRotatedAt: config.websiteSource.apiKeyLastRotatedAt,
+      },
+      req,
+    })
+
     res.status(200).json({
       success: true,
       message: "API key rotated successfully. The previous key has been immediately invalidated.",
@@ -391,6 +450,7 @@ const rotateApiKey = async (req, res) => {
     })
   }
 }
+
 
 /**
  * POST /api/integrations/settings/website/test
@@ -463,440 +523,426 @@ const sendTestLead = async (req, res) => {
 
 /**
  * POST /api/integrations/leads/website
- * Public Webhook: Ingest lead from website forms/integrations
+ * Public Webhook: Ingest lead from website forms/integrations via common pipeline
  */
 const receiveWebsiteLead = async (req, res) => {
-  let tenantId = null
-  let idempotencyKey = ""
+  const rawApiKey =
+    req.headers["x-api-key"] ||
+    (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7).trim()
+      : null)
+
+  const result = await integrationService.intakeWebhookPayload({
+    rawApiKey,
+    headers: req.headers,
+    body: req.body,
+    query: req.query,
+    ip: req.ip || req.headers["x-forwarded-for"] || "unknown",
+    async: req.headers["x-queue-async"] === "true" || req.query.async === "true",
+  })
+
+  return res.status(result.status || (result.success ? 200 : 400)).json(result)
+}
+
+/**
+ * GET /api/integrations
+ * Authenticated: List all integrations for current tenant
+ */
+const listIntegrations = async (req, res) => {
   try {
-    // 1. Authenticate via API key in header (x-api-key or Authorization Bearer)
-    const rawApiKey =
-      req.headers["x-api-key"] ||
-      (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")
-        ? req.headers.authorization.slice(7).trim()
-        : null)
+    const tenantId = req.user.tenantId
+    const { type, status } = req.query
+    const filter = { tenantId }
+    if (type) filter.type = type
+    if (status) filter.status = status
 
-    if (!rawApiKey) {
-      return res.status(401).json({
-        success: false,
-        error: "Missing API key. Provide credential via 'x-api-key' header or 'Authorization: Bearer <key>'",
-      })
+    // Auto-sync legacy website integration if none exist yet
+    const count = await Integration.countDocuments({ tenantId })
+    if (count === 0) {
+      await integrationService.migrateLegacyLeadFeedConfig(tenantId)
     }
 
-    // 2. Hash incoming credential for secure constant-time lookup
-    const incomingKeyHash = crypto.createHash("sha256").update(rawApiKey.trim()).digest("hex")
-
-    const config = await LeadFeedConfig.findOne({
-      "websiteSource.apiKeyHash": incomingKeyHash,
+    const integrations = await Integration.find(filter).sort({ createdAt: -1 })
+    return res.status(200).json({
+      success: true,
+      count: integrations.length,
+      data: integrations,
     })
+  } catch (error) {
+    console.error("Error listing integrations:", error)
+    return res.status(500).json({ success: false, error: "Failed to list integrations" })
+  }
+}
 
-    if (!config) {
-      return res.status(401).json({
-        success: false,
-        error: "Unauthorized: Invalid or revoked integration API key",
-      })
+/**
+ * POST /api/integrations
+ * Authenticated (requireAccountAdmin): Create a new integration connector
+ */
+const createIntegration = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const { name, type, fieldMapping, assignedRuleId, assignedStaffId, settings, credentials } = req.body
+
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ success: false, error: "Integration name is required" })
     }
-
-    // Derived strictly from authenticated credential
-    tenantId = config.tenantId
-
-    // Verify tenant account is active
-    const account = await Account.findOne({ accountId: tenantId }).lean()
-    if (account && account.status === "suspended") {
-      return res.status(403).json({
-        success: false,
-        error: "Website lead integration is currently disabled: Account is suspended.",
-      })
-    }
-
-    // 3. Verify that the website source is enabled
-    if (!config.websiteSource.enabled) {
-      // Record error on config stats
-      config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-      config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-      config.websiteSource.stats.lastReceivedAt = new Date()
-      config.websiteSource.stats.lastErrorAt = new Date()
-      config.websiteSource.stats.lastErrorMessage = "Integration disabled"
-      await config.save()
-
-      return res.status(403).json({
-        success: false,
-        error: "Website lead integration is currently disabled for this account",
-      })
-    }
-
-    // 3.5 Check Webhook Idempotency (prevent duplicate creates on automated retries)
-    idempotencyKey = (
-      req.headers["x-idempotency-key"] ||
-      req.headers["idempotency-key"] ||
-      req.body?.idempotencyKey ||
-      req.body?.submissionId ||
-      ""
-    ).toString().trim()
-
-    if (idempotencyKey) {
-      const existingIdempotentLead = await Lead.findOne({
-        tenantId,
-        "metadata.idempotencyKey": idempotencyKey,
-      }).lean()
-
-      if (existingIdempotentLead) {
-        return res.status(200).json({
-          success: true,
-          message: "Lead already received and processed (idempotent request)",
-          idempotent: true,
-          data: {
-            id: existingIdempotentLead._id.toString(),
-            name: existingIdempotentLead.name,
-            email: existingIdempotentLead.email,
-            phone: existingIdempotentLead.phone,
-            status: existingIdempotentLead.status,
-            assignedTo: existingIdempotentLead.assignedTo,
-            createdAt: existingIdempotentLead.createdAt,
-          },
-        })
-      }
-    }
-
-    // 4. Extract and sanitize incoming fields
-    const body = req.body || {}
-    const name = (body.name || body.fullName || body.full_name || body.contactName || "Website Lead").slice(0, 100).trim()
-    const rawEmail = (body.email || body.emailAddress || body.email_address || "").toLowerCase().trim()
-    const rawPhone = (body.phone || body.phoneNumber || body.phone_number || body.tel || body.mobile || "").trim()
-    const message = (body.message || body.notes || body.comment || body.inquiry || "").slice(0, 2000).trim()
-    const formId = (body.formId || body.form_id || body.formName || body.form_name || "").slice(0, 100).trim()
-    const landingPage = (body.landingPage || body.landing_page || body.pageUrl || body.page_url || req.headers.referer || "").slice(0, 500).trim()
-    const isTest = Boolean(body.isTest || body.is_test || req.query?.isTest === "true")
-    const verificationToken = (body.verificationToken || body.token || body.verification_token || "").trim()
-
-    // Validate email length
-    if (rawEmail && rawEmail.length > 255) {
+    if (!type || !ALLOWED_INTEGRATION_TYPES.includes(type)) {
       return res.status(400).json({
         success: false,
-        error: "Email address exceeds maximum length of 255 characters",
+        error: `Invalid integration type. Allowed: ${ALLOWED_INTEGRATION_TYPES.join(", ")}`,
       })
     }
 
-    // Validate phone number format if provided
-    const normalizedPhone = normalizePhone(rawPhone)
-    if (rawPhone && (normalizedPhone.replace(/[^\d]/g, "").length < 5 || normalizedPhone.length > 20)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid phone number format. Must contain between 5 and 20 digits.",
-      })
+    // Generate secure API key for the integration
+    const rawApiKey = generateApiKey()
+    const apiKeyHash = hashApiKey(rawApiKey)
+    const apiKeyMasked = maskSecret(rawApiKey)
+
+    let assignedStaffName = "Unassigned"
+    if (assignedStaffId && assignedStaffId !== "unassigned") {
+      const staff = await User.findOne({ _id: assignedStaffId, tenantId, status: "active" })
+      if (staff) assignedStaffName = staff.name
     }
 
-    // 5. Accepted Forms Filtering
-    const acceptedForms = config.websiteSource.acceptedForms || []
-    if (acceptedForms.length > 0) {
-      const isFormAllowed = acceptedForms.some(
-        (allowed) => allowed.toLowerCase() === formId.toLowerCase(),
-      )
-      if (!isFormAllowed) {
-        config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-        config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-        config.websiteSource.stats.lastReceivedAt = new Date()
-        config.websiteSource.stats.lastErrorAt = new Date()
-        config.websiteSource.stats.lastErrorMessage = `Form '${formId || "unknown"}' rejected by form rules`
-        await config.save()
-
-        return res.status(422).json({
-          success: false,
-          error: `Form '${formId || "unspecified"}' is not allowed for this integration`,
-        })
-      }
-    }
-
-    // 6. Blocked Domains Filtering
-    const blockedDomains = config.websiteSource.blockedDomains || []
-    if (rawEmail && isDomainBlocked(rawEmail, blockedDomains)) {
-      config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-      config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-      config.websiteSource.stats.lastReceivedAt = new Date()
-      config.websiteSource.stats.lastErrorAt = new Date()
-      config.websiteSource.stats.lastErrorMessage = "Submission rejected: Blocked email domain"
-      await config.save()
-
-      return res.status(422).json({
-        success: false,
-        error: "Submissions from this email domain are blocked by the account policy",
-      })
-    }
-
-    // 7. Email & Phone Requirement / Verification Rules
-    const verConfig = config.websiteSource.emailVerification || {}
-
-    // Check if phone-only leads are allowed when email is omitted
-    if (!rawEmail) {
-      if (!verConfig.allowPhoneOnly) {
-        return res.status(400).json({
-          success: false,
-          error: "An email address is required. Phone-only leads are not allowed by account settings.",
-        })
-      }
-      if (!rawPhone) {
-        return res.status(400).json({
-          success: false,
-          error: "Either a valid email address or phone number must be provided.",
-        })
-      }
-    }
-
-    // Check email verification rules
-    let isVerified = false
-    let verificationStatus = "unverified"
-
-    if (rawEmail) {
-      // Validate email format (supports all modern domain TLDs)
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/
-      if (!emailRegex.test(rawEmail)) {
-        return res.status(400).json({
-          success: false,
-          error: "Invalid email format",
-        })
-      }
-
-      // Cryptographically verify email token if provided using tenant's API key
-      const isStrict = Boolean(verConfig.strictVerification)
-      const tokenValid = await verifyEmailToken(rawEmail, verificationToken, rawApiKey, tenantId, isStrict)
-
-      if (verConfig.strictVerification) {
-        // Strict verification requires trusted cryptographic HMAC proof or signed OTP token
-        if (!tokenValid) {
-          config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-          config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-          config.websiteSource.stats.lastReceivedAt = new Date()
-          config.websiteSource.stats.lastErrorAt = new Date()
-          config.websiteSource.stats.lastErrorMessage = "Strict verification failed: Invalid or missing cryptographic token"
-          await config.save()
-
-          return res.status(422).json({
-            success: false,
-            error: "Strict verification failed: Trusted verification token or HMAC proof is missing or invalid.",
-          })
-        }
-        isVerified = true
-        verificationStatus = "trusted"
-      } else if (verConfig.requireVerifiedEmail) {
-        // Enforce verified email through trusted mechanism; do not trust client-supplied boolean
-        if (!tokenValid) {
-          config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-          config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-          config.websiteSource.stats.lastReceivedAt = new Date()
-          config.websiteSource.stats.lastErrorAt = new Date()
-          config.websiteSource.stats.lastErrorMessage = "Email verification required: Untrusted submission rejected"
-          await config.save()
-
-          return res.status(422).json({
-            success: false,
-            error: "Submission rejected: Only verified emails with a trusted verification token are accepted.",
-          })
-        }
-        isVerified = true
-        verificationStatus = "verified"
-      } else {
-        // If verification is not mandatory, mark as verified ONLY if trusted cryptographic proof was provided
-        if (tokenValid) {
-          isVerified = true
-          verificationStatus = "verified"
-        } else {
-          isVerified = false
-          verificationStatus = "unverified"
-        }
-      }
-    }
-
-    // Determine initial status based on hold rule
-    let leadStatus = "New"
-    if (verConfig.holdUntilConfirmed && !isVerified) {
-      leadStatus = "Engaged"
-      verificationStatus = "pending_confirmation"
-    }
-
-    // 8. Determine Assignment
-    let assignedStaffId = "unassigned"
-    let assignedTo = "Unassigned"
-
-    if (config.websiteSource.assignedStaffId && config.websiteSource.assignedStaffId !== "unassigned") {
-      const staffUser = await User.findOne({
-        _id: config.websiteSource.assignedStaffId,
-        tenantId,
-        status: "active",
-      })
-
-      if (staffUser) {
-        assignedStaffId = staffUser._id.toString()
-        assignedTo = staffUser.name
-      } else {
-        // Fallback: Selected staff member is no longer active or was removed
-        console.warn(`Staff ID ${config.websiteSource.assignedStaffId} unavailable for tenant ${tenantId}; falling back to Unassigned`)
-        assignedStaffId = "unassigned"
-        assignedTo = "Unassigned"
-      }
-    }
-
-    // 9. Lead Validation & Duplicate Handling (Tenant Scoped)
-    const duplicateHandling = config.websiteSource.duplicateHandling || "reject"
-
-    // Check for existing lead strictly in the caller's tenant
-    const orConditions = []
-    if (rawEmail) orConditions.push({ email: rawEmail })
-    if (normalizedPhone) orConditions.push({ phone: normalizedPhone })
-
-    let existingLead = null
-    if (orConditions.length > 0) {
-      existingLead = await Lead.findOne({
-        tenantId,
-        $or: orConditions,
-      })
-    }
-
-    if (existingLead) {
-      if (duplicateHandling === "reject") {
-        config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-        config.websiteSource.stats.totalErrors = (config.websiteSource.stats.totalErrors || 0) + 1
-        config.websiteSource.stats.lastReceivedAt = new Date()
-        config.websiteSource.stats.lastErrorAt = new Date()
-        config.websiteSource.stats.lastErrorMessage = "Duplicate lead rejected"
-        await config.save()
-
-        return res.status(409).json({
-          success: false,
-          duplicate: true,
-          error: "Duplicate lead detected: A lead with this email or phone number already exists in this account.",
-        })
-      } else if (duplicateHandling === "update") {
-        // Update existing lead without overwriting assignment
-        if (message) {
-          existingLead.message = existingLead.message
-            ? `${existingLead.message}\n[New Note ${new Date().toLocaleDateString()}]: ${message}`
-            : message
-        }
-        if (landingPage) existingLead.landingPage = landingPage
-        if (formId) existingLead.formId = formId
-        if (isVerified) {
-          existingLead.isEmailVerified = true
-          existingLead.verificationStatus = verificationStatus
-        }
-        await existingLead.save()
-
-        config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-        config.websiteSource.stats.totalSuccess = (config.websiteSource.stats.totalSuccess || 0) + 1
-        config.websiteSource.stats.lastReceivedAt = new Date()
-        config.websiteSource.stats.lastSuccessAt = new Date()
-        await config.save()
-
-        return res.status(200).json({
-          success: true,
-          message: "Existing lead record updated successfully",
-          leadId: existingLead._id.toString(),
-          updated: true,
-        })
-      }
-      // If duplicateHandling === "allow", proceed to create a new lead
-    }
-
-    // 10. Handle Test Leads
-    if (isTest) {
-      config.websiteSource.stats.lastReceivedAt = new Date()
-      config.websiteSource.stats.lastSuccessAt = new Date()
-      await config.save()
-
-      return res.status(200).json({
-        success: true,
-        message: "Test lead processed successfully. Integration pipeline verified.",
-        isTest: true,
-        leadPreview: {
-          name,
-          email: rawEmail,
-          phone: normalizedPhone,
-          status: leadStatus,
-          assignedTo,
-          tenantId,
-        },
-      })
-    }
-
-    // 11. Create and Persist Lead
-    const newLead = new Lead({
-      name,
-      email: rawEmail,
-      phone: normalizedPhone,
-      status: leadStatus,
+    const integration = new Integration({
       tenantId,
-      source: "Website",
-      assignedTo,
-      assignedStaffId,
-      message,
-      formId,
-      landingPage,
-      isEmailVerified: isVerified,
-      verificationStatus,
-      isTest: false,
-      metadata: {
-        receivedVia: "website_webhook",
-        submittedAt: new Date(),
-        ipAddress: req.ip || req.headers["x-forwarded-for"] || "unknown",
-        idempotencyKey: idempotencyKey || null,
-        verificationTokenHash: verificationToken
-          ? crypto.createHash("sha256").update(verificationToken.trim()).digest("hex")
-          : null,
-      },
+      name: name.trim(),
+      type,
+      status: "active",
+      apiKeyHash,
+      apiKeyMasked,
+      apiKeyLastRotatedAt: new Date(),
+      fieldMapping: Array.isArray(fieldMapping) ? fieldMapping : [],
+      assignedRuleId: assignedRuleId || null,
+      assignedStaffId: assignedStaffId || "unassigned",
+      assignedStaffName,
+      settings: settings || {},
     })
 
-    const savedLead = await newLead.save()
+    if (credentials && typeof credentials === "object") {
+      integration.setCredentials(credentials)
+    }
 
-    // Update stats
-    config.websiteSource.stats.totalReceived = (config.websiteSource.stats.totalReceived || 0) + 1
-    config.websiteSource.stats.totalSuccess = (config.websiteSource.stats.totalSuccess || 0) + 1
-    config.websiteSource.stats.lastReceivedAt = new Date()
-    config.websiteSource.stats.lastSuccessAt = new Date()
-    await config.save()
+    await integration.save()
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: "integration.create",
+      entity: "integration",
+      entityId: integration._id,
+      summary: `Created ${type} integration: ${name}`,
+      details: { type, name, apiKeyMasked },
+      req,
+    })
 
     return res.status(201).json({
       success: true,
-      message: "Lead received and created successfully",
+      message: "Integration created successfully",
+      rawApiKey, // Displayed only ONCE upon creation
+      data: integration,
+    })
+  } catch (error) {
+    console.error("Error creating integration:", error)
+    return res.status(500).json({ success: false, error: error.message || "Failed to create integration" })
+  }
+}
+
+/**
+ * GET /api/integrations/:id
+ * Authenticated: Retrieve single integration details
+ */
+const getIntegrationById = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const integration = await Integration.findOne({ _id: req.params.id, tenantId })
+    if (!integration) {
+      return res.status(404).json({ success: false, error: "Integration not found" })
+    }
+    return res.status(200).json({ success: true, data: integration })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: "Failed to get integration" })
+  }
+}
+
+/**
+ * PUT /api/integrations/:id
+ * Authenticated (requireAccountAdmin): Update integration settings
+ */
+const updateIntegration = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const integration = await Integration.findOne({ _id: req.params.id, tenantId })
+    if (!integration) {
+      return res.status(404).json({ success: false, error: "Integration not found" })
+    }
+
+    const { name, status, fieldMapping, assignedRuleId, assignedStaffId, settings, credentials } = req.body
+    if (name) integration.name = name.trim()
+    if (status && ["active", "inactive", "error"].includes(status)) integration.status = status
+    if (Array.isArray(fieldMapping)) integration.fieldMapping = fieldMapping
+    if (assignedRuleId !== undefined) integration.assignedRuleId = assignedRuleId || null
+    if (assignedStaffId !== undefined) {
+      integration.assignedStaffId = assignedStaffId
+      if (assignedStaffId && assignedStaffId !== "unassigned") {
+        const staff = await User.findOne({ _id: assignedStaffId, tenantId, status: "active" })
+        integration.assignedStaffName = staff ? staff.name : "Unassigned"
+      } else {
+        integration.assignedStaffName = "Unassigned"
+      }
+    }
+    if (settings && typeof settings === "object") {
+      integration.settings = { ...integration.settings, ...settings }
+    }
+    if (credentials && typeof credentials === "object") {
+      integration.setCredentials(credentials)
+    }
+
+    await integration.save()
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: "integration.update",
+      entity: "integration",
+      entityId: integration._id,
+      summary: `Updated integration: ${integration.name}`,
+      details: { name: integration.name, status: integration.status },
+      req,
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: "Integration updated successfully",
+      data: integration,
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || "Failed to update integration" })
+  }
+}
+
+/**
+ * POST /api/integrations/:id/rotate-key
+ * Authenticated (requireAccountAdmin): Rotate API key for integration
+ */
+const rotateIntegrationKey = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const integration = await Integration.findOne({ _id: req.params.id, tenantId })
+    if (!integration) {
+      return res.status(404).json({ success: false, error: "Integration not found" })
+    }
+
+    const rawApiKey = generateApiKey()
+    const apiKeyHash = hashApiKey(rawApiKey)
+    const apiKeyMasked = maskSecret(rawApiKey)
+
+    integration.apiKeyHash = apiKeyHash
+    integration.apiKeyMasked = apiKeyMasked
+    integration.apiKeyLastRotatedAt = new Date()
+    await integration.save()
+
+    // Sync legacy LeadFeedConfig if this is the website integration
+    if (integration.type === "website") {
+      const legacy = await LeadFeedConfig.findOne({ tenantId })
+      if (legacy) {
+        legacy.websiteSource.apiKeyHash = apiKeyHash
+        legacy.websiteSource.apiKeyMasked = apiKeyMasked
+        legacy.websiteSource.apiKeyLastRotatedAt = integration.apiKeyLastRotatedAt
+        await legacy.save()
+      }
+    }
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: audit.AUDIT_ACTIONS.INTEGRATION_KEY_ROTATE,
+      entity: "integration",
+      entityId: integration._id,
+      summary: `Rotated API key for integration ${integration.name} (${apiKeyMasked})`,
+      details: { apiKeyMasked },
+      req,
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: "API key rotated successfully. Previous key has been immediately invalidated.",
       data: {
-        id: savedLead._id.toString(),
-        name: savedLead.name,
-        email: savedLead.email,
-        phone: savedLead.phone,
-        status: savedLead.status,
-        assignedTo: savedLead.assignedTo,
-        createdAt: savedLead.createdAt,
+        rawApiKey,
+        apiKeyMasked,
+        apiKeyLastRotatedAt: integration.apiKeyLastRotatedAt,
       },
     })
   } catch (error) {
-    if (error.code === 11000 && idempotencyKey) {
-      // Race condition hit: concurrent request inserted first. Fetch and return idempotently.
-      try {
-        const recheckLead = await Lead.findOne({
-          tenantId,
-          "metadata.idempotencyKey": idempotencyKey,
-        }).lean()
-        if (recheckLead) {
-          return res.status(200).json({
-            success: true,
-            message: "Lead already received and processed (idempotent request)",
-            idempotent: true,
-            data: {
-              id: recheckLead._id.toString(),
-              name: recheckLead.name,
-              email: recheckLead.email,
-              phone: recheckLead.phone,
-              status: recheckLead.status,
-              assignedTo: recheckLead.assignedTo,
-              createdAt: recheckLead.createdAt,
-            },
-          })
-        }
-      } catch (_) {}
+    return res.status(500).json({ success: false, error: "Failed to rotate integration API key" })
+  }
+}
+
+/**
+ * DELETE /api/integrations/:id
+ * Authenticated (requireAccountAdmin): Deactivate integration
+ */
+const deleteIntegration = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const integration = await Integration.findOne({ _id: req.params.id, tenantId })
+    if (!integration) {
+      return res.status(404).json({ success: false, error: "Integration not found" })
     }
-    console.error("Error processing website lead ingestion:", error)
-    return res.status(500).json({
-      success: false,
-      error: "Internal server error while processing lead ingestion",
+
+    integration.status = "inactive"
+    integration.apiKeyHash = null
+    await integration.save()
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: "integration.deactivate",
+      entity: "integration",
+      entityId: integration._id,
+      summary: `Deactivated integration: ${integration.name}`,
+      req,
     })
+
+    return res.status(200).json({ success: true, message: "Integration deactivated successfully" })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: "Failed to delete integration" })
+  }
+}
+
+/**
+ * GET /api/integrations/sources
+ * Authenticated: List canonical sources and aliases for current tenant
+ */
+const listSources = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    let sources = await LeadSource.find({ tenantId }).sort({ isSystem: -1, name: 1 })
+    if (sources.length === 0) {
+      sources = await seedDefaultSources(tenantId)
+    }
+    return res.status(200).json({ success: true, count: sources.length, data: sources })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: "Failed to list lead sources" })
+  }
+}
+
+/**
+ * POST /api/integrations/sources
+ * Authenticated (requireAccountAdmin): Create or customize canonical source & aliases
+ */
+const upsertSource = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const { name, code, aliases, color, description, isActive } = req.body
+
+    if (!name || !code) {
+      return res.status(400).json({ success: false, error: "Name and code are required for lead source" })
+    }
+
+    const cleanCode = code.trim().toLowerCase().replace(/[\s\-]+/g, "_")
+    let source = await LeadSource.findOne({ tenantId, code: cleanCode })
+
+    if (source) {
+      source.name = name.trim()
+      if (Array.isArray(aliases)) source.aliases = aliases
+      if (color) source.color = color
+      if (description !== undefined) source.description = description
+      if (typeof isActive === "boolean") source.isActive = isActive
+      await source.save()
+    } else {
+      source = await LeadSource.create({
+        tenantId,
+        name: name.trim(),
+        code: cleanCode,
+        aliases: Array.isArray(aliases) ? aliases : [],
+        color: color || "#3b82f6",
+        description: description || "",
+        isActive: isActive !== false,
+        isSystem: false,
+      })
+    }
+
+    return res.status(200).json({ success: true, message: "Lead source saved successfully", data: source })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || "Failed to save lead source" })
+  }
+}
+
+/**
+ * GET /api/integrations/events
+ * Authenticated: List append-only integration events
+ */
+const listEvents = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const { status, integrationId, source, page = 1, limit = 20 } = req.query
+
+    const filter = { tenantId }
+    if (status) filter.status = status
+    if (integrationId) filter.integrationId = integrationId
+    if (source) filter.source = source
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1)
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20))
+    const skip = (pageNum - 1) * limitNum
+
+    const [events, total] = await Promise.all([
+      IntegrationEvent.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      IntegrationEvent.countDocuments(filter),
+    ])
+
+    return res.status(200).json({
+      success: true,
+      count: events.length,
+      total,
+      page: pageNum,
+      pages: Math.ceil(total / limitNum) || 1,
+      data: events,
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: "Failed to list integration events" })
+  }
+}
+
+/**
+ * POST /api/integrations/events/:id/replay
+ * Authenticated (requireAccountAdmin): Replay a past or failed integration event
+ */
+const replayIntegrationEvent = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const eventId = req.params.id
+
+    const replayResult = await integrationService.replayEvent(eventId, {
+      tenantId,
+      actor: req.user,
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: "Event replayed successfully",
+      data: replayResult,
+    })
+  } catch (error) {
+    return res.status(error.message.includes("not found") ? 404 : 500).json({
+      success: false,
+      error: error.message || "Failed to replay event",
+    })
+  }
+}
+
+/**
+ * POST /api/integrations/sync-legacy
+ * Authenticated (requireAccountAdmin): Trigger legacy migration sync
+ */
+const syncLegacyIntegrations = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const result = await integrationService.migrateLegacyLeadFeedConfig(tenantId)
+    return res.status(200).json({ success: true, message: "Legacy configurations synced", data: result })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: "Failed to sync legacy configurations" })
   }
 }
 
@@ -906,4 +952,16 @@ module.exports = {
   rotateApiKey,
   sendTestLead,
   receiveWebsiteLead,
+  listIntegrations,
+  createIntegration,
+  getIntegrationById,
+  updateIntegration,
+  rotateIntegrationKey,
+  deleteIntegration,
+  listSources,
+  upsertSource,
+  listEvents,
+  replayIntegrationEvent,
+  syncLegacyIntegrations,
 }
+

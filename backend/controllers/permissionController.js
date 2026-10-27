@@ -1,4 +1,5 @@
 const RolePermission = require("../models/RolePermission")
+const { invalidatePermissionCache } = require("../middleware/authMiddleware")
 const {
   PERMISSION_MODULES,
   ALLOWED_PERMISSIONS,
@@ -74,6 +75,9 @@ const updatePermissions = async (req, res) => {
       },
       { new: true, upsert: true, runValidators: true },
     )
+
+    // Invalidate permission cache so active servers immediately pick up the new permissions
+    invalidatePermissionCache()
 
     res.status(200).json({
       success: true,

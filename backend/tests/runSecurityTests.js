@@ -705,7 +705,7 @@ async function runAllSecurityTests() {
       if (leadTenantB) await Lead.findByIdAndDelete(leadTenantB._id)
       await Account.deleteMany({ companyName: { $in: ["Secure Enterprise Ltd", "Duplicate Test Co"] } })
       await User.deleteMany({ email: { $regex: TEST_TAG } })
-      await Lead.deleteMany({ email: { $regex: TEST_TAG } })
+      await Lead.deleteMany({ email: { $regex: TEST_TAG } }).setOptions({ skipTenantFilter: true })
       console.log("Cleanup completed.")
     } catch (cleanupErr) {
       console.error("Cleanup error:", cleanupErr)

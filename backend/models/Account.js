@@ -97,5 +97,6 @@ const accountSchema = new mongoose.Schema(
 )
 
 accountSchema.index({ status: 1, createdAt: -1 })
+accountSchema.index({ adminUserId: 1 })
 
 module.exports = mongoose.model("Account", accountSchema)

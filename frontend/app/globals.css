@@ -92,3 +92,50 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+/* Subtle custom scrollbar for dropdown menus (Requirement 6) */
+.custom-dropdown-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.custom-dropdown-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-dropdown-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-dropdown-scroll::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.custom-dropdown-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}
+
+/* Premium Login Loading Shimmer */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer,
+  .animate-spin,
+  .animate-pulse {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+

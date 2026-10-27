@@ -1,27 +1,32 @@
 const { Router } = require("express")
-const rateLimit = require("express-rate-limit")
-const { login, logout, getMe, getTenantInfo } = require("../controllers/authController")
+const {
+  login,
+  logout,
+  getMe,
+  getTenantInfo,
+  acceptInvite,
+  resetPasswordWithToken,
+  logoutAll,
+} = require("../controllers/authController")
 const { authenticate } = require("../middleware/authMiddleware")
+const { authLimiter } = require("../middleware/rateLimiters")
 
 const router = Router()
-
-// Rate limiting specifically for authentication endpoints to protect against brute-force
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // 20 attempts per 15 minutes per IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: "Too many login attempts. Please wait 15 minutes and try again.",
-  },
-})
 
 // POST /api/auth/login
 router.post("/login", authLimiter, login)
 
 // POST /api/auth/logout
 router.post("/logout", logout)
+
+// POST /api/auth/logout-all (Revoke all sessions)
+router.post("/logout-all", authenticate, logoutAll)
+
+// POST /api/auth/accept-invite (Invited staff set password)
+router.post("/accept-invite", authLimiter, acceptInvite)
+
+// POST /api/auth/reset-password (Reset password with one-time token)
+router.post("/reset-password", authLimiter, resetPasswordWithToken)
 
 // GET /api/auth/me
 router.get("/me", authenticate, getMe)

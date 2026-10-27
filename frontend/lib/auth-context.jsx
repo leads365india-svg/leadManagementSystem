@@ -1,7 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react"
-import { usePathname, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 
@@ -10,13 +10,14 @@ const AuthContext = createContext({
   status: "idle", // "idle" | "loading" | "authenticated" | "unauthenticated"
   loading: true,
   checkAuth: async () => {},
+  login: async () => {},
+  setSession: () => {},
   logout: async () => {},
 })
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [status, setStatus] = useState("loading")
-  const pathname = usePathname()
   const router = useRouter()
 
   const checkAuth = useCallback(async () => {
@@ -43,7 +44,38 @@ export function AuthProvider({ children }) {
     checkAuth()
   }, [checkAuth])
 
-  const logout = useCallback(async () => {
+  const setSession = useCallback((userData) => {
+    if (userData) {
+      setUser(userData)
+      setStatus("authenticated")
+    } else {
+      setUser(null)
+      setStatus("unauthenticated")
+    }
+  }, [])
+
+  const login = useCallback(async (credentials) => {
+    setStatus("loading")
+    try {
+      const response = await apiClient.login(credentials)
+      if (response.success && response.data?.user) {
+        setUser(response.data.user)
+        setStatus("authenticated")
+        return response
+      } else {
+        setUser(null)
+        setStatus("unauthenticated")
+        return response
+      }
+    } catch (err) {
+      setUser(null)
+      setStatus("unauthenticated")
+      throw err
+    }
+  }, [])
+
+  const logout = useCallback(async (targetRoute) => {
+    const roleAtLogout = user?.role
     try {
       await apiClient.logout()
       toast.success("Signed out successfully")
@@ -52,15 +84,20 @@ export function AuthProvider({ children }) {
     } finally {
       setUser(null)
       setStatus("unauthenticated")
-      router.push("/portal/login")
+      const destination =
+        targetRoute ||
+        (roleAtLogout === "super_admin" ? "/super-admin/login" : "/portal/login")
+      router.push(destination)
     }
-  }, [router])
+  }, [user, router])
 
   const value = {
     user,
     status,
     loading: status === "loading",
     checkAuth,
+    login,
+    setSession,
     logout,
   }
 

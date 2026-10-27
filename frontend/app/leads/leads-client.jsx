@@ -6,6 +6,7 @@ import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
+import LeadDetailDrawer from "@/components/lead-detail-drawer"
 import {
   Users,
   User,
@@ -528,7 +529,7 @@ export default function LeadsClient() {
     <>
       <Breadcrumb
         items={[
-          { label: "Dashboard", href: "/" },
+          { label: "Home", href: "/" },
           { label: "Leads", href: "/leads" },
           { label: displayTitle },
         ]}
@@ -1056,7 +1057,13 @@ export default function LeadsClient() {
                             {lead.name ? lead.name.charAt(0) : "L"}
                           </div>
                           <div>
-                            <p className="font-bold text-slate-900 truncate max-w-[180px]">{lead.name}</p>
+                            <p
+                              onClick={() => setActiveLeadDetails(lead)}
+                              className="font-bold text-slate-900 truncate max-w-[180px] hover:text-indigo-600 transition-colors cursor-pointer"
+                              title="Click to open Lead Drawer"
+                            >
+                              {lead.name}
+                            </p>
                             {lead.company ? (
                               <p className="text-[11px] text-indigo-600 font-medium truncate max-w-[180px] flex items-center gap-1">
                                 <Building2 className="w-3 h-3 text-indigo-500 shrink-0" />
@@ -1129,8 +1136,10 @@ export default function LeadsClient() {
 
                       {/* 7. Assigned To */}
                       <td className="py-3 px-4 whitespace-nowrap text-slate-600">
-                        {lead.assignedTo && lead.assignedTo !== "Unassigned" ? (
-                          <span className="font-medium text-slate-800">{lead.assignedTo}</span>
+                        {lead.ownerId?.name || (lead.assignedTo && lead.assignedTo !== "Unassigned") ? (
+                          <span className="font-medium text-slate-800">
+                            {lead.ownerId?.name || lead.assignedTo}
+                          </span>
                         ) : (
                           <span className="text-slate-400 italic">Unassigned</span>
                         )}
@@ -1251,264 +1260,36 @@ export default function LeadsClient() {
       </div>
 
       {/* =========================================================================
-          QUICK VIEW MODAL FOR LEAD DETAILS
+          LEAD DETAIL DRAWER & ACTIVITY TIMELINE (Phase 10)
       ========================================================================= */}
-      {activeLeadDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
-            onClick={() => setActiveLeadDetails(null)}
-          />
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg p-6 space-y-5 z-10 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm">
-                  {activeLeadDetails.name ? activeLeadDetails.name.charAt(0).toUpperCase() : "L"}
-                </div>
-                <div>
-                  <h3 className="font-bold text-base text-slate-900">{activeLeadDetails.name}</h3>
-                  <div className="flex items-center space-x-1 text-xs text-slate-500 font-mono">
-                    <span>#LD-{(activeLeadDetails._id || activeLeadDetails.id || "").slice(-6).toUpperCase()}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(activeLeadDetails._id || activeLeadDetails.id, "modal-id")}
-                      className="hover:text-slate-700 p-0.5"
-                    >
-                      {copiedId === "modal-id" ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveLeadDetails(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3.5 text-xs">
-              {/* Quick Stage Transition Buttons */}
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 col-span-2 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600 block font-semibold text-xs">Pipeline Stage Transition</span>
-                  <span className="text-[10px] text-slate-400">Click to advance stage</span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
-                  {ALL_STATUSES.map((statusOption) => {
-                    const isCurrent = activeLeadDetails.status === statusOption
-                    return (
-                      <button
-                        key={statusOption}
-                        type="button"
-                        disabled={isCurrent || updatingStatusId === (activeLeadDetails._id || activeLeadDetails.id)}
-                        onClick={() => handleQuickStatusChange(activeLeadDetails._id || activeLeadDetails.id, statusOption, activeLeadDetails.status)}
-                        className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer text-center ${
-                          isCurrent
-                            ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
-                            : "bg-white text-slate-700 hover:bg-slate-100 border-slate-200"
-                        } disabled:cursor-default`}
-                      >
-                        {statusOption === "Engaged" ? "Active" : statusOption === "Closed-Won" ? "Order Placed" : statusOption === "Closed-Lost" ? "Lost" : statusOption}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-slate-500 block font-medium mb-1">Status</span>
-                <span className="font-bold text-slate-800">{activeLeadDetails.status}</span>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-slate-500 block font-medium mb-1">Lead Source</span>
-                <span className="font-bold text-slate-800">{activeLeadDetails.source || "Website Form"}</span>
-              </div>
-              {activeLeadDetails.company && (
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 col-span-2">
-                  <span className="text-slate-500 block font-medium mb-1">Company / Organization</span>
-                  <div className="flex items-center space-x-1.5 text-slate-800 font-semibold">
-                    <Building2 className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>{activeLeadDetails.company}</span>
-                  </div>
-                </div>
-              )}
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-slate-500 block font-medium mb-1">Email Address</span>
-                <span className="font-mono text-slate-800 break-all">{activeLeadDetails.email || "—"}</span>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-slate-500 block font-medium mb-1">Phone Number</span>
-                <span className="font-mono text-slate-800">{activeLeadDetails.phone || "—"}</span>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 col-span-2">
-                <span className="text-slate-500 block font-medium mb-1">Assigned Representative</span>
-                <span className="text-slate-800 font-semibold">{activeLeadDetails.assignedTo || "Unassigned"}</span>
-              </div>
-              {activeLeadDetails.message && (
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 col-span-2">
-                  <span className="text-slate-500 block font-medium mb-1">Notes & Inquiries</span>
-                  <p className="text-slate-700 whitespace-pre-wrap">{activeLeadDetails.message}</p>
-                </div>
-              )}
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 col-span-2 flex justify-between items-center">
-                <div>
-                  <span className="text-slate-500 block font-medium text-[11px]">Created At</span>
-                  <span className="text-slate-800 font-mono text-[11px]">
-                    {activeLeadDetails.createdAt ? new Date(activeLeadDetails.createdAt).toLocaleString() : "—"}
-                  </span>
-                </div>
-                {activeLeadDetails.tenantId && (
-                  <div className="text-right">
-                    <span className="text-slate-500 block font-medium text-[11px]">Tenant Partition</span>
-                    <span className="font-mono text-indigo-700 font-semibold text-[11px]">{activeLeadDetails.tenantId}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Call Recordings & Telephony Activity Section */}
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 col-span-2 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <PhoneCall className="w-4 h-4 text-indigo-600" />
-                    <span className="text-slate-900 font-bold text-xs">Call History & Recordings</span>
-                  </div>
-                  <span className="text-[11px] font-semibold text-slate-500">
-                    {loadingCalls ? "Loading..." : `${leadCalls.length} ${leadCalls.length === 1 ? "Call" : "Calls"}`}
-                  </span>
-                </div>
-
-                {loadingCalls ? (
-                  <div className="py-4 text-center text-xs text-slate-500 flex items-center justify-center space-x-2">
-                    <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                    <span>Loading call history and recordings...</span>
-                  </div>
-                ) : leadCalls.length === 0 ? (
-                  <div className="py-3 text-center text-xs text-slate-400 bg-white rounded-lg border border-slate-100">
-                    No calls recorded yet for this lead.
-                  </div>
-                ) : (
-                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
-                    {leadCalls.map((call) => {
-                      const callId = call._id || call.clientCallId
-                      const hasRec = Boolean(call.hasRecording && (call.metadata?.recordingUrl || callId))
-                      const streamUrl = `/api/calls/${callId}/recording`
-                      const dateStr = call.startTimeMs ? new Date(call.startTimeMs).toLocaleString() : call.createdAt ? new Date(call.createdAt).toLocaleString() : ""
-
-                      return (
-                        <div key={callId} className="bg-white p-3 rounded-lg border border-slate-200 shadow-2xs space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${call.callDirection === "INCOMING" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
-                                {call.callDirection || "OUTBOUND"}
-                              </span>
-                              <span className="text-xs font-semibold text-slate-800">
-                                {call.phoneNumber || "Unknown"}
-                              </span>
-                              {call.durationSeconds > 0 && (
-                                <span className="text-[11px] text-slate-500 font-mono">
-                                  ({Math.floor(call.durationSeconds / 60)}m {call.durationSeconds % 60}s)
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-mono">{dateStr}</span>
-                          </div>
-
-                          {call.agentName && (
-                            <div className="text-[11px] text-slate-500">
-                              Agent: <span className="font-semibold text-slate-700">{call.agentName}</span>
-                              {call.callOutcome && <span className="ml-2">• Outcome: <span className="font-semibold text-slate-700">{call.callOutcome}</span></span>}
-                            </div>
-                          )}
-
-                          {hasRec ? (
-                            <div className="bg-slate-50 p-2.5 rounded-md border border-slate-200/80 space-y-1.5">
-                              <div className="flex items-center justify-between text-[11px]">
-                                <span className="inline-flex items-center space-x-1.5 text-emerald-700 font-semibold">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                  <span>Server Confirmed Recording</span>
-                                </span>
-                                {call.metadata?.recordingSizeBytes > 0 && (
-                                  <span className="text-slate-500 font-mono text-[10px]">
-                                    {(call.metadata.recordingSizeBytes / (1024 * 1024)).toFixed(2)} MB
-                                  </span>
-                                )}
-                              </div>
-                              <audio
-                                controls
-                                preload="metadata"
-                                className="w-full h-8 rounded"
-                                src={streamUrl}
-                                onError={(e) => {
-                                  const errEl = document.getElementById(`audio-err-${callId}`)
-                                  if (errEl) {
-                                    errEl.classList.remove('hidden')
-                                  }
-                                }}
-                              >
-                                Your browser does not support the audio element.
-                              </audio>
-                              <div id={`audio-err-${callId}`} className="hidden text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                                Unable to play audio stream. Please verify your login session and tenant permissions.
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-[11px] text-slate-400 italic">
-                              No recording uploaded for this call.
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => {
-                  setLeadToDelete(activeLeadDetails)
-                }}
-                className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Lead</span>
-              </button>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveLeadDetails(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-                <Link
-                  href={`/communication/follow-ups?leadId=${activeLeadDetails._id || activeLeadDetails.id}&action=schedule`}
-                  className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer"
-                >
-                  <CalendarClock className="w-3.5 h-3.5" />
-                  <span>Schedule Follow-up</span>
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleOpenEditModal(activeLeadDetails)
-                    setActiveLeadDetails(null)
-                  }}
-                  className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                  <span>Edit Lead</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <LeadDetailDrawer
+        isOpen={Boolean(activeLeadDetails)}
+        leadId={activeLeadDetails?._id || activeLeadDetails?.id}
+        initialLead={activeLeadDetails}
+        onClose={() => setActiveLeadDetails(null)}
+        onLeadUpdated={(updatedLead) => {
+          setActiveLeadDetails(updatedLead)
+          setLeadsData((prev) => {
+            if (!prev?.leads) return prev
+            const targetId = updatedLead._id || updatedLead.id
+            return {
+              ...prev,
+              leads: prev.leads.map((l) => {
+                const currentId = l._id || l.id
+                return currentId === targetId ? { ...l, ...updatedLead } : l
+              }),
+            }
+          })
+        }}
+        onEditLead={(leadToEdit) => {
+          handleOpenEditModal(leadToEdit)
+          setActiveLeadDetails(null)
+        }}
+        onDeleteLead={(leadToDelete) => {
+          setLeadToDelete(leadToDelete)
+          setActiveLeadDetails(null)
+        }}
+      />
 
       {/* =========================================================================
           IN-PLACE EDIT LEAD MODAL

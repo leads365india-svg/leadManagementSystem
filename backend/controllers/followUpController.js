@@ -7,22 +7,9 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-// Allowed sort fields
 const ALLOWED_SORT_FIELDS = ["scheduledAt", "createdAt", "updatedAt", "priority", "status", "type"]
-
-// Determine effective tenant partition
-const getEffectiveTenant = (req) => {
-  if (req.user?.role === "super_admin") {
-    const requestedTenant = typeof req.query?.tenantId === "string" ? req.query.tenantId.trim() : null
-    return { tenantId: requestedTenant, isSuperAdmin: true }
-  }
-
-  if (req.user?.tenantId) {
-    return { tenantId: req.user.tenantId, isSuperAdmin: false }
-  }
-
-  return { tenantId: null, isSuperAdmin: false }
-}
+const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { scopeFilter, checkDirectObjectAccess } = require("../utils/rbacScope")
 
 // Consistent transformation helper for follow-up responses
 const formatFollowUp = (f) => {
@@ -134,6 +121,14 @@ const getFollowUps = async (req, res) => {
       query.tenantId = effectiveTenantId
     }
 
+    // Apply RBAC scope filter (own / team / all)
+    const rbacQuery = await scopeFilter(req.user, "followups", "view")
+    if (rbacQuery._id !== undefined) {
+      query._id = rbacQuery._id // Fails closed if unauthorized
+    } else if (rbacQuery.$or) {
+      query.$or = rbacQuery.$or
+    }
+
     // Specific lead filter
     if (leadId && mongoose.Types.ObjectId.isValid(leadId)) {
       query.leadId = leadId
@@ -206,12 +201,19 @@ const getFollowUps = async (req, res) => {
       const matchingLeads = await Lead.find(leadSearchQuery).select("_id").lean()
       const matchingLeadIds = matchingLeads.map((l) => l._id)
 
-      query.$or = [
+      const searchConditions = [
         { title: { $regex: sanitized, $options: "i" } },
         { notes: { $regex: sanitized, $options: "i" } },
         { assignedTo: { $regex: sanitized, $options: "i" } },
         { leadId: { $in: matchingLeadIds } },
       ]
+
+      if (query.$or) {
+        query.$and = [{ $or: query.$or }, { $or: searchConditions }]
+        delete query.$or
+      } else {
+        query.$or = searchConditions
+      }
     }
 
     // Sorting
@@ -274,6 +276,13 @@ const getFollowUpStats = async (req, res) => {
       baseQuery.tenantId = effectiveTenantId
     } else if (isSuperAdmin && typeof req.query?.tenantId === "string") {
       baseQuery.tenantId = req.query.tenantId.trim()
+    }
+
+    const rbacQuery = await scopeFilter(req.user, "followups", "view")
+    if (rbacQuery._id !== undefined) {
+      baseQuery._id = rbacQuery._id
+    } else if (rbacQuery.$or) {
+      baseQuery.$or = rbacQuery.$or
     }
 
     const now = new Date()
@@ -357,6 +366,15 @@ const getFollowUpById = async (req, res) => {
       return
     }
 
+    const access = await checkDirectObjectAccess(req.user, followUp, "followups", "view")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
+      })
+      return
+    }
+
     const now = new Date()
     const isOverdue = followUp.status === "pending" && new Date(followUp.scheduledAt) < now
 
@@ -435,6 +453,15 @@ const createFollowUp = async (req, res) => {
       return
     }
 
+    const leadAccess = await checkDirectObjectAccess(req.user, lead, "leads", "view")
+    if (!leadAccess.allowed) {
+      res.status(403).json({
+        success: false,
+        error: leadAccess.reason || "Cannot create follow-up for a lead outside your assigned scope.",
+      })
+      return
+    }
+
     // Validate scheduledAt
     if (!scheduledAt) {
       res.status(400).json({
@@ -474,6 +501,9 @@ const createFollowUp = async (req, res) => {
       return
     }
 
+    const defaultAssignedTo = (assignedTo || lead.assignedTo || req.user.name || "Unassigned").trim()
+    const defaultAssignedStaffId = req.body.assignedStaffId || (req.user?.role === "agent" ? req.user.id : "unassigned")
+
     const followUp = new FollowUp({
       leadId: lead._id,
       tenantId: assignedTenant,
@@ -483,7 +513,8 @@ const createFollowUp = async (req, res) => {
       status: "pending",
       priority: normalizedPriority,
       notes: typeof notes === "string" ? notes.trim() : "",
-      assignedTo: (assignedTo || lead.assignedTo || req.user.name || "Unassigned").trim(),
+      assignedTo: defaultAssignedTo,
+      assignedStaffId: defaultAssignedStaffId,
       createdBy: req.user.name || req.user.email || "User",
     })
 
@@ -544,6 +575,15 @@ const updateFollowUp = async (req, res) => {
     const followUp = await FollowUp.findOne(query)
     if (!followUp) {
       res.status(404).json({ success: false, error: "Follow-up not found" })
+      return
+    }
+
+    const access = await checkDirectObjectAccess(req.user, followUp, "followups", "manage")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
+      })
       return
     }
 
@@ -658,6 +698,15 @@ const completeFollowUp = async (req, res) => {
       return
     }
 
+    const access = await checkDirectObjectAccess(req.user, followUp, "followups", "manage")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
+      })
+      return
+    }
+
     const completed = await FollowUp.findOneAndUpdate(
       query,
       {
@@ -718,11 +767,22 @@ const deleteFollowUp = async (req, res) => {
       query.tenantId = effectiveTenantId
     }
 
-    const deleted = await FollowUp.findOneAndDelete(query)
-    if (!deleted) {
+    const followUp = await FollowUp.findOne(query)
+    if (!followUp) {
       res.status(404).json({ success: false, error: "Follow-up not found" })
       return
     }
+
+    const access = await checkDirectObjectAccess(req.user, followUp, "followups", "manage")
+    if (!access.allowed) {
+      res.status(403).json({
+        success: false,
+        error: access.reason || "Access denied. Outside assigned scope.",
+      })
+      return
+    }
+
+    await FollowUp.findOneAndDelete({ _id: followUp._id })
 
     res.status(200).json({
       success: true,

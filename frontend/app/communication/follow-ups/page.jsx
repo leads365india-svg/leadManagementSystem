@@ -6,6 +6,7 @@ import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
+import LeadDetailDrawer from "@/components/lead-detail-drawer"
 import {
   PhoneCall,
   Calendar,
@@ -135,6 +136,7 @@ function FollowUpsContent() {
   const [searchInput, setSearchInput] = useState(currentSearch)
 
   // Modals state
+  const [activeDrawerLeadId, setActiveDrawerLeadId] = useState(null)
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
   const [scheduleForm, setScheduleForm] = useState({
     leadId: "",
@@ -584,7 +586,7 @@ function FollowUpsContent() {
     <>
       <Breadcrumb
         items={[
-          { label: "Dashboard", href: "/" },
+          { label: "Home", href: "/" },
           { label: "Communication", href: "/communication/call-reports" },
           { label: "Follow Ups" },
         ]}
@@ -949,9 +951,13 @@ function FollowUpsContent() {
                             {item.lead ? (
                               <div className="space-y-1">
                                 <div className="flex items-center space-x-2">
-                                  <span className="font-bold text-slate-900 text-xs hover:text-indigo-600 transition-colors">
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveDrawerLeadId(item.leadId || item.lead?._id || item.lead?.id)}
+                                    className="font-bold text-slate-900 text-xs hover:text-indigo-600 transition-colors text-left cursor-pointer"
+                                  >
                                     {item.lead.name}
-                                  </span>
+                                  </button>
                                   <span className={`px-2 py-0.2 rounded-full text-[9px] font-bold border ${leadBadgeClass}`}>
                                     {item.lead.status}
                                   </span>
@@ -1721,6 +1727,16 @@ function FollowUpsContent() {
           </div>
         </div>
       )}
+      {/* 6. Lead Detail Drawer Integration (Phase 10) */}
+      <LeadDetailDrawer
+        isOpen={Boolean(activeDrawerLeadId)}
+        leadId={activeDrawerLeadId}
+        onClose={() => setActiveDrawerLeadId(null)}
+        onLeadUpdated={() => {
+          fetchFollowUps()
+          fetchStats()
+        }}
+      />
     </>
   )
 }
