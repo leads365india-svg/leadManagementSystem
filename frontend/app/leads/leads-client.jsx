@@ -137,12 +137,43 @@ export default function LeadsClient() {
 
   // Modals state
   const [activeLeadDetails, setActiveLeadDetails] = useState(null)
+  const [leadCalls, setLeadCalls] = useState([])
+  const [loadingCalls, setLoadingCalls] = useState(false)
   const [editingLead, setEditingLead] = useState(null)
   const [leadToDelete, setLeadToDelete] = useState(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [editFormErrors, setEditFormErrors] = useState({})
   const [updatingStatusId, setUpdatingStatusId] = useState(null)
+
+  useEffect(() => {
+    const leadId = activeLeadDetails?._id || activeLeadDetails?.id
+    if (!leadId) {
+      setLeadCalls([])
+      return
+    }
+
+    let isMounted = true
+    setLoadingCalls(true)
+    apiClient
+      .getLeadCalls(leadId)
+      .then((res) => {
+        if (isMounted && res.success && Array.isArray(res.data)) {
+          setLeadCalls(res.data)
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load calls for lead:", err)
+        if (isMounted) setLeadCalls([])
+      })
+      .finally(() => {
+        if (isMounted) setLoadingCalls(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [activeLeadDetails])
 
   // Fetch lead statistics for live tab badges
   const fetchLeadStats = useCallback(async () => {
@@ -1332,6 +1363,104 @@ export default function LeadsClient() {
                   <div className="text-right">
                     <span className="text-slate-500 block font-medium text-[11px]">Tenant Partition</span>
                     <span className="font-mono text-indigo-700 font-semibold text-[11px]">{activeLeadDetails.tenantId}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Call Recordings & Telephony Activity Section */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 col-span-2 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <PhoneCall className="w-4 h-4 text-indigo-600" />
+                    <span className="text-slate-900 font-bold text-xs">Call History & Recordings</span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    {loadingCalls ? "Loading..." : `${leadCalls.length} ${leadCalls.length === 1 ? "Call" : "Calls"}`}
+                  </span>
+                </div>
+
+                {loadingCalls ? (
+                  <div className="py-4 text-center text-xs text-slate-500 flex items-center justify-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                    <span>Loading call history and recordings...</span>
+                  </div>
+                ) : leadCalls.length === 0 ? (
+                  <div className="py-3 text-center text-xs text-slate-400 bg-white rounded-lg border border-slate-100">
+                    No calls recorded yet for this lead.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                    {leadCalls.map((call) => {
+                      const callId = call._id || call.clientCallId
+                      const hasRec = Boolean(call.hasRecording && (call.metadata?.recordingUrl || callId))
+                      const streamUrl = `/api/calls/${callId}/recording`
+                      const dateStr = call.startTimeMs ? new Date(call.startTimeMs).toLocaleString() : call.createdAt ? new Date(call.createdAt).toLocaleString() : ""
+
+                      return (
+                        <div key={callId} className="bg-white p-3 rounded-lg border border-slate-200 shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${call.callDirection === "INCOMING" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
+                                {call.callDirection || "OUTBOUND"}
+                              </span>
+                              <span className="text-xs font-semibold text-slate-800">
+                                {call.phoneNumber || "Unknown"}
+                              </span>
+                              {call.durationSeconds > 0 && (
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                  ({Math.floor(call.durationSeconds / 60)}m {call.durationSeconds % 60}s)
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-mono">{dateStr}</span>
+                          </div>
+
+                          {call.agentName && (
+                            <div className="text-[11px] text-slate-500">
+                              Agent: <span className="font-semibold text-slate-700">{call.agentName}</span>
+                              {call.callOutcome && <span className="ml-2">• Outcome: <span className="font-semibold text-slate-700">{call.callOutcome}</span></span>}
+                            </div>
+                          )}
+
+                          {hasRec ? (
+                            <div className="bg-slate-50 p-2.5 rounded-md border border-slate-200/80 space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="inline-flex items-center space-x-1.5 text-emerald-700 font-semibold">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  <span>Server Confirmed Recording</span>
+                                </span>
+                                {call.metadata?.recordingSizeBytes > 0 && (
+                                  <span className="text-slate-500 font-mono text-[10px]">
+                                    {(call.metadata.recordingSizeBytes / (1024 * 1024)).toFixed(2)} MB
+                                  </span>
+                                )}
+                              </div>
+                              <audio
+                                controls
+                                preload="metadata"
+                                className="w-full h-8 rounded"
+                                src={streamUrl}
+                                onError={(e) => {
+                                  const errEl = document.getElementById(`audio-err-${callId}`)
+                                  if (errEl) {
+                                    errEl.classList.remove('hidden')
+                                  }
+                                }}
+                              >
+                                Your browser does not support the audio element.
+                              </audio>
+                              <div id={`audio-err-${callId}`} className="hidden text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                Unable to play audio stream. Please verify your login session and tenant permissions.
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-slate-400 italic">
+                              No recording uploaded for this call.
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>

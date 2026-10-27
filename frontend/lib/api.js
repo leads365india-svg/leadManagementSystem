@@ -93,6 +93,10 @@ class ApiClient {
     return this.request(`/leads/${id}`)
   }
 
+  async getLeadCalls(id) {
+    return this.request(`/leads/${id}/calls`)
+  }
+
   // --- Follow-ups Management Endpoints ---
   async getFollowUps(query = {}) {
     const searchParams = new URLSearchParams()

@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const RolePermission = require("../models/RolePermission")
+const Device = require("../models/Device")
 
 const INSECURE_DEFAULT_SECRETS = [
   "leadflow-superadmin-secret-key-2026-secure",
@@ -55,6 +56,9 @@ const extractToken = (req) => {
   const authHeader = req.headers.authorization
   if (authHeader && authHeader.startsWith("Bearer ")) {
     return authHeader.split(" ")[1]
+  }
+  if (req.query && req.query.token) {
+    return req.query.token
   }
   return null
 }
@@ -110,6 +114,19 @@ const authenticate = async (req, res, next) => {
 
     if (user.tenantId) {
       req.tenantId = user.tenantId
+    }
+
+    // Check device revocation status if x-device-id header is provided
+    const deviceIdHeader = req.headers["x-device-id"]
+    if (deviceIdHeader) {
+      const device = await Device.findOne({ deviceId: deviceIdHeader.trim() }).lean()
+      if (device && device.status === "REVOKED") {
+        return res.status(403).json({
+          success: false,
+          error: "This device has been revoked by your agency administrator.",
+          errorCode: "DEVICE_REVOKED",
+        })
+      }
     }
 
     next()
@@ -193,8 +210,10 @@ const checkPermission = (requiredPermission) => {
         return next()
       }
 
-      // If user is account_admin, lookup active permissions configured by Super Admin
-      const config = await RolePermission.findOne({ targetRole: "account_admin" })
+      // Lookup active permissions configured for the role or default account_admin
+      const config =
+        (await RolePermission.findOne({ targetRole: req.user.role })) ||
+        (await RolePermission.findOne({ targetRole: "account_admin" }))
       const activePermissions = config ? config.permissions : []
 
       if (!activePermissions.includes(requiredPermission)) {

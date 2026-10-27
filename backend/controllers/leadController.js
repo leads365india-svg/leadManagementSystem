@@ -1,5 +1,11 @@
 const mongoose = require("mongoose")
 const Lead = require("../models/Lead")
+const Call = require("../models/Call")
+const MobileSyncTombstone = require("../models/MobileSyncTombstone")
+const {
+  sendLeadAssignedNotification,
+  sendLeadReassignedAwayNotification,
+} = require("../services/pushNotificationService")
 
 // Helper to escape regex special characters and prevent ReDoS
 const escapeRegex = (str) => {
@@ -267,6 +273,7 @@ const createLead = async (req, res) => {
       phone: (phone || "").trim(),
       source: (source || "Manual Entry").trim(),
       assignedTo: (assignedTo || "Unassigned").trim(),
+      assignedStaffId: req.body.assignedStaffId && typeof req.body.assignedStaffId === "string" ? req.body.assignedStaffId.trim() : "unassigned",
       status: status || "New",
       message: typeof req.body.message === "string" ? req.body.message.trim() : "",
       metadata: leadMetadata,
@@ -274,6 +281,19 @@ const createLead = async (req, res) => {
     })
 
     const savedLead = await lead.save()
+
+    // Phase 10: Dispatch push notification if assigned to an agent
+    if (savedLead.assignedStaffId && savedLead.assignedStaffId !== "unassigned") {
+      try {
+        await sendLeadAssignedNotification({
+          lead: savedLead,
+          agentId: savedLead.assignedStaffId,
+          tenantId: savedLead.tenantId,
+        })
+      } catch (pushErr) {
+        console.warn("Failed to dispatch lead assigned push:", pushErr.message)
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -485,6 +505,7 @@ const updateLead = async (req, res) => {
     }
     if (source !== undefined) updates.source = typeof source === "string" && source.trim() ? source.trim() : "Website"
     if (assignedTo !== undefined) updates.assignedTo = typeof assignedTo === "string" && assignedTo.trim() ? assignedTo.trim() : "Unassigned"
+    if (req.body.assignedStaffId !== undefined) updates.assignedStaffId = typeof req.body.assignedStaffId === "string" ? req.body.assignedStaffId.trim() : "unassigned"
     if (message !== undefined) updates.message = typeof message === "string" ? message.trim() : ""
     if (req.body.company !== undefined) {
       const meta = getMetadataObject()
@@ -504,6 +525,73 @@ const updateLead = async (req, res) => {
       updates,
       { new: true, runValidators: true },
     )
+
+    // Record tombstone if lead was reassigned away from previous staff/agent
+    try {
+      const oldAssignedStaffId = lead.assignedStaffId
+      const oldAssignedTo = lead.assignedTo
+
+      if (
+        updates.assignedStaffId !== undefined &&
+        oldAssignedStaffId &&
+        oldAssignedStaffId !== "unassigned" &&
+        updates.assignedStaffId !== oldAssignedStaffId
+      ) {
+        await MobileSyncTombstone.create({
+          leadId: lead._id.toString(),
+          tenantId: lead.tenantId,
+          assignedStaffId: oldAssignedStaffId,
+          action: "reassigned",
+          timestamp: new Date(),
+        })
+
+        // Phase 10: Dispatch push to previous agent
+        try {
+          await sendLeadReassignedAwayNotification({
+            leadId: lead._id.toString(),
+            previousAgentId: oldAssignedStaffId,
+            tenantId: lead.tenantId,
+          })
+        } catch (pushErr) {
+          console.warn("Failed to dispatch reassigned-away push:", pushErr.message)
+        }
+      }
+
+      // Phase 10: Dispatch push to newly assigned agent
+      if (
+        updates.assignedStaffId !== undefined &&
+        updates.assignedStaffId &&
+        updates.assignedStaffId !== "unassigned" &&
+        updates.assignedStaffId !== oldAssignedStaffId
+      ) {
+        try {
+          await sendLeadAssignedNotification({
+            lead: updatedLead,
+            agentId: updates.assignedStaffId,
+            tenantId: lead.tenantId,
+          })
+        } catch (pushErr) {
+          console.warn("Failed to dispatch lead assigned push:", pushErr.message)
+        }
+      }
+
+      if (
+        updates.assignedTo !== undefined &&
+        oldAssignedTo &&
+        oldAssignedTo !== "Unassigned" &&
+        updates.assignedTo !== oldAssignedTo
+      ) {
+        await MobileSyncTombstone.create({
+          leadId: lead._id.toString(),
+          tenantId: lead.tenantId,
+          assignedStaffId: oldAssignedTo,
+          action: "reassigned",
+          timestamp: new Date(),
+        })
+      }
+    } catch (tombstoneErr) {
+      console.warn("Could not record mobile sync tombstone on lead reassignment:", tombstoneErr.message)
+    }
 
     res.status(200).json({
       success: true,
@@ -564,6 +652,31 @@ const deleteLead = async (req, res) => {
         error: "Lead not found",
       })
       return
+    }
+
+    // Record tombstone so mobile agents sync lead deletion
+    try {
+      const tombstoneStaffIds = []
+      if (lead.assignedStaffId && lead.assignedStaffId !== "unassigned") {
+        tombstoneStaffIds.push(lead.assignedStaffId)
+      }
+      if (lead.assignedTo && lead.assignedTo !== "Unassigned") {
+        tombstoneStaffIds.push(lead.assignedTo)
+      }
+      if (tombstoneStaffIds.length === 0) {
+        tombstoneStaffIds.push("all")
+      }
+      for (const staffId of tombstoneStaffIds) {
+        await MobileSyncTombstone.create({
+          leadId: lead._id.toString(),
+          tenantId: lead.tenantId,
+          assignedStaffId: staffId,
+          action: "deleted",
+          timestamp: new Date(),
+        })
+      }
+    } catch (tombstoneErr) {
+      console.warn("Could not record mobile sync tombstone on lead deletion:", tombstoneErr.message)
     }
 
     res.status(200).json({
@@ -648,10 +761,49 @@ const getLeadStats = async (req, res) => {
   }
 }
 
+/**
+ * GET /api/leads/:id/calls
+ * Retrieve call history and recording metadata for a specific lead
+ */
+const getLeadCalls = async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: "Valid lead id is required" })
+    }
+
+    const lead = await Lead.findById(id).lean()
+    if (!lead) {
+      return res.status(404).json({ success: false, error: "Lead not found" })
+    }
+
+    // Tenant boundary check
+    if (req.user.role !== "super_admin" && lead.tenantId !== req.user.tenantId) {
+      return res.status(403).json({ success: false, error: "Access denied. Cross-tenant access is prohibited." })
+    }
+
+    const calls = await Call.find({ leadId: id })
+      .sort({ startTimeMs: -1 })
+      .lean()
+
+    return res.status(200).json({
+      success: true,
+      data: calls,
+    })
+  } catch (error) {
+    console.error("Error in getLeadCalls:", error)
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error fetching lead calls",
+    })
+  }
+}
+
 module.exports = {
   getLeads,
   createLead,
   getLeadById,
+  getLeadCalls,
   updateLead,
   deleteLead,
   getLeadStats,
