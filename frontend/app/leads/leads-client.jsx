@@ -1,12 +1,16 @@
 "use client"
 
 import React, { useState, useEffect, useCallback, useMemo } from "react"
+import dynamic from "next/dynamic"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
-import LeadDetailDrawer from "@/components/lead-detail-drawer"
+
+const LeadDetailDrawer = dynamic(() => import("@/components/lead-detail-drawer"), {
+  ssr: false,
+})
 import {
   Users,
   User,

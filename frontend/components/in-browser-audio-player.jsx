@@ -1,0 +1,277 @@
+"use client"
+
+import React, { useState, useRef, useEffect, useCallback } from "react"
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+  AlertCircle,
+  Clock,
+  Sparkles,
+  Download,
+  Shield,
+  X,
+  RefreshCw,
+} from "lucide-react"
+
+/**
+ * Format seconds into mm:ss display
+ */
+function formatTime(seconds) {
+  if (isNaN(seconds) || seconds < 0) return "0:00"
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs < 10 ? "0" : ""}${secs}`
+}
+
+/**
+ * InBrowserAudioPlayer
+ * Roadmap Phase 19: Embedded authenticated GridFS audio streaming playback with seeking.
+ */
+export default function InBrowserAudioPlayer({
+  callId,
+  recording = {},
+  agentName = "Agent",
+  leadPhone = "",
+  direction = "outbound",
+  onClose = null,
+  compact = false,
+}) {
+  const audioRef = useRef(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [playbackRate, setPlaybackRate] = useState(1)
+  const [volume, setVolume] = useState(1)
+  const [isMuted, setIsMuted] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+  const audioStreamUrl = `${apiBaseUrl}/calls/${callId}/recording`
+
+  useEffect(() => {
+    setIsLoading(true)
+    setError(null)
+    setIsPlaying(false)
+    setCurrentTime(0)
+
+    const audio = audioRef.current
+    if (!audio) return
+
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration || 0)
+      setIsLoading(false)
+    }
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime || 0)
+    }
+
+    const handleEnded = () => {
+      setIsPlaying(false)
+      setCurrentTime(0)
+    }
+
+    const handleError = (e) => {
+      setIsLoading(false)
+      setIsPlaying(false)
+      console.warn("[AudioPlayback Error]:", e)
+      // Check HTTP error status if possible
+      setError("Unable to stream audio recording. It may be restricted by privacy policy or expired.")
+    }
+
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata)
+    audio.addEventListener("timeupdate", handleTimeUpdate)
+    audio.addEventListener("ended", handleEnded)
+    audio.addEventListener("error", handleError)
+
+    return () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata)
+      audio.removeEventListener("timeupdate", handleTimeUpdate)
+      audio.removeEventListener("ended", handleEnded)
+      audio.removeEventListener("error", handleError)
+      audio.pause()
+    }
+  }, [callId])
+
+  const togglePlay = () => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    if (isPlaying) {
+      audio.pause()
+      setIsPlaying(false)
+    } else {
+      audio.play().then(() => {
+        setIsPlaying(true)
+        setError(null)
+      }).catch((err) => {
+        console.error("Playback start error:", err)
+        setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+      })
+    }
+  }
+
+  const handleSeek = (e) => {
+    const newTime = parseFloat(e.target.value)
+    setCurrentTime(newTime)
+    if (audioRef.current) {
+      audioRef.current.currentTime = newTime
+    }
+  }
+
+  const handleSkipBack = () => {
+    if (audioRef.current) {
+      audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10)
+    }
+  }
+
+  const cycleSpeed = () => {
+    const speeds = [1, 1.25, 1.5, 2]
+    const nextIdx = (speeds.indexOf(playbackRate) + 1) % speeds.length
+    const nextRate = speeds[nextIdx]
+    setPlaybackRate(nextRate)
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate
+    }
+  }
+
+  const toggleMute = () => {
+    if (audioRef.current) {
+      audioRef.current.muted = !isMuted
+      setIsMuted(!isMuted)
+    }
+  }
+
+  // Calculate days until expiration
+  const daysUntilExpiry = recording?.expiresAt
+    ? Math.max(0, Math.ceil((new Date(recording.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)))
+    : 30
+
+  return (
+    <div
+      className={`rounded-2xl transition-all duration-200 border ${
+        compact
+          ? "bg-slate-900 text-white p-3 border-slate-800 shadow-md"
+          : "bg-slate-900/95 backdrop-blur-md text-white p-4 border-slate-800 shadow-xl"
+      }`}
+    >
+      <audio
+        ref={audioRef}
+        src={audioStreamUrl}
+        preload="metadata"
+        crossOrigin="use-credentials"
+      />
+
+      {/* Header Info */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center space-x-2">
+          <div className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">
+            <Sparkles className="w-3.5 h-3.5" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+              <span>Recording: {leadPhone || "Lead Call"}</span>
+              <span className="text-[10px] text-slate-400 font-mono">({agentName})</span>
+            </div>
+            <div className="text-[10px] text-slate-400 flex items-center gap-2">
+              <span className="capitalize">{direction} Call</span>
+              <span>•</span>
+              <span className="text-amber-400">Retained {daysUntilExpiry}d remaining</span>
+            </div>
+          </div>
+        </div>
+
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Error state */}
+      {error && (
+        <div className="my-2 p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Waveform / Progress Slider */}
+      <div className="space-y-1 my-2">
+        <input
+          type="range"
+          min={0}
+          max={duration || 100}
+          step={0.1}
+          value={currentTime}
+          onChange={handleSeek}
+          disabled={isLoading || Boolean(error)}
+          className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 disabled:opacity-40"
+        />
+        <div className="flex justify-between text-[10px] font-mono text-slate-400">
+          <span>{formatTime(currentTime)}</span>
+          <span>{formatTime(duration)}</span>
+        </div>
+      </div>
+
+      {/* Player Controls Bar */}
+      <div className="flex items-center justify-between pt-1">
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={handleSkipBack}
+            disabled={isLoading || Boolean(error)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition disabled:opacity-40"
+            title="Rewind 10 seconds"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={togglePlay}
+            disabled={isLoading && !error}
+            className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition shadow-sm flex items-center justify-center disabled:opacity-50"
+            title={isPlaying ? "Pause" : "Play Recording"}
+          >
+            {isLoading && !error ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="w-4 h-4 fill-current" />
+            ) : (
+              <Play className="w-4 h-4 fill-current ml-0.5" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={cycleSpeed}
+            className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold font-mono transition"
+            title="Playback Speed"
+          >
+            {playbackRate}x
+          </button>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={toggleMute}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            title={isMuted ? "Unmute" : "Mute"}
+          >
+            {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -708,6 +708,18 @@ const deleteLead = async (req, res) => {
 
     await Lead.findOneAndDelete({ _id: lead._id })
 
+    // Phase 18 Erasure: Purge all call recordings immediately upon lead deletion
+    try {
+      const privacyService = require("../services/privacyService")
+      await privacyService.eraseLeadRecordings({
+        tenantId: lead.tenantId,
+        leadId: lead._id,
+        actor: req.user,
+      })
+    } catch (eraseErr) {
+      console.warn("Notice: lead recording erasure error:", eraseErr.message)
+    }
+
     const maskedPhone = lead.phone
       ? (lead.phone.length > 5 ? `${lead.phone.slice(0, 3)}••••${lead.phone.slice(-4)}` : "••••")
       : null

@@ -2,6 +2,7 @@ const mongoose = require("mongoose")
 const Call = require("../models/Call")
 const Device = require("../models/Device")
 const callService = require("../services/callService")
+const recordingStorage = require("../services/recordingStorage")
 const { checkDirectObjectAccess } = require("../utils/rbacScope")
 const audit = require("../services/auditService")
 
@@ -364,6 +365,106 @@ const updateDeviceStatus = async (req, res) => {
   }
 }
 
+/**
+ * PUT /api/calls/:id/recording
+ * Streams an audio recording into GridFS for a verified CRM lead call.
+ */
+const uploadCallRecording = async (req, res) => {
+  try {
+    const callId = req.params.id
+    const tenantId = req.user?.tenantId || req.tenantId
+    const user = req.user
+    const mimeType = req.headers["content-type"] || "audio/mp4"
+    const expectedSha256 = req.headers["x-audio-sha256"] || req.headers["x-sha256"] || null
+    const filename = req.headers["x-filename"] || null
+    const contentLength = parseInt(req.headers["content-length"], 10) || 0
+    const retentionDays = parseInt(process.env.RECORDING_RETENTION_DAYS, 10) || 30
+
+    const result = await recordingStorage.streamUpload({
+      callId,
+      tenantId,
+      user,
+      readStream: req,
+      mimeType,
+      filename,
+      contentLength,
+      expectedSha256,
+      retentionDays,
+    })
+
+    return res.status(result.isDuplicate ? 200 : 201).json({
+      success: true,
+      message: result.message,
+      data: result,
+    })
+  } catch (err) {
+    console.error("[CallController Upload Recording Error]:", err.message)
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      error: err.message,
+      code: err.code || "RECORDING_UPLOAD_FAILED",
+    })
+  }
+}
+
+/**
+ * GET /api/calls/:id/recording
+ * Streams audio recording from GridFS with HTTP Range request support for seeking.
+ */
+const playCallRecording = async (req, res) => {
+  try {
+    const callId = req.params.id
+    const tenantId = req.user?.tenantId || req.tenantId
+    const user = req.user
+    const rangeHeader = req.headers.range
+
+    await recordingStorage.streamPlayback({
+      callId,
+      tenantId,
+      user,
+      rangeHeader,
+      res,
+    })
+  } catch (err) {
+    console.error("[CallController Playback Error]:", err.message)
+    if (!res.headersSent) {
+      return res.status(err.statusCode || 500).json({
+        success: false,
+        error: err.message,
+      })
+    }
+  }
+}
+
+/**
+ * POST /api/calls/recordings/purge
+ * Purges recordings older than retention window (default 30 days) from GridFS.
+ */
+const purgeRecordings = async (req, res) => {
+  try {
+    const isSuperAdmin = req.user?.role === "super_admin"
+    const tenantId = isSuperAdmin ? (req.body?.tenantId || null) : req.user.tenantId
+    const retentionDays = req.body?.retentionDays || parseInt(process.env.RECORDING_RETENTION_DAYS, 10) || 30
+
+    const result = await recordingStorage.purgeExpiredRecordings({
+      tenantId,
+      retentionDays,
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: `Purged ${result.purgedCount} expired recording(s)`,
+      data: result,
+    })
+  } catch (err) {
+    console.error("[CallController Purge Error]:", err.message)
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      error: err.message,
+    })
+  }
+}
+
 module.exports = {
   createCallLog,
   getCallLogs,
@@ -373,4 +474,7 @@ module.exports = {
   listDevices,
   registerDevice,
   updateDeviceStatus,
+  uploadCallRecording,
+  playCallRecording,
+  purgeRecordings,
 }

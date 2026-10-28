@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import Breadcrumb from "@/components/breadcrumb"
 import {
   Users,
@@ -25,6 +26,7 @@ import {
 
 export default function HomePage() {
   const router = useRouter()
+  const { user: authUser } = useAuth()
   const [stats, setStats] = useState({
     total: 0,
     statusCounts: {
@@ -38,32 +40,30 @@ export default function HomePage() {
   })
 
   const [recentLeads, setRecentLeads] = useState([])
-  const [user, setUser] = useState(null)
+  const [user, setUser] = useState(authUser || null)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (authUser) {
+      if (authUser.role === "super_admin") {
+        router.replace("/super-admin")
+        return
+      }
+      setUser(authUser)
+    }
+  }, [authUser, router])
 
   useEffect(() => {
     let isMounted = true
 
     const loadData = async () => {
       try {
-        const [meRes, statsRes, leadsRes] = await Promise.allSettled([
-          apiClient.getMe(),
+        const [statsRes, leadsRes] = await Promise.allSettled([
           apiClient.getLeadStats(),
           apiClient.getLeads({ limit: 5, sortBy: "createdAt", sortOrder: "desc" }),
         ])
 
         if (isMounted) {
-          if (meRes.status === "fulfilled" && meRes.value?.success && meRes.value.data?.user) {
-            const authUser = meRes.value.data.user
-            if (authUser.role === "super_admin") {
-              router.replace("/super-admin")
-              return
-            }
-            if (authUser.role === "account_admin") {
-              setUser(authUser)
-            }
-          }
-
           if (statsRes.status === "fulfilled" && statsRes.value?.success && statsRes.value.data) {
             setStats(statsRes.value.data)
           }
@@ -88,8 +88,9 @@ export default function HomePage() {
     }
   }, [])
 
-  const clientName = user?.name || user?.username || null
-  const companyName = user?.account?.companyName || user?.account?.displayName || (user?.tenantId ? `Account ${user.tenantId}` : null)
+  const effectiveUser = user || authUser
+  const clientName = effectiveUser?.name || effectiveUser?.username || null
+  const companyName = effectiveUser?.account?.companyName || effectiveUser?.account?.displayName || (effectiveUser?.tenantId ? `Account ${effectiveUser.tenantId}` : null)
 
   return (
     <>

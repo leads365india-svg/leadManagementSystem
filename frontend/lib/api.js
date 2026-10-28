@@ -243,6 +243,18 @@ class ApiClient {
     })
   }
 
+  async rotateLeadFeedSiteKey() {
+    return this.request("/integrations/settings/website/rotate-site-key", {
+      method: "POST",
+    })
+  }
+
+  async sendLeadFeedTest() {
+    return this.request("/integrations/settings/website/test", {
+      method: "POST",
+    })
+  }
+
   // --- Phase 11 Integration Core & Source Registry ---
   async getIntegrations(query = {}) {
     const searchParams = new URLSearchParams()
@@ -338,6 +350,16 @@ class ApiClient {
     })
   }
 
+  async getMetaStatus() {
+    const res = await this.request("/integrations?type=meta")
+    const integrations = res?.data || res?.integrations || []
+    return {
+      success: true,
+      configured: integrations.length > 0,
+      integration: integrations[0] || null,
+    }
+  }
+
   // --- Phase 13: IndiaMART Integration Endpoints ---
   async connectIndiaMartIntegration(payload) {
     return this.request("/integrations/indiamart/connect", {
@@ -350,10 +372,38 @@ class ApiClient {
     return this.request("/integrations/indiamart/status")
   }
 
+  async getIndiaMARTStatus() {
+    return this.request("/integrations/indiamart/status")
+  }
+
   async triggerIndiaMartSync(id, options = {}) {
     return this.request(`/integrations/indiamart/${id}/sync`, {
       method: "POST",
       body: JSON.stringify(options),
+    })
+  }
+
+  // --- Phase 23: Google Ads Lead Form Webhook Endpoints ---
+  async getGoogleAdsStatus() {
+    return this.request("/integrations/google/status")
+  }
+
+  async connectGoogleAdsIntegration(payload) {
+    return this.request("/integrations/google/connect", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async rotateGoogleAdsKey() {
+    return this.request("/integrations/google/rotate-key", {
+      method: "POST",
+    })
+  }
+
+  async sendGoogleAdsTestLead() {
+    return this.request("/integrations/google/test", {
+      method: "POST",
     })
   }
 
@@ -631,6 +681,79 @@ class ApiClient {
     return this.request(`/mobile/calls/${callId}/recording-ticket`, {
       method: "POST",
     })
+  }
+
+  // --- Phase 18: Privacy & Do-Not-Record Endpoints ---
+  async getDnrRules() {
+    return this.request("/privacy/dnr")
+  }
+
+  async addDnrRule(payload) {
+    return this.request("/privacy/dnr", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async removeDnrRule(ruleId) {
+    return this.request(`/privacy/dnr/${ruleId}`, {
+      method: "DELETE",
+    })
+  }
+
+  async updateLeadPrivacy(leadId, payload) {
+    return this.request(`/privacy/leads/${leadId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  // --- Phase 21: Call Ingestion (Manual Upload) Endpoints ---
+  async ingestAudioCall(audioBlob, customHeaders = {}) {
+    const url = `${API_BASE_URL}/calls/ingestion/audio`
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": audioBlob.type || "audio/mp4",
+        ...customHeaders,
+      },
+      body: audioBlob,
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.error || `Upload failed with status ${response.status}`)
+    }
+    return data
+  }
+
+  async ingestCsvCalls(payload) {
+    return this.request("/calls/ingestion/csv", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getIngestionReviewQueue(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/calls/ingestion/review${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async matchIngestionCall(payload) {
+    return this.request("/calls/ingestion/match", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getIngestionStats() {
+    return this.request("/calls/ingestion/stats")
   }
 }
 

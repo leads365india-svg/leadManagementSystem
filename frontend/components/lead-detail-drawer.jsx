@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
+import InBrowserAudioPlayer from "@/components/in-browser-audio-player"
 import { toast } from "react-hot-toast"
 import {
   X,
@@ -95,6 +96,7 @@ export default function LeadDetailDrawer({
   const [newNote, setNewNote] = useState("")
   const [savingNote, setSavingNote] = useState("")
   const [timelineFilter, setTimelineFilter] = useState("all") // "all" | "status" | "assignment" | "followup" | "notes"
+  const [playingCallId, setPlayingCallId] = useState(null)
 
   // Update lead when initialLead or leadId changes
   useEffect(() => {
@@ -1236,9 +1238,22 @@ export default function LeadDetailDrawer({
                               <span>{c.agentId?.name || "Agent"}</span>
                             </div>
                             <div className="flex items-center space-x-1.5">
-                              {c.recording?.status === "ready" ? (
-                                <span className="inline-flex items-center text-indigo-600 font-semibold gap-1">
-                                  <Mic className="w-3 h-3" /> Recording Available
+                              {c.recording?.status === "stored" || c.recording?.status === "ready" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPlayingCallId(playingCallId === c._id ? null : c._id)}
+                                  className="inline-flex items-center text-indigo-600 hover:text-indigo-800 font-bold gap-1 px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 transition"
+                                >
+                                  <Mic className="w-3 h-3" />
+                                  <span>{playingCallId === c._id ? "Hide Player" : "Play Recording"}</span>
+                                </button>
+                              ) : c.recording?.status === "skipped_dnr" ? (
+                                <span className="inline-flex items-center text-rose-600 text-[10px] font-semibold gap-1">
+                                  <Shield className="w-3 h-3" /> Skipped (DNR)
+                                </span>
+                              ) : c.recording?.status === "expired" ? (
+                                <span className="inline-flex items-center text-amber-600 text-[10px] font-semibold gap-1">
+                                  <Clock className="w-3 h-3" /> Purged (30d)
                                 </span>
                               ) : (
                                 <span className="text-slate-400">No recording</span>
@@ -1247,6 +1262,21 @@ export default function LeadDetailDrawer({
                               <span>{c.startedAt ? new Date(c.startedAt).toLocaleString() : "—"}</span>
                             </div>
                           </div>
+
+                          {/* Embedded In-Browser Audio Player */}
+                          {playingCallId === c._id && (
+                            <div className="pt-2">
+                              <InBrowserAudioPlayer
+                                callId={c._id}
+                                recording={c.recording}
+                                agentName={c.agentId?.name || "Agent"}
+                                leadPhone={c.number || lead?.phone}
+                                direction={c.direction}
+                                compact={true}
+                                onClose={() => setPlayingCallId(null)}
+                              />
+                            </div>
+                          )}
                         </div>
                       )
                     })}

@@ -1,15 +1,10 @@
-import CrmPlaceholderPage from "@/components/crm-placeholder-page"
+import CallReportsPage from "@/app/communication/call-reports/page"
 
 export const metadata = {
-  title: "Call Reports | LeadFlow CRM",
+  title: "Call Reports & Analytics | LeadFlow CRM",
+  description: "Executive call volume analytics, agent connection rates, call duration histograms, and disposition outcomes.",
 }
 
 export default function ReportsCallReportsPage() {
-  return (
-    <CrmPlaceholderPage
-      title="Call Reports"
-      category="Reports"
-      description="Executive call volume analytics, agent connection rates, call duration histograms, and disposition outcomes."
-    />
-  )
+  return <CallReportsPage />
 }

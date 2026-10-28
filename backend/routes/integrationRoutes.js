@@ -4,6 +4,8 @@ const {
   getWebsiteConfig,
   updateWebsiteConfig,
   rotateApiKey,
+  rotateSiteKey,
+  serveWebsiteSnippet,
   sendTestLead,
   receiveWebsiteLead,
   listIntegrations,
@@ -31,6 +33,13 @@ const {
   triggerIndiaMartSync,
   handleIndiaMartWebhook,
 } = require("../controllers/indiamartController")
+const {
+  handleGoogleWebhook,
+  getGoogleConfig,
+  connectGoogleIntegration,
+  rotateGoogleKey,
+  sendGoogleTestLead,
+} = require("../controllers/googleAdsController")
 const { authenticate, requireAccountAdmin } = require("../middleware/authMiddleware")
 
 const router = express.Router()
@@ -47,6 +56,9 @@ const webhookLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+// 0. Public Embeddable Website Snippet (Phase 22)
+router.get("/snippet.js", serveWebsiteSnippet)
+
 // 1. Public Integration Webhook Route (Preserves exact URL, headers, and response contract)
 router.post("/leads/website", webhookLimiter, receiveWebsiteLead)
 
@@ -54,6 +66,7 @@ router.post("/leads/website", webhookLimiter, receiveWebsiteLead)
 router.get("/settings/website", authenticate, getWebsiteConfig)
 router.put("/settings/website", authenticate, requireAccountAdmin, updateWebsiteConfig)
 router.post("/settings/website/rotate-key", authenticate, requireAccountAdmin, rotateApiKey)
+router.post("/settings/website/rotate-site-key", authenticate, requireAccountAdmin, rotateSiteKey)
 router.post("/settings/website/test", authenticate, requireAccountAdmin, sendTestLead)
 
 // 3. Phase 11 Canonical Lead Source Registry
@@ -80,7 +93,14 @@ router.post("/indiamart/connect", authenticate, requireAccountAdmin, connectIndi
 router.get("/indiamart/status", authenticate, getIndiaMartStatus)
 router.post("/indiamart/:id/sync", authenticate, requireAccountAdmin, triggerIndiaMartSync)
 
-// 8. Phase 11 Multi-Tenant Integration Connectors CRUD
+// 8. Phase 23 Google Ads Lead Form Webhook Endpoints
+router.post("/webhooks/google", webhookLimiter, handleGoogleWebhook)
+router.get("/google/status", authenticate, getGoogleConfig)
+router.post("/google/connect", authenticate, requireAccountAdmin, connectGoogleIntegration)
+router.post("/google/rotate-key", authenticate, requireAccountAdmin, rotateGoogleKey)
+router.post("/google/test", authenticate, requireAccountAdmin, sendGoogleTestLead)
+
+// 9. Phase 11 Multi-Tenant Integration Connectors CRUD
 router.get("/", authenticate, listIntegrations)
 router.post("/", authenticate, requireAccountAdmin, createIntegration)
 router.get("/:id", authenticate, getIntegrationById)

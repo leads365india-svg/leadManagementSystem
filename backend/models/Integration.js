@@ -90,6 +90,12 @@ const integrationSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    // Phase 22: Public Site Key for browser form/snippet intake
+    siteKey: {
+      type: String,
+      index: true,
+      default: null,
+    },
     // Encrypted credentials payload (AES-256-GCM)
     credentials: {
       type: mongoose.Schema.Types.Mixed,

@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import {
   Users,
   UserPlus,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react"
 
 export default function ClientPortalDashboard() {
+  const { user: authUser } = useAuth()
   const [stats, setStats] = useState({
     total: 0,
     statusCounts: {
@@ -30,22 +32,23 @@ export default function ClientPortalDashboard() {
     conversionRate: 0,
   })
   const [recentLeads, setRecentLeads] = useState([])
-  const [user, setUser] = useState(null)
+  const [user, setUser] = useState(authUser || null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+
+  useEffect(() => {
+    if (authUser) {
+      setUser(authUser)
+    }
+  }, [authUser])
 
   const loadData = useCallback(async () => {
     try {
       setRefreshing(true)
-      const [meRes, statsRes, leadsRes] = await Promise.all([
-        apiClient.getMe(),
+      const [statsRes, leadsRes] = await Promise.all([
         apiClient.getLeadStats(),
         apiClient.getLeads({ limit: 5, sortBy: "createdAt", sortOrder: "desc" }),
       ])
-
-      if (meRes.success && meRes.data?.user) {
-        setUser(meRes.data.user)
-      }
 
       if (statsRes.success && statsRes.data) {
         setStats(statsRes.data)
@@ -92,7 +95,8 @@ export default function ClientPortalDashboard() {
     )
   }
 
-  const companyName = user?.account?.companyName || user?.account?.displayName || "Your Organization"
+  const effectiveUser = user || authUser
+  const companyName = effectiveUser?.account?.companyName || effectiveUser?.account?.displayName || "Your Organization"
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
@@ -101,11 +105,11 @@ export default function ClientPortalDashboard() {
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-xl font-bold tracking-tight text-slate-900">
-              Welcome back, {user?.name || "Administrator"}!
+              Welcome back, {effectiveUser?.name || "Administrator"}!
             </h1>
-            {user?.tenantId && (
+            {effectiveUser?.tenantId && (
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                Tenant: {user.tenantId}
+                Tenant: {effectiveUser.tenantId}
               </span>
             )}
           </div>

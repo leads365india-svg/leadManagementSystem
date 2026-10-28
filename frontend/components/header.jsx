@@ -306,7 +306,7 @@ export default function Header() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const { user: authUser, logout } = useAuth()
-  const user = authUser?.role === "account_admin" ? authUser : null
+  const user = authUser
 
   const dropdownTimeoutRef = useRef(null)
   const navRef = useRef(null)
@@ -319,6 +319,7 @@ export default function Header() {
       router.replace("/super-admin")
     }
   }, [authUser, router])
+
 
   // Fullscreen change listener
   useEffect(() => {
@@ -494,7 +495,13 @@ export default function Header() {
   // Display user identity: actual authenticated user session details
   const userName = user?.name || user?.username || "Account Admin"
   const userEmail = user?.email || ""
-  const userRole = user?.roleTitle || (user?.role === "account_admin" ? "Leads Account Admin" : "Account Admin")
+  const userRole =
+    user?.roleTitle ||
+    (user?.role === "account_admin"
+      ? "Leads Account Admin"
+      : user?.role
+      ? user.role.replace("_", " ").toUpperCase()
+      : "Account Admin")
   const companyName = user?.account?.companyName || user?.account?.displayName || (user?.tenantId ? `Account ${user.tenantId}` : "")
 
   const userInitials = userName

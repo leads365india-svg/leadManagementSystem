@@ -207,8 +207,8 @@ const scopeFilter = async (user, resourceType, action = "view") => {
     return { _id: null } // Fail closed: unauthenticated
   }
 
-  if (user.role === "super_admin" || user.role === "tenant_admin") {
-    return {} // Super admin and Tenant admin have global/tenant-wide scope
+  if (user.role === "super_admin" || user.role === "tenant_admin" || user.role === "account_admin") {
+    return {} // Super admin, Tenant admin, and Account admin have global/tenant-wide scope
   }
 
   let userPerms = user.permissions

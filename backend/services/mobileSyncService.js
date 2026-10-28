@@ -303,18 +303,20 @@ async function issueRecordingTicket({ tenantId, agentId, callId }) {
     throw err
   }
 
-  // Check 2: Check Do-Not-Record (DNR) status on the lead
+  // Check 2: Evaluate DNR and Consent eligibility via PrivacyService
   const lead = await Lead.findOne({ _id: call.leadId, tenantId }).setOptions({ skipTenantFilter: true }).lean()
-  const hasDnr = lead && (
-    lead.metadata?.doNotRecord === true ||
-    (Array.isArray(lead.tags) && lead.tags.some((t) => String(t).toUpperCase() === "DNR"))
-  )
+  const privacyService = require("./privacyService")
+  const privacyCheck = await privacyService.evaluateRecordingEligibility({
+    tenantId,
+    lead,
+    phoneNumber: call.number,
+  })
 
-  if (hasDnr) {
-    const err = new Error("Lead has Do-Not-Record (DNR) enabled. Audio recording prohibited by privacy policy.")
+  if (!privacyCheck.allowed) {
+    const err = new Error(privacyCheck.message || "Recording prohibited by privacy policy.")
     err.status = 403
     err.statusCode = 403
-    err.code = "RECORDING_FORBIDDEN_DNR"
+    err.code = privacyCheck.reason || "RECORDING_FORBIDDEN_DNR"
     throw err
   }
 

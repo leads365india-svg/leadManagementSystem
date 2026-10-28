@@ -341,6 +341,15 @@ async function listCalls(query = {}, user = null, explicitTenantId = null) {
   if (query.recordingStatus) {
     filter["recording.status"] = query.recordingStatus
   }
+  if (query.hasRecording === "true" || query.hasRecording === true) {
+    filter["recording.status"] = "stored"
+  } else if (query.hasRecording === "false" || query.hasRecording === false) {
+    filter["recording.status"] = { $ne: "stored" }
+  }
+  if (query.missingRecording === "true" || query.missingRecording === true) {
+    filter.status = "completed"
+    filter["recording.status"] = { $ne: "stored" }
+  }
 
   const pageNum = Math.max(1, parseInt(query.page, 10) || 1)
   const limitNum = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 20))
@@ -425,6 +434,23 @@ async function getCallMetrics(queryOrTenantId = {}, maybeQuery = {}) {
         completedCalls: {
           $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] },
         },
+        withRecordingCount: {
+          $sum: { $cond: [{ $eq: ["$recording.status", "stored"] }, 1, 0] },
+        },
+        missingRecordingCount: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ["$status", "completed"] },
+                  { $ne: ["$recording.status", "stored"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
       },
     },
   ])
@@ -452,6 +478,17 @@ async function getCallMetrics(queryOrTenantId = {}, maybeQuery = {}) {
     { $sort: { count: -1 } },
   ])
 
+  const byRecordingStatus = await Call.aggregate([
+    { $match: matchStage },
+    {
+      $group: {
+        _id: { $ifNull: ["$recording.status", "none"] },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { count: -1 } },
+  ])
+
   const totalCalls = summary?.totalCalls || 0
   const completedCalls = summary?.completedCalls || 0
   const connectRate = totalCalls > 0 ? Math.round((completedCalls / totalCalls) * 100) : 0
@@ -466,8 +503,11 @@ async function getCallMetrics(queryOrTenantId = {}, maybeQuery = {}) {
       avgDurationSeconds: Math.round(summary?.avgDurationSeconds || 0),
       completedCalls,
       connectRate,
+      withRecordingCount: summary?.withRecordingCount || 0,
+      missingRecordingCount: summary?.missingRecordingCount || 0,
       byDisposition,
       byStatus,
+      byRecordingStatus,
     },
   }
 }

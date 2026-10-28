@@ -11,6 +11,7 @@ const queueService = require("./queueService")
 const audit = require("./auditService")
 const { hashApiKey } = require("../utils/cryptoUtils")
 const { runWithTenantContext } = require("../middleware/tenantContext")
+const { normalizeOrigin, validateOrigin } = require("../utils/originValidator")
 
 /**
  * Leads-365 CRM - Central Integration Service (Phase 11)
@@ -182,6 +183,54 @@ async function authenticateCredential(rawApiKey) {
 }
 
 /**
+ * Authenticates incoming request using public website site key (Phase 22).
+ * 
+ * @param {string} rawSiteKey - Public site key
+ * @returns {Promise<object|null>}
+ */
+async function authenticateSiteKey(rawSiteKey) {
+  if (!rawSiteKey || typeof rawSiteKey !== "string") return null
+  const cleanKey = rawSiteKey.trim()
+  if (!cleanKey) return null
+
+  // 1. Check LeadFeedConfig collection
+  const legacyConfig = await LeadFeedConfig.findOne({
+    "websiteSource.siteKey": cleanKey,
+  }).setOptions({ skipTenantFilter: true })
+
+  if (legacyConfig) {
+    const tenantId = legacyConfig.tenantId
+    const integration = await syncLegacyToIntegration(legacyConfig)
+    return {
+      integration,
+      tenantId,
+      isLegacy: true,
+      legacyConfig,
+      isSiteKey: true,
+      allowedOrigins: legacyConfig.websiteSource?.allowedOrigins || [],
+    }
+  }
+
+  // 2. Check Integration collection
+  const integration = await Integration.findOne({
+    siteKey: cleanKey,
+    type: "website",
+  }).setOptions({ skipTenantFilter: true })
+
+  if (integration) {
+    return {
+      integration,
+      tenantId: integration.tenantId,
+      isLegacy: false,
+      isSiteKey: true,
+      allowedOrigins: integration.settings?.allowedOrigins || [],
+    }
+  }
+
+  return null
+}
+
+/**
  * Idempotently synchronizes a legacy LeadFeedConfig into the Integration collection.
  * 
  * @param {object} legacyConfig 
@@ -256,6 +305,12 @@ async function syncLegacyToIntegration(legacyConfig) {
     if (ws.duplicateHandling) {
       integration.settings.duplicateHandling = ws.duplicateHandling
     }
+    if (ws.siteKey) {
+      integration.siteKey = ws.siteKey
+    }
+    if (Array.isArray(ws.allowedOrigins)) {
+      integration.settings.allowedOrigins = ws.allowedOrigins
+    }
     await integration.save()
   }
 
@@ -266,7 +321,9 @@ async function syncLegacyToIntegration(legacyConfig) {
  * Central intake pipeline for incoming webhook payloads across all platforms.
  * 
  * @param {object} params
- * @param {string} params.rawApiKey
+ * @param {string} [params.rawApiKey]
+ * @param {string} [params.rawSiteKey]
+ * @param {string} [params.incomingOrigin]
  * @param {object} [params.headers]
  * @param {object} [params.body]
  * @param {object} [params.query]
@@ -274,29 +331,71 @@ async function syncLegacyToIntegration(legacyConfig) {
  * @param {boolean} [params.async]
  * @returns {Promise<{ success: boolean, status: number, [key: string]: any }>}
  */
-async function intakeWebhookPayload({ rawApiKey, headers = {}, body = {}, query = {}, ip = "unknown", async = false }) {
-  // 1. Authenticate credential
-  if (!rawApiKey) {
+async function intakeWebhookPayload({
+  rawApiKey,
+  rawSiteKey = null,
+  incomingOrigin = null,
+  headers = {},
+  body = {},
+  query = {},
+  ip = "unknown",
+  async = false,
+}) {
+  // 0. Abuse protection: Honeypot check
+  if (body && (body._hp_trap || body.hp_field || body._lead_hp)) {
     return {
       success: false,
-      status: 401,
-      error: "Missing API key. Provide credential via 'x-api-key' header or 'Authorization: Bearer <key>'",
+      status: 400,
+      error: "Spam submission rejected by honeypot verification",
     }
   }
 
-  const authResult = await authenticateCredential(rawApiKey)
+  // 1. Authenticate credential (API key or public site key)
+  let authResult = null
+  let isSiteKeyAuth = false
+
+  if (rawApiKey) {
+    authResult = await authenticateCredential(rawApiKey)
+  } else if (rawSiteKey) {
+    authResult = await authenticateSiteKey(rawSiteKey)
+    isSiteKeyAuth = true
+  }
+
   if (!authResult) {
     return {
       success: false,
       status: 401,
-      error: "Unauthorized: Invalid or revoked integration API key",
+      error: rawSiteKey
+        ? "Unauthorized: Invalid or revoked website site key"
+        : "Missing credentials: Provide 'x-api-key' for server-to-server or 'x-site-key' for website snippet",
     }
   }
 
-  const { integration, tenantId, isLegacy, legacyConfig } = authResult
+  const { integration, tenantId, isLegacy, legacyConfig, allowedOrigins } = authResult
+
+  // Allowed Origin validation for public site key requests
+  let permittedOrigin = null
+  if (isSiteKeyAuth) {
+    if (!incomingOrigin) {
+      return {
+        success: false,
+        status: 403,
+        error: "Forbidden: Public site key requires an authorized HTTP Origin header",
+      }
+    }
+    const originCheck = validateOrigin(incomingOrigin, allowedOrigins || [])
+    if (!originCheck.allowed) {
+      return {
+        success: false,
+        status: 403,
+        error: originCheck.reason || "Forbidden: Origin is not permitted for this site key",
+      }
+    }
+    permittedOrigin = originCheck.normalizedOrigin
+  }
 
   // 2. Wrap execution in tenant ambient context
-  return await runWithTenantContext({ tenantId, isSuperAdmin: false }, async () => {
+  const executionResult = await runWithTenantContext({ tenantId, isSuperAdmin: false }, async () => {
     // Verify tenant account is active
     const account = await Account.findOne({ accountId: tenantId }).lean()
     if (account && account.status === "suspended") {
@@ -444,6 +543,11 @@ async function intakeWebhookPayload({ rawApiKey, headers = {}, body = {}, query 
       idempotencyKey,
     })
   })
+
+  return {
+    ...executionResult,
+    permittedOrigin,
+  }
 }
 
 /**

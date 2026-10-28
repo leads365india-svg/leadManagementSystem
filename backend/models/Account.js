@@ -78,6 +78,10 @@ const accountSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
   },
   {
     timestamps: true,

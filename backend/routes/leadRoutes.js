@@ -52,6 +52,10 @@ router.patch("/:id", checkPermission("leads.edit"), updateLead)
 // PATCH /api/leads/:id/status - Dedicated status transition endpoint
 router.patch("/:id/status", checkPermission("leads.edit"), updateLead)
 
+// PATCH /api/leads/:id/privacy - Dedicated lead DNR and consent privacy controls
+const { updateLeadPrivacy } = require("../controllers/privacyController")
+router.patch("/:id/privacy", checkPermission("leads.edit"), updateLeadPrivacy)
+
 // DELETE /api/leads/:id - Delete lead
 router.delete("/:id", checkPermission("leads.delete"), deleteLead)
 

@@ -33,6 +33,16 @@ const leadFeedConfigSchema = new mongoose.Schema(
         type: Date,
         default: Date.now,
       },
+      // Phase 22: Public Site Key & Allowed Origins
+      siteKey: {
+        type: String,
+        index: true,
+        default: null,
+      },
+      allowedOrigins: {
+        type: [String],
+        default: [],
+      },
       assignedStaffId: {
         type: String,
         default: "unassigned",
@@ -102,6 +112,25 @@ const leadFeedConfigSchema = new mongoose.Schema(
     googleSource: {
       enabled: { type: Boolean, default: false },
       status: { type: String, default: "not_configured" },
+      googleKeyHash: { type: String, index: true, default: null },
+      googleKeyMasked: { type: String, default: "" },
+      googleKeyLastRotatedAt: { type: Date, default: null },
+      assignedStaffId: { type: String, default: "unassigned" },
+      assignedStaffName: { type: String, default: "Unassigned" },
+      duplicateHandling: {
+        type: String,
+        enum: ["reject", "update", "allow"],
+        default: "update",
+      },
+      stats: {
+        totalReceived: { type: Number, default: 0 },
+        totalSuccess: { type: Number, default: 0 },
+        totalErrors: { type: Number, default: 0 },
+        lastReceivedAt: { type: Date, default: null },
+        lastSuccessAt: { type: Date, default: null },
+        lastErrorAt: { type: Date, default: null },
+        lastErrorMessage: { type: String, default: "" },
+      },
     },
     wordPressSource: {
       enabled: { type: Boolean, default: false },
@@ -119,8 +148,9 @@ const leadFeedConfigSchema = new mongoose.Schema(
         ret.id = ret._id
         delete ret._id
         delete ret.__v
-        // Never expose apiKeyHash in serialized JSON output
+        // Never expose apiKeyHash or googleKeyHash in serialized JSON output
         delete ret.websiteSource?.apiKeyHash
+        delete ret.googleSource?.googleKeyHash
         return ret
       },
     },

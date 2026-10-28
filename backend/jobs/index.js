@@ -132,15 +132,20 @@ function registerAllHandlers() {
     return result
   })
 
-  // 4. Recording Purge Check Handler (Phase 16 preparation)
+  // 4. Recording Purge Check Handler (Phase 16 GridFS storage purge)
   queue.registerHandler("recording.purge_check", async (job) => {
     const { tenantId, retentionDays = 30 } = job.payload || {}
-    // Will be populated in Phase 16 GridFS storage purge
+    const recordingStorage = require("../services/recordingStorage")
+    const result = await recordingStorage.purgeExpiredRecordings({
+      tenantId: tenantId || null,
+      retentionDays: Number(retentionDays) || 30,
+    })
     return {
-      message: "Recording purge check executed",
+      message: "Recording purge check executed successfully",
       tenantId: tenantId || "__all__",
       retentionDays,
-      purgedCount: 0,
+      purgedCount: result.purgedCount,
+      purgedFileIds: result.purgedFileIds,
     }
   })
 

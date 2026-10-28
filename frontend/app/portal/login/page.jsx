@@ -81,19 +81,24 @@ function PortalLoginForm() {
     }
   }, [tenantId])
 
+  // Prefetch destination routes in production where prefetching is lightweight and doesn't trigger dev rebuilds
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") {
+      try {
+        router.prefetch("/portal")
+        router.prefetch("/super-admin")
+      } catch (_e) {}
+    }
+  }, [router])
+
   // Check if user is already logged in on initial page load
   useEffect(() => {
     if (isSubmittingRef.current) return
 
     if (authStatus === "authenticated" && authUser) {
-      if (authUser.role === "super_admin") {
-        router.replace("/super-admin")
-        return
-      }
-      if (authUser.role === "account_admin") {
-        router.replace("/portal")
-        return
-      }
+      const destination = authUser.role === "super_admin" ? "/super-admin" : "/portal"
+      router.replace(destination)
+      return
     }
     if (authStatus === "unauthenticated") {
       setCheckingExistingSession(false)
@@ -123,16 +128,13 @@ function PortalLoginForm() {
 
       if (response && response.success && response.data?.user) {
         setIsRedirecting(true)
-        if (response.data.user.role === "super_admin") {
-          toast.success("Super Admin authenticated. Redirecting to console...")
-          router.replace("/super-admin")
-          return
-        }
+        const destination = response.data.user.role === "super_admin" ? "/super-admin" : "/portal"
         toast.success(`Welcome back, ${response.data.user.name}!`)
-        router.replace("/portal")
+        router.replace(destination)
       } else {
         const errMsg = response?.error || "Invalid email or password"
         setError(errMsg)
+        toast.error(errMsg)
         setPassword("")
         isSubmittingRef.current = false
         setLoading(false)
@@ -144,6 +146,7 @@ function PortalLoginForm() {
     } catch (err) {
       const errMsg = err.message || "Invalid credentials. Please verify your email and password."
       setError(errMsg)
+      toast.error(errMsg)
       setPassword("")
       isSubmittingRef.current = false
       setLoading(false)
@@ -152,6 +155,23 @@ function PortalLoginForm() {
         passwordInputRef.current.focus()
       }
     }
+  }
+
+  if (isRedirecting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-slate-50 via-indigo-50/20 to-slate-100">
+        <div className="flex flex-col items-center space-y-4 text-center animate-in fade-in duration-150">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-100 text-white">
+            <Building2 className="w-7 h-7" />
+          </div>
+          <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <div>
+            <h3 className="text-base font-bold text-slate-900">Access Granted</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Opening your CRM workspace...</p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (checkingExistingSession) {

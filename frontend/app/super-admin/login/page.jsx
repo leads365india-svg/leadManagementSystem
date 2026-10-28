@@ -31,6 +31,16 @@ export default function SuperAdminLoginPage() {
   const passwordInputRef = useRef(null)
   const isSubmittingRef = useRef(false)
 
+  // Prefetch dashboard destinations in production where prefetching is lightweight
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") {
+      try {
+        router.prefetch("/super-admin")
+        router.prefetch("/portal")
+      } catch (_err) {}
+    }
+  }, [router])
+
   // Redirect authenticated users away from login page if already logged in on initial visit
   useEffect(() => {
     // Avoid conflicting with active form submission
@@ -123,6 +133,23 @@ export default function SuperAdminLoginPage() {
         <div className="flex flex-col items-center space-y-3">
           <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin motion-reduce:animate-none" />
           <p className="text-xs font-medium text-slate-500">Checking active session...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (isRedirecting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center space-y-4 p-8 rounded-2xl bg-white shadow-xl border border-slate-100 max-w-sm w-full mx-4 text-center animate-in fade-in zoom-in-95 duration-200">
+          <div className="w-14 h-14 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+            <CheckCircle2 className="w-7 h-7 animate-in zoom-in duration-300" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-slate-900">Access Granted</h3>
+            <p className="text-xs text-slate-500">Opening Super Admin Console...</p>
+          </div>
+          <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
         </div>
       </div>
     )

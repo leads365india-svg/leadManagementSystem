@@ -18,9 +18,10 @@
     <application
         android:allowBackup="false"
         android:icon="@android:drawable/sym_def_app_icon"
-        android:label="Leads-365 Feasibility Spike"
+        android:label="Leads-365"
         android:roundIcon="@android:drawable/sym_def_app_icon"
         android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.DeviceDefault.DayNight">
 
         <activity

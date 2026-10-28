@@ -3,28 +3,44 @@ package com.leadflow.feasibility
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.CallLog
 import android.telephony.TelephonyManager
 import android.util.Log
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.leadflow.feasibility.data.AppDatabase
+import com.leadflow.feasibility.data.CallLogEntity
+import com.leadflow.feasibility.data.SessionManager
+import com.leadflow.feasibility.data.UploadQueueEntity
+import com.leadflow.feasibility.network.ApiClient
+import com.leadflow.feasibility.network.ReportCallRequest
+import com.leadflow.feasibility.telephony.PhoneNumberNormalizer
+import com.leadflow.feasibility.worker.UploadRecordingsWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
- * CallStateReceiver - Telephony State Monitor & Lead-Only Trigger
+ * CallStateReceiver - Telephony State Monitor & Lead-Only Privacy Filter
  * 
  * Complies with Roadmap Phase 2 & 17 requirements:
  * 1. Tracks telephony call state transitions (OFFHOOK -> IDLE = call ended).
  * 2. Queries CallLog for verified number, duration, and direction.
  * 3. Enforces the strict Privacy Filter:
- *    If the number does NOT belong to an assigned lead, STOP IMMEDIATELY.
- *    No recordings folder reading, no audio streaming, zero data egress.
+ *    If the dialed/received number does NOT match an authorized CRM lead,
+ *    STOP PROCESSING IMMEDIATELY.
+ *    No recordings folder access, no audio scanning, zero data egress.
  */
 class CallStateReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "CallStateReceiver"
-        private var lastState = TelephonyManager.CALL_STATE_IDLE
         private var isOffhook = false
 
-        // In-memory set of lead phone numbers (cached from backend sync)
+        // In-memory quick whitelist for testing or fast fallback
         val leadPhoneWhitelist = mutableSetOf<String>()
     }
 
@@ -37,79 +53,164 @@ class CallStateReceiver : BroadcastReceiver() {
         when (stateStr) {
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                 isOffhook = true
-                lastState = TelephonyManager.CALL_STATE_OFFHOOK
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 if (isOffhook) {
                     isOffhook = false
-                    lastState = TelephonyManager.CALL_STATE_IDLE
                     Log.i(TAG, "📞 Call terminated. Inspecting call log for lead match...")
-                    handleCallEnded(context)
+                    handleCallEnded(context.applicationContext)
                 }
             }
         }
     }
 
     private fun handleCallEnded(context: Context) {
-        // Query the most recent call from CallLog
-        val cursor = context.contentResolver.query(
-            CallLog.Calls.CONTENT_URI,
-            arrayOf(
-                CallLog.Calls.NUMBER,
-                CallLog.Calls.DATE,
-                CallLog.Calls.DURATION,
-                CallLog.Calls.TYPE
-            ),
-            null,
-            null,
-            "${CallLog.Calls.DATE} DESC"
-        )
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Query the most recent call from CallLog
+                val cursor = context.contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    arrayOf(
+                        CallLog.Calls.NUMBER,
+                        CallLog.Calls.DATE,
+                        CallLog.Calls.DURATION,
+                        CallLog.Calls.TYPE
+                    ),
+                    null,
+                    null,
+                    "${CallLog.Calls.DATE} DESC"
+                )
 
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val number = it.getString(it.getColumnIndexOrThrow(CallLog.Calls.NUMBER)) ?: ""
-                val dateEpoch = it.getLong(it.getColumnIndexOrThrow(CallLog.Calls.DATE))
-                val durationSec = it.getLong(it.getColumnIndexOrThrow(CallLog.Calls.DURATION))
-                val type = it.getInt(it.getColumnIndexOrThrow(CallLog.Calls.TYPE))
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val number = it.getString(it.getColumnIndexOrThrow(CallLog.Calls.NUMBER)) ?: ""
+                        val dateEpoch = it.getLong(it.getColumnIndexOrThrow(CallLog.Calls.DATE))
+                        val durationSec = it.getLong(it.getColumnIndexOrThrow(CallLog.Calls.DURATION))
+                        val callType = it.getInt(it.getColumnIndexOrThrow(CallLog.Calls.TYPE))
 
-                val normalizedNumber = number.filter { ch -> ch.isDigit() }.takeLast(10)
-                Log.d(TAG, "Last Call Log entry: number=$number (norm: $normalizedNumber), duration=${durationSec}s, date=$dateEpoch")
+                        val normalizedNumber = PhoneNumberNormalizer.normalize(number)
+                        Log.d(TAG, "Call ended: raw=$number, norm=$normalizedNumber, duration=${durationSec}s")
 
-                // =========================================================================
-                // PRIVACY RULE: LEAD-ONLY FILTERING
-                // =========================================================================
-                val isLeadCall = leadPhoneWhitelist.isEmpty() || leadPhoneWhitelist.any { leadNum ->
-                    leadNum.filter { ch -> ch.isDigit() }.takeLast(10) == normalizedNumber
-                }
+                        val db = AppDatabase.getInstance(context)
+                        val sessionManager = SessionManager(context)
 
-                if (!isLeadCall) {
-                    Log.i(TAG, "🔒 NON-LEAD CALL DETECTED ($number). PRIVACY RULE ENFORCED. No recording action taken.")
-                    return
-                }
+                        // =========================================================================
+                        // STRICT PRIVACY FILTER: LEAD-ONLY MATCHING
+                        // =========================================================================
+                        val matchedLead = db.leadDao().findByNormalizedPhone(normalizedNumber)
+                        val isInMemoryWhitelisted = leadPhoneWhitelist.contains(normalizedNumber) || leadPhoneWhitelist.contains(number)
 
-                Log.i(TAG, "🎯 VERIFIED LEAD CALL ($number). Triggering recording finder worker...")
-                // Schedule finder worker or notify MainActivity
-                val prefs = context.getSharedPreferences("leadflow_spike", Context.MODE_PRIVATE)
-                val folderUriStr = prefs.getString("recordings_tree_uri", null)
+                        if (matchedLead == null && !isInMemoryWhitelisted) {
+                            Log.i(TAG, "🔒 NON-LEAD CALL DETECTED ($number). PRIVACY RULE ENFORCED. No recording action taken.")
+                            return@launch
+                        }
 
-                if (folderUriStr != null) {
-                    val finder = RecordingFinder(context)
-                    val matched = finder.findMatchingRecording(
-                        treeUri = android.net.Uri.parse(folderUriStr),
-                        normalizedPhoneNumber = normalizedNumber,
-                        callEndTimeMs = System.currentTimeMillis(),
-                        callDurationSeconds = durationSec
-                    )
+                        val leadId = matchedLead?.id ?: "lead-test-${System.currentTimeMillis()}"
+                        val leadName = matchedLead?.name ?: "Verified Lead"
+                        val doNotRecord = matchedLead?.doNotRecord ?: false
 
-                    if (matched != null) {
-                        Log.i(TAG, "🚀 Ready to upload matched file: ${matched.filename} (${matched.sizeBytes} bytes)")
-                        UploadWorker.enqueueUpload(context, matched)
-                    } else {
-                        Log.w(TAG, "⚠️ Recording file not yet ready on disk. Will retry in 30 seconds.")
+                        Log.i(TAG, "🎯 VERIFIED CRM LEAD CALL: $leadName ($normalizedNumber). Lead ID: $leadId")
+
+                        var matchedRecording: RecordingFinder.MatchedRecording? = null
+
+                        // Check Do-Not-Record rule
+                        if (!doNotRecord) {
+                            val folderUriStr = sessionManager.recordingsFolderUri
+                            if (!folderUriStr.isNullOrBlank()) {
+                                val finder = RecordingFinder(context)
+                                matchedRecording = finder.findMatchingRecording(
+                                    treeUri = Uri.parse(folderUriStr),
+                                    normalizedPhoneNumber = normalizedNumber,
+                                    callEndTimeMs = System.currentTimeMillis(),
+                                    callDurationSeconds = durationSec
+                                )
+                            } else {
+                                Log.w(TAG, "Recordings folder URI not configured in settings.")
+                            }
+                        } else {
+                            Log.i(TAG, "Lead has doNotRecord=true. Skipping recording discovery.")
+                        }
+
+                        // Insert into local CallLogDao
+                        val callDirection = if (callType == CallLog.Calls.OUTGOING_TYPE) "OUTGOING" else "INCOMING"
+                        val localLogId = "call_${System.currentTimeMillis()}"
+
+                        val callEntity = CallLogEntity(
+                            id = localLogId,
+                            phone = number,
+                            normalizedPhone = normalizedNumber,
+                            leadId = leadId,
+                            leadName = leadName,
+                            durationSeconds = durationSec,
+                            timestamp = dateEpoch,
+                            status = "COMPLETED",
+                            direction = callDirection,
+                            recordingFound = (matchedRecording != null),
+                            recordingUri = matchedRecording?.uri?.toString(),
+                            recordingFilename = matchedRecording?.filename,
+                            sha256 = matchedRecording?.sha256Hash
+                        )
+                        db.callLogDao().insert(callEntity)
+
+                        // If recording matched, queue for upload
+                        if (matchedRecording != null) {
+                            val queueEntity = UploadQueueEntity(
+                                callLogId = localLogId,
+                                leadId = leadId,
+                                filename = matchedRecording.filename,
+                                uri = matchedRecording.uri.toString(),
+                                sha256 = matchedRecording.sha256Hash,
+                                fileSize = matchedRecording.sizeBytes,
+                                durationMs = matchedRecording.durationMs,
+                                status = "PENDING"
+                            )
+                            db.uploadQueueDao().insert(queueEntity)
+
+                            // Schedule WorkManager upload
+                            val constraints = Constraints.Builder()
+                                .setRequiredNetworkType(
+                                    if (sessionManager.wifiOnlyUploads) NetworkType.UNMETERED
+                                    else NetworkType.CONNECTED
+                                )
+                                .build()
+
+                            val uploadWork = OneTimeWorkRequestBuilder<UploadRecordingsWorker>()
+                                .setConstraints(constraints)
+                                .build()
+
+                            WorkManager.getInstance(context).enqueue(uploadWork)
+                            Log.i(TAG, "Enqueued upload job for ${matchedRecording.filename}")
+                        }
+
+                        // Report call metadata to backend POST /api/mobile/calls
+                        if (sessionManager.isLoggedIn) {
+                            try {
+                                val api = ApiClient.getService(context)
+                                val response = api.reportCall(
+                                    ReportCallRequest(
+                                        leadId = leadId,
+                                        phoneNumber = number,
+                                        duration = durationSec.toInt(),
+                                        callType = callDirection.lowercase(),
+                                        startedAt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                                            .format(java.util.Date(dateEpoch)),
+                                        endedAt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                                            .format(java.util.Date(dateEpoch + durationSec * 1000L)),
+                                        recordingDuration = matchedRecording?.durationMs?.div(1000)?.toInt(),
+                                        recordingSha256 = matchedRecording?.sha256Hash,
+                                        notes = null,
+                                        outcome = null
+                                    )
+                                )
+                                Log.i(TAG, "Reported call to backend. Response code: ${response.code()}")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Call report backend sync deferred: ${e.message}")
+                            }
+                        }
                     }
-                } else {
-                    Log.w(TAG, "⚠️ Recordings folder not configured in app settings.")
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error handling call ended", e)
             }
         }
     }

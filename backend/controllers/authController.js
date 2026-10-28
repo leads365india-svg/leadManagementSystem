@@ -78,9 +78,9 @@ const login = async (req, res) => {
       }
     }
 
-    // Update lastLoginAt safely
-    user.lastLoginAt = new Date()
-    await user.save()
+    // Record login timestamp
+    const loginTimestamp = new Date()
+    user.lastLoginAt = loginTimestamp
 
     // Sign JWT using validated secret including tokenVersion for session invalidation
     const token = jwt.sign(
@@ -142,20 +142,23 @@ const login = async (req, res) => {
       account: accountData,
     }
 
-    // Log successful authentication event to audit trail
-    await audit.log({
-      tenantId: user.tenantId,
-      actor: user,
-      action: audit.AUDIT_ACTIONS.AUTH_LOGIN,
-      entity: "auth",
-      entityId: user._id,
-      summary: `User ${user.name} (${user.email}) logged in successfully`,
-      details: {
-        role: user.role,
-        roleTitle: resolvedRoleName,
-      },
-      req,
-    })
+    // Asynchronously record lastLoginAt and audit trail without delaying client response
+    Promise.all([
+      User.updateOne({ _id: user._id }, { $set: { lastLoginAt: loginTimestamp } }),
+      audit.log({
+        tenantId: user.tenantId,
+        actor: user,
+        action: audit.AUDIT_ACTIONS.AUTH_LOGIN,
+        entity: "auth",
+        entityId: user._id,
+        summary: `User ${user.name} (${user.email}) logged in successfully`,
+        details: {
+          role: user.role,
+          roleTitle: resolvedRoleName,
+        },
+        req,
+      }),
+    ]).catch((err) => console.error("Post-login background update error:", err))
 
     res.status(200).json({
       success: true,

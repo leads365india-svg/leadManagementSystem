@@ -1,15 +1,10 @@
-import CrmPlaceholderPage from "@/components/crm-placeholder-page"
+import DoNotRecordClient from "./do-not-record-client"
 
 export const metadata = {
-  title: "Do-Not-Record List | LeadFlow CRM",
+  title: "Do-Not-Record & Privacy Controls | Leads-365",
+  description: "Manage phone number exclusion lists, compliance lead tags, and recording privacy settings.",
 }
 
 export default function DoNotRecordPage() {
-  return (
-    <CrmPlaceholderPage
-      title="Do-Not-Record"
-      category="Settings"
-      description="Manage compliance phone numbers, GDPR/TCPA opt-outs, and restricted customer contact lists."
-    />
-  )
+  return <DoNotRecordClient />
 }

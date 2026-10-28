@@ -20,6 +20,7 @@ const auditRoutes = require("./routes/auditRoutes")
 const queueMonitorRoutes = require("./routes/queueMonitorRoutes")
 const callRoutes = require("./routes/callRoutes")
 const mobileRoutes = require("./routes/mobileRoutes")
+const privacyRoutes = require("./routes/privacyRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
@@ -70,6 +71,8 @@ const webhookCors = cors({
     "Authorization",
     "x-api-key",
     "X-Api-Key",
+    "x-site-key",
+    "X-Site-Key",
     "x-idempotency-key",
     "X-Idempotency-Key",
     "idempotency-key",
@@ -108,6 +111,8 @@ const corsOptions = {
     "X-Requested-With",
     "x-api-key",
     "X-Api-Key",
+    "x-site-key",
+    "X-Site-Key",
     "x-idempotency-key",
     "X-Idempotency-Key",
     "idempotency-key",
@@ -194,6 +199,7 @@ app.use("/api/integrations", integrationLimiter, integrationRoutes)
 app.use("/api/calls", callRoutes)
 app.use("/api/devices", callRoutes)
 app.use("/api/mobile", mobileRoutes)
+app.use("/api/privacy", privacyRoutes)
 
 // Error handling middleware
 app.use(notFound)

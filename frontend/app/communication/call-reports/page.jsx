@@ -1,10 +1,17 @@
 "use client"
 
 import React, { useState, useEffect, useCallback, useMemo, Suspense } from "react"
+import dynamic from "next/dynamic"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
-import LeadDetailDrawer from "@/components/lead-detail-drawer"
+
+const LeadDetailDrawer = dynamic(() => import("@/components/lead-detail-drawer"), {
+  ssr: false,
+})
+const InBrowserAudioPlayer = dynamic(() => import("@/components/in-browser-audio-player"), {
+  ssr: false,
+})
 import {
   PhoneCall,
   PhoneIncoming,
@@ -75,6 +82,8 @@ function CallReportsClient() {
   const [directionFilter, setDirectionFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
   const [dispositionFilter, setDispositionFilter] = useState("all")
+  const [recordingFilter, setRecordingFilter] = useState("all") // "all" | "stored" | "missing" | "expired" | "skipped_dnr"
+  const [activePlayingCall, setActivePlayingCall] = useState(null)
   const [dateRange, setDateRange] = useState("all")
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
@@ -130,6 +139,10 @@ function CallReportsClient() {
       if (directionFilter !== "all") query.direction = directionFilter
       if (statusFilter !== "all") query.status = statusFilter
       if (dispositionFilter !== "all") query.disposition = dispositionFilter
+      if (recordingFilter === "stored") query.hasRecording = "true"
+      else if (recordingFilter === "missing") query.missingRecording = "true"
+      else if (recordingFilter === "expired") query.recordingStatus = "expired"
+      else if (recordingFilter === "skipped_dnr") query.recordingStatus = "skipped_dnr"
 
       const res = await apiClient.getCalls(query)
       if (res && res.success && res.data) {
@@ -146,7 +159,7 @@ function CallReportsClient() {
     } finally {
       setLoadingCalls(false)
     }
-  }, [page, directionFilter, statusFilter, dispositionFilter, dateQueryParams])
+  }, [page, directionFilter, statusFilter, dispositionFilter, recordingFilter, dateQueryParams])
 
   // Fetch Metrics
   const fetchMetrics = useCallback(async () => {
@@ -526,6 +539,19 @@ function CallReportsClient() {
                   <option value="Wrong Number">Wrong Number</option>
                   <option value="Left Voicemail">Left Voicemail</option>
                 </select>
+
+                {/* Recording Status Filter */}
+                <select
+                  value={recordingFilter}
+                  onChange={(e) => setRecordingFilter(e.target.value)}
+                  className="text-xs font-medium rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
+                >
+                  <option value="all">All Audio</option>
+                  <option value="stored">Has Stored Recording</option>
+                  <option value="missing">Missing Recording</option>
+                  <option value="skipped_dnr">Skipped (DNR)</option>
+                  <option value="expired">Purged (30d)</option>
+                </select>
               </div>
             </div>
           </div>
@@ -648,16 +674,38 @@ function CallReportsClient() {
 
                           {/* Recording */}
                           <td className="px-5 py-4 whitespace-nowrap">
-                            {call.recording?.status === "ready" ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
-                                <Mic className="w-3 h-3 text-indigo-600" /> Ready
+                            {call.recording?.status === "stored" || call.recording?.status === "ready" ? (
+                              <button
+                                type="button"
+                                onClick={() => setActivePlayingCall(activePlayingCall?._id === (call._id || call.id) ? null : call)}
+                                className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-lg border transition shadow-2xs ${
+                                  activePlayingCall?._id === (call._id || call.id)
+                                    ? "bg-indigo-600 text-white border-indigo-700 ring-2 ring-indigo-400/30"
+                                    : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200"
+                                }`}
+                                title="Play audio recording in browser"
+                              >
+                                <Mic className="w-3.5 h-3.5" />
+                                <span>{activePlayingCall?._id === (call._id || call.id) ? "Playing" : "Play"}</span>
+                              </button>
+                            ) : call.recording?.status === "skipped_dnr" ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md" title="Excluded by Do-Not-Record compliance">
+                                <Shield className="w-3 h-3 text-rose-500" /> Skipped (DNR)
+                              </span>
+                            ) : call.recording?.status === "expired" ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md" title="Purged after 30-day retention">
+                                <Clock className="w-3 h-3 text-amber-500" /> Purged (30d)
                               </span>
                             ) : call.recording?.status === "pending" ? (
                               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
-                                Uploading
+                                <RefreshCw className="w-3 h-3 animate-spin text-amber-600" /> Uploading
+                              </span>
+                            ) : call.status === "completed" ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md" title="Call completed but no recording was uploaded">
+                                <AlertCircle className="w-3 h-3 text-slate-400" /> Missing Audio
                               </span>
                             ) : (
-                              <span className="text-slate-400 text-[11px]">None</span>
+                              <span className="text-slate-400 text-[11px]">No Recording</span>
                             )}
                           </td>
 
@@ -1025,6 +1073,20 @@ function CallReportsClient() {
           fetchMetrics()
         }}
       />
+
+      {/* In-Browser Streaming Audio Player Dock */}
+      {activePlayingCall && (
+        <div className="fixed bottom-6 right-6 z-50 w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
+          <InBrowserAudioPlayer
+            callId={activePlayingCall._id || activePlayingCall.id}
+            recording={activePlayingCall.recording}
+            agentName={activePlayingCall.agentId?.name || "Agent"}
+            leadPhone={activePlayingCall.phoneNormalized || activePlayingCall.number}
+            direction={activePlayingCall.direction}
+            onClose={() => setActivePlayingCall(null)}
+          />
+        </div>
+      )}
     </div>
   )
 }

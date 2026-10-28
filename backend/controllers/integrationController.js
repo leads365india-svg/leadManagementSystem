@@ -11,6 +11,7 @@ const leadService = require("../services/leadService")
 const integrationService = require("../services/integrationService")
 const audit = require("../services/auditService")
 const { generateApiKey, hashApiKey, maskSecret } = require("../utils/cryptoUtils")
+const { normalizeOrigin, validateOrigin } = require("../utils/originValidator")
 
 // Helper: Generate secure API credential
 const generateIntegrationKey = () => {
@@ -19,6 +20,9 @@ const generateIntegrationKey = () => {
   const maskedKey = `lf_live_••••••••••••••••${rawKey.slice(-4)}`
   return { rawKey, keyHash, maskedKey }
 }
+
+// Helper: Generate public website site key (Phase 22)
+const generateSiteKey = () => `lf_site_${crypto.randomBytes(16).toString("hex")}`
 
 // Helper: Normalize domain (lowercase, strip protocols/paths/www)
 const sanitizeDomain = (domain) => {
@@ -135,6 +139,7 @@ const getWebsiteConfig = async (req, res) => {
     if (!config) {
       const { rawKey, keyHash, maskedKey } = generateIntegrationKey()
       rawApiKey = rawKey
+      const initialSiteKey = generateSiteKey()
 
       config = new LeadFeedConfig({
         tenantId,
@@ -143,6 +148,8 @@ const getWebsiteConfig = async (req, res) => {
           apiKeyHash: keyHash,
           apiKeyMasked: maskedKey,
           apiKeyLastRotatedAt: new Date(),
+          siteKey: initialSiteKey,
+          allowedOrigins: [],
           assignedStaffId: "unassigned",
           assignedStaffName: "Unassigned",
           acceptedForms: [],
@@ -164,6 +171,10 @@ const getWebsiteConfig = async (req, res) => {
         },
       })
       await config.save()
+    } else if (!config.websiteSource.siteKey) {
+      // Ensure siteKey exists for existing configurations
+      config.websiteSource.siteKey = generateSiteKey()
+      await config.save()
     }
 
     // Retrieve active staff belonging to this tenant
@@ -178,6 +189,7 @@ const getWebsiteConfig = async (req, res) => {
     const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http"
     const host = req.get("host") || "localhost:5000"
     const webhookUrl = `${protocol}://${host}/api/integrations/leads/website`
+    const snippetUrl = `${protocol}://${host}/api/integrations/snippet.js`
 
     res.status(200).json({
       success: true,
@@ -188,6 +200,8 @@ const getWebsiteConfig = async (req, res) => {
             enabled: config.websiteSource.enabled,
             apiKeyMasked: config.websiteSource.apiKeyMasked,
             apiKeyLastRotatedAt: config.websiteSource.apiKeyLastRotatedAt,
+            siteKey: config.websiteSource.siteKey,
+            allowedOrigins: config.websiteSource.allowedOrigins || [],
             assignedStaffId: config.websiteSource.assignedStaffId,
             assignedStaffName: config.websiteSource.assignedStaffName,
             acceptedForms: config.websiteSource.acceptedForms || [],
@@ -210,6 +224,7 @@ const getWebsiteConfig = async (req, res) => {
           role: s.role,
         })),
         webhookUrl,
+        snippetUrl,
         rawApiKey, // Only provided on initial config creation
       },
     })
@@ -240,6 +255,7 @@ const updateWebsiteConfig = async (req, res) => {
       emailVerification,
       blockedDomains,
       duplicateHandling,
+      allowedOrigins,
     } = req.body
 
     let config = await LeadFeedConfig.findOne({ tenantId })
@@ -295,6 +311,32 @@ const updateWebsiteConfig = async (req, res) => {
     // Deduplicate
     parsedBlockedDomains = [...new Set(parsedBlockedDomains)]
 
+    // 3b. Validate and parse allowed origins (Phase 22)
+    let parsedAllowedOrigins = config.websiteSource.allowedOrigins || []
+    if (allowedOrigins !== undefined) {
+      const rawOrigins = Array.isArray(allowedOrigins)
+        ? allowedOrigins
+        : typeof allowedOrigins === "string"
+        ? allowedOrigins.split("\n")
+        : []
+
+      const normalizedList = []
+      for (const originItem of rawOrigins) {
+        if (!originItem || typeof originItem !== "string") continue
+        const trimmed = originItem.trim()
+        if (!trimmed) continue
+        const normalized = normalizeOrigin(trimmed)
+        if (!normalized) {
+          return res.status(400).json({
+            success: false,
+            error: `Invalid allowed origin format: "${trimmed}". Origins must include http:// or https:// and a valid hostname without path.`,
+          })
+        }
+        normalizedList.push(normalized)
+      }
+      parsedAllowedOrigins = [...new Set(normalizedList)]
+    }
+
     // 4. Validate duplicateHandling enum
     const validDuplicatePolicies = ["reject", "update", "allow"]
     const resolvedDuplicatePolicy = validDuplicatePolicies.includes(duplicateHandling)
@@ -326,6 +368,7 @@ const updateWebsiteConfig = async (req, res) => {
     config.websiteSource.assignedStaffName = assignedStaffName
     config.websiteSource.acceptedForms = parsedAcceptedForms
     config.websiteSource.blockedDomains = parsedBlockedDomains
+    config.websiteSource.allowedOrigins = parsedAllowedOrigins
     config.websiteSource.duplicateHandling = resolvedDuplicatePolicy
     config.websiteSource.emailVerification = resolvedVerification
 
@@ -349,6 +392,7 @@ const updateWebsiteConfig = async (req, res) => {
         enabled: config.websiteSource.enabled,
         assignedStaffName: config.websiteSource.assignedStaffName,
         duplicateHandling: config.websiteSource.duplicateHandling,
+        allowedOriginsCount: parsedAllowedOrigins.length,
       },
       req,
     })
@@ -361,6 +405,8 @@ const updateWebsiteConfig = async (req, res) => {
           enabled: config.websiteSource.enabled,
           apiKeyMasked: config.websiteSource.apiKeyMasked,
           apiKeyLastRotatedAt: config.websiteSource.apiKeyLastRotatedAt,
+          siteKey: config.websiteSource.siteKey,
+          allowedOrigins: config.websiteSource.allowedOrigins || [],
           assignedStaffId: config.websiteSource.assignedStaffId,
           assignedStaffName: config.websiteSource.assignedStaffName,
           acceptedForms: config.websiteSource.acceptedForms,
@@ -451,6 +497,199 @@ const rotateApiKey = async (req, res) => {
   }
 }
 
+/**
+ * POST /api/integrations/settings/website/rotate-site-key
+ * Authenticated: Rotate public website site key (Phase 22)
+ */
+const rotateSiteKey = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    if (!tenantId) {
+      return res.status(400).json({ success: false, error: "Tenant context missing" })
+    }
+
+    let config = await LeadFeedConfig.findOne({ tenantId })
+    if (!config) {
+      return res.status(404).json({ success: false, error: "Configuration not found" })
+    }
+
+    const newSiteKey = generateSiteKey()
+    config.websiteSource.siteKey = newSiteKey
+    await config.save()
+
+    // Sync to Integration model
+    try {
+      const integration = await Integration.findOne({ tenantId, type: "website" })
+      if (integration) {
+        integration.siteKey = newSiteKey
+        await integration.save()
+      } else {
+        await integrationService.syncLegacyToIntegration(config)
+      }
+    } catch (e) {
+      console.warn("Failed to sync rotated site key to Integration model:", e.message)
+    }
+
+    await audit.log({
+      tenantId,
+      actor: req.user,
+      action: "integration.site_key_rotate",
+      entity: "integration",
+      entityId: config._id,
+      summary: `Rotated website lead feed public site key`,
+      details: { siteKey: newSiteKey },
+      req,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: "Website public site key rotated successfully",
+      data: {
+        siteKey: newSiteKey,
+      },
+    })
+  } catch (error) {
+    console.error("Error rotating site key:", error)
+    res.status(500).json({
+      success: false,
+      error: "Failed to rotate site key",
+    })
+  }
+}
+
+/**
+ * GET /api/integrations/snippet.js
+ * Public: Serves the lightweight embeddable lead capture snippet (Phase 22)
+ */
+const serveWebsiteSnippet = (req, res) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8")
+  res.setHeader("Access-Control-Allow-Origin", "*")
+  res.setHeader("Cache-Control", "public, max-age=3600")
+
+  const snippetCode = `(function() {
+  'use strict';
+  try {
+    var currentScript = document.currentScript || (function() {
+      var scripts = document.getElementsByTagName('script');
+      return scripts[scripts.length - 1];
+    })();
+    var siteKey = currentScript ? currentScript.getAttribute('data-site-key') : null;
+    var defaultEndpoint = (currentScript && currentScript.src)
+      ? currentScript.src.replace(/\\/snippet\\.js.*$/, '/leads/website')
+      : '/api/integrations/leads/website';
+    var customEndpoint = currentScript ? currentScript.getAttribute('data-endpoint') : null;
+    var endpoint = customEndpoint || defaultEndpoint;
+
+    if (!siteKey) {
+      console.warn('[Leads365] Missing data-site-key attribute on integration script tag.');
+      return;
+    }
+
+    function getQueryParams() {
+      var params = {};
+      try {
+        var search = window.location.search.substring(1);
+        if (search) {
+          var pairs = search.split('&');
+          for (var i = 0; i < pairs.length; i++) {
+            var pair = pairs[i].split('=');
+            if (pair.length === 2) {
+              params[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1].replace(/\\+/g, ' '));
+            }
+          }
+        }
+      } catch (e) {}
+      return params;
+    }
+
+    function captureLead(formData, formElement) {
+      var q = getQueryParams();
+      var payload = {
+        name: formData.name || formData.fullName || formData.full_name || formData['your-name'] || '',
+        email: formData.email || formData.emailAddress || formData.email_address || formData['your-email'] || '',
+        phone: formData.phone || formData.phoneNumber || formData.phone_number || formData.tel || formData['your-phone'] || '',
+        message: formData.message || formData.notes || formData.comment || formData['your-message'] || '',
+        formId: (formElement && (formElement.getAttribute('data-form-id') || formElement.id || formElement.name)) || 'website_form',
+        landingPage: window.location.href,
+        referrer: document.referrer || '',
+        utm_source: q.utm_source || '',
+        utm_medium: q.utm_medium || '',
+        utm_campaign: q.utm_campaign || '',
+        utm_term: q.utm_term || '',
+        utm_content: q.utm_content || '',
+        gclid: q.gclid || '',
+        fbclid: q.fbclid || ''
+      };
+
+      if (formData._hp_trap || formData.hp_field || formData._lead_hp) {
+        payload._hp_trap = formData._hp_trap || formData.hp_field || formData._lead_hp;
+      }
+
+      for (var key in formData) {
+        if (formData.hasOwnProperty(key) && !payload.hasOwnProperty(key)) {
+          payload[key] = formData[key];
+        }
+      }
+
+      fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-site-key': siteKey
+        },
+        body: JSON.stringify(payload),
+        keepalive: true
+      }).then(function(res) {
+        if (!res.ok) {
+          return res.json().then(function(err) {
+            console.warn('[Leads365] Lead submission warning:', err.error || res.statusText);
+          });
+        }
+      }).catch(function(err) {
+        console.warn('[Leads365] Lead transmission error:', err.message);
+      });
+    }
+
+    function initFormListener() {
+      document.addEventListener('submit', function(e) {
+        var form = e.target;
+        if (!form || form.tagName !== 'FORM') return;
+        var isTarget = form.hasAttribute('data-leads365-form') || form.classList.contains('leads365-form');
+        if (!isTarget) {
+          var hasContactField = form.querySelector('input[type="email"], input[type="tel"], input[name*="email"], input[name*="phone"]');
+          if (!hasContactField) return;
+        }
+
+        var data = {};
+        var elements = form.elements;
+        for (var i = 0; i < elements.length; i++) {
+          var el = elements[i];
+          if (!el.name || el.disabled || el.type === 'submit' || el.type === 'button' || el.type === 'password') continue;
+          if ((el.type === 'radio' || el.type === 'checkbox') && !el.checked) continue;
+          data[el.name] = el.value;
+        }
+
+        captureLead(data, form);
+      }, true);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initFormListener);
+    } else {
+      initFormListener();
+    }
+
+    window.Leads365 = window.Leads365 || {};
+    window.Leads365.capture = function(customData) {
+      captureLead(customData || {}, null);
+    };
+  } catch (err) {
+    console.warn('[Leads365] Snippet init failed:', err);
+  }
+})();`
+
+  return res.send(snippetCode)
+}
 
 /**
  * POST /api/integrations/settings/website/test
@@ -532,14 +771,32 @@ const receiveWebsiteLead = async (req, res) => {
       ? req.headers.authorization.slice(7).trim()
       : null)
 
+  const rawSiteKey =
+    req.headers["x-site-key"] ||
+    req.headers["X-Site-Key"] ||
+    req.query.site_key ||
+    req.query.siteKey ||
+    req.body.siteKey ||
+    req.body.site_key ||
+    null
+
+  const incomingOrigin = req.headers.origin || req.headers.referer || null
+
   const result = await integrationService.intakeWebhookPayload({
     rawApiKey,
+    rawSiteKey,
+    incomingOrigin,
     headers: req.headers,
     body: req.body,
     query: req.query,
     ip: req.ip || req.headers["x-forwarded-for"] || "unknown",
     async: req.headers["x-queue-async"] === "true" || req.query.async === "true",
   })
+
+  if (result.permittedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", result.permittedOrigin)
+    res.setHeader("Vary", "Origin")
+  }
 
   return res.status(result.status || (result.success ? 200 : 400)).json(result)
 }
@@ -950,6 +1207,8 @@ module.exports = {
   getWebsiteConfig,
   updateWebsiteConfig,
   rotateApiKey,
+  rotateSiteKey,
+  serveWebsiteSnippet,
   sendTestLead,
   receiveWebsiteLead,
   listIntegrations,
