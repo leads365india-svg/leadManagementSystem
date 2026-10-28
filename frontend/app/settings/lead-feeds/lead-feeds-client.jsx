@@ -181,6 +181,37 @@ export default function LeadFeedsClient() {
   })
 
   // ==========================================
+  // Generic Connector State (Phase 24: Zapier, Make, n8n)
+  // ==========================================
+  const [genericData, setGenericData] = useState({
+    configured: false,
+    status: "active",
+    integration: null,
+    webhookUrl: "",
+    apiKeyMasked: "",
+    apiKeyLastRotatedAt: null,
+    duplicateHandling: "update",
+    assignedStaffId: "unassigned",
+    assignedStaffName: "Unassigned",
+    stats: {},
+  })
+  const [loadingGeneric, setLoadingGeneric] = useState(false)
+  const [savingGeneric, setSavingGeneric] = useState(false)
+  const [testingGeneric, setTestingGeneric] = useState(false)
+  const [rotatingGenericKey, setRotatingGenericKey] = useState(false)
+  const [showGenericModal, setShowGenericModal] = useState(false)
+  const [showRotateGenericModal, setShowRotateGenericModal] = useState(false)
+  const [newlyGeneratedGenericKey, setNewlyGeneratedGenericKey] = useState(null)
+  const [copiedGenericKey, setCopiedGenericKey] = useState(false)
+  const [copiedGenericUrl, setCopiedGenericUrl] = useState(false)
+  const [activeGenericRecipeTab, setActiveGenericRecipeTab] = useState("zapier")
+  const [genericForm, setGenericForm] = useState({
+    assignedStaffId: "unassigned",
+    duplicateHandling: "update",
+    status: "active",
+  })
+
+  // ==========================================
   // Integration Events Ledger State (Phase 11)
   // ==========================================
   const [events, setEvents] = useState([])
@@ -319,6 +350,41 @@ export default function LeadFeedsClient() {
     }
   }, [staffList.length])
 
+  // Load Generic Connector Status (Phase 24)
+  const loadGenericStatus = useCallback(async () => {
+    try {
+      setLoadingGeneric(true)
+      const res = await apiClient.getGenericConnectorStatus()
+      if (res && res.success) {
+        const intg = res.integration || {}
+        setGenericData({
+          configured: Boolean(res.configured),
+          status: intg.status || "active",
+          integration: intg,
+          webhookUrl: res.webhookUrl || "",
+          apiKeyMasked: intg.apiKeyMasked || "",
+          apiKeyLastRotatedAt: intg.apiKeyLastRotatedAt || null,
+          duplicateHandling: intg.duplicateHandling || "update",
+          assignedStaffId: intg.assignedStaffId || "unassigned",
+          assignedStaffName: intg.assignedStaffName || "Unassigned",
+          stats: intg.stats || {},
+        })
+        if (res.rawKeyOnce) {
+          setNewlyGeneratedGenericKey(res.rawKeyOnce)
+        }
+        setGenericForm({
+          assignedStaffId: intg.assignedStaffId || "unassigned",
+          duplicateHandling: intg.duplicateHandling || "update",
+          status: intg.status || "active",
+        })
+      }
+    } catch (err) {
+      console.error("Failed to load Generic Connector status:", err)
+    } finally {
+      setLoadingGeneric(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadSettings()
   }, [loadSettings])
@@ -327,8 +393,9 @@ export default function LeadFeedsClient() {
     if (activeTab === "indiamart") loadIndiaMartStatus()
     if (activeTab === "meta") loadMetaStatus()
     if (activeTab === "google") loadGoogleStatus()
+    if (activeTab === "generic") loadGenericStatus()
     if (activeTab === "events") loadEvents()
-  }, [activeTab, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadEvents])
+  }, [activeTab, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
 
   // Save Website changes
   const handleSaveWebsite = async () => {
@@ -651,6 +718,64 @@ export default function LeadFeedsClient() {
     }
   }
 
+  // Generic Connector Handlers (Phase 24)
+  const handleConnectGenericSubmit = async (e) => {
+    if (e && e.preventDefault) e.preventDefault()
+    try {
+      setSavingGeneric(true)
+      const res = await apiClient.connectGenericConnector(genericForm)
+      if (res && res.success) {
+        toast.success(res.message || "Generic Connector settings updated successfully")
+        setShowGenericModal(false)
+        loadGenericStatus()
+      } else {
+        toast.error(res?.error || "Failed to update Generic Connector settings")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to update settings")
+    } finally {
+      setSavingGeneric(false)
+    }
+  }
+
+  const handleRotateGenericKey = async () => {
+    try {
+      setRotatingGenericKey(true)
+      const res = await apiClient.rotateGenericConnectorKey()
+      if (res && res.success) {
+        toast.success("Generic Connector API key rotated successfully!")
+        if (res.rawKey) {
+          setNewlyGeneratedGenericKey(res.rawKey)
+        }
+        setShowRotateGenericModal(false)
+        loadGenericStatus()
+      } else {
+        toast.error(res?.error || "Failed to rotate API key")
+      }
+    } catch (err) {
+      toast.error(err.message || "Error rotating key")
+    } finally {
+      setRotatingGenericKey(false)
+    }
+  }
+
+  const handleSendGenericTest = async () => {
+    try {
+      setTestingGeneric(true)
+      const res = await apiClient.sendGenericConnectorTestLead()
+      if (res && res.success) {
+        toast.success(res.message || "Simulated test lead ingested successfully!")
+        loadGenericStatus()
+      } else {
+        toast.error(res?.error || "Failed to send test lead")
+      }
+    } catch (err) {
+      toast.error(err.message || "Test lead failed")
+    } finally {
+      setTestingGeneric(false)
+    }
+  }
+
   const copyToClipboard = (text, type) => {
     if (!text) return
     navigator.clipboard.writeText(text)
@@ -666,6 +791,14 @@ export default function LeadFeedsClient() {
       setCopiedGoogleKey(true)
       setTimeout(() => setCopiedGoogleKey(false), 2500)
       toast.success("Google Webhook Key copied to clipboard")
+    } else if (type === "genericUrl") {
+      setCopiedGenericUrl(true)
+      setTimeout(() => setCopiedGenericUrl(false), 2500)
+      toast.success("Generic Webhook URL copied to clipboard")
+    } else if (type === "genericKey") {
+      setCopiedGenericKey(true)
+      setTimeout(() => setCopiedGenericKey(false), 2500)
+      toast.success("Generic Connector API Key copied to clipboard")
     } else if (type === "siteKey") {
       setCopiedSiteKey(true)
       setTimeout(() => setCopiedSiteKey(false), 2500)
@@ -815,6 +948,32 @@ export default function LeadFeedsClient() {
           </div>
         )}
 
+        {activeTab === "generic" && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={handleSendGenericTest}
+              disabled={testingGeneric || genericData.status !== "active"}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {testingGeneric ? (
+                <RefreshCw className="w-4 h-4 animate-spin text-slate-500" />
+              ) : (
+                <Send className="w-4 h-4 text-violet-600" />
+              )}
+              Send Test Lead
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowGenericModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 active:bg-violet-800 text-white text-sm font-medium shadow-sm transition-all cursor-pointer"
+            >
+              <Sliders className="w-4 h-4" />
+              Configure Settings
+            </button>
+          </div>
+        )}
+
         {activeTab === "events" && (
           <div className="flex items-center gap-3">
             <button
@@ -893,6 +1052,22 @@ export default function LeadFeedsClient() {
           <span>Google Lead Forms (Google Ads)</span>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${googleData.configured ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
             {googleData.configured ? "Active" : "Disconnected"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("generic")}
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === "generic"
+              ? "border-violet-600 text-violet-600 bg-violet-50/40 rounded-t-lg"
+              : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-violet-600" />
+          <span>Zapier, Make & n8n</span>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${genericData.status === "active" ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
+            {genericData.status === "active" ? "Active" : "Disabled"}
           </span>
         </button>
 
@@ -1312,7 +1487,7 @@ export default function LeadFeedsClient() {
                       <li><strong>Multi-Touch Attribution:</strong> First-touch is preserved; last-touch is updated on repeat inquiries.</li>
                       <li><strong>Zero Dependencies:</strong> 2.5 KB lightweight script; runs non-blocking with async/defer.</li>
                       <li><strong>Form Tagging:</strong> Auto-detects forms containing contact inputs or marked with <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">&lt;form data-leads365-form&gt;</code>.</li>
-                      <li><strong>Programmatic Submission:</strong> Use <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">window.Leads365.capture({ name, email, phone, message })</code> in custom SPAs / React / Vue.</li>
+                      <li><strong>Programmatic Submission:</strong> Use <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">{'window.Leads365.capture({ name, email, phone, message })'}</code> in custom SPAs / React / Vue.</li>
                       <li><strong>Anti-Spam Honeypot:</strong> Add <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">&lt;input type="text" name="_hp_trap" style="display:none" tabIndex="-1" /&gt;</code> to silently reject bots.</li>
                     </ul>
                   </div>
@@ -1996,7 +2171,418 @@ export default function LeadFeedsClient() {
       )}
 
       {/* ========================================================
-          TAB 4: INTEGRATION EVENT LEDGER & AUDIT (PHASE 11)
+          TAB 4: GENERIC CONNECTOR (ZAPIER, MAKE, N8N, PABBLY) (PHASE 24)
+      ======================================================== */}
+      {activeTab === "generic" && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left 2 Columns: Connector Configuration & Recipes */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Section A: Inbound Feed Endpoint & Security */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-6 bg-slate-50/50 border-b border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-violet-600 animate-pulse" />
+                    <h2 className="text-base font-bold text-slate-900">
+                      Generic Automation Connector (Zapier, Make, n8n, Pabbly)
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Ingest leads from any automation platform, form builder, or webhook forwarder with unified deduplication, assignment, and attribution.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                      genericData.status === "active"
+                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                        : "bg-slate-100 text-slate-600 border border-slate-200"
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    {genericData.status === "active" ? "Connector Active" : "Connector Disabled"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-6 space-y-6">
+                {/* One-Time Rotated Key Banner */}
+                {newlyGeneratedGenericKey && (
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>New Connector API Key Generated — Copy Now</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setNewlyGeneratedGenericKey(null)}
+                        className="text-amber-500 hover:text-amber-700 text-xs font-medium cursor-pointer"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                    <p className="text-xs text-amber-700">
+                      This raw API key is displayed <strong>only once</strong> for security. Update your Zapier, Make, or n8n workflow headers immediately.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={newlyGeneratedGenericKey}
+                        className="flex-1 bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-800 select-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(newlyGeneratedGenericKey, "genericKey")}
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer"
+                      >
+                        {copiedGenericKey ? "Copied!" : "Copy Key"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Webhook Intake URL */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-violet-600" />
+                      Inbound Webhook Intake URL
+                    </label>
+                    <span className="text-[11px] text-slate-400">Target for POST requests</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={genericData.webhookUrl || `${typeof window !== "undefined" ? window.location.origin : ""}/api/integrations/webhooks/generic`}
+                      className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-xs font-mono text-slate-700 select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(genericData.webhookUrl || `${typeof window !== "undefined" ? window.location.origin : ""}/api/integrations/webhooks/generic`, "genericUrl")}
+                      className="px-3.5 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                    >
+                      {copiedGenericUrl ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedGenericUrl ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* API Key */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-violet-600" />
+                      Connector API Key (Secret)
+                    </label>
+                    <span className="text-[11px] text-slate-400">Pass in &apos;x-api-key&apos; header</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={genericData.apiKeyMasked || "gen_live_••••••••••••••••••••••••"}
+                      className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-xs font-mono text-slate-600 select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowRotateGenericModal(true)}
+                      className="px-3 py-2.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Rotate Key
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>Authenticates webhook delivery securely.</span>
+                    <span>
+                      Last rotated:{" "}
+                      {genericData.apiKeyLastRotatedAt
+                        ? new Date(genericData.apiKeyLastRotatedAt).toLocaleDateString()
+                        : "Initial Setup"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Section B: Integration Recipes (Zapier, Make, n8n, Pabbly, cURL) */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Code2 className="w-4 h-4 text-violet-600" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Integration Setup Guides & Recipes
+                  </h3>
+                </div>
+
+                {/* Platform Selector Buttons */}
+                <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                  {["zapier", "make", "n8n", "pabbly", "curl"].map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveGenericRecipeTab(tab)}
+                      className={`px-3 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer capitalize ${
+                        activeGenericRecipeTab === tab
+                          ? "bg-violet-600 text-white shadow-xs"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {tab === "curl" ? "cURL" : tab}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-6">
+                {activeGenericRecipeTab === "zapier" && (
+                  <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
+                    <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-500" />
+                      Zapier Setup (Webhooks by Zapier)
+                    </div>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li>Create a new Zap with any trigger (e.g., <strong>Facebook Lead Ads</strong>, <strong>Typeform</strong>, or <strong>Google Forms</strong>).</li>
+                      <li>Add an Action: choose <strong>Webhooks by Zapier</strong> &rarr; event: <strong>POST</strong>.</li>
+                      <li>Set <strong>URL</strong> to your Inbound Intake URL above.</li>
+                      <li>Set <strong>Payload Type</strong> to <code>json</code>.</li>
+                      <li>Map your lead fields in the <strong>Data</strong> section: <code>name</code>, <code>email</code>, <code>phone</code>, <code>company</code>, <code>message</code>.</li>
+                      <li>In <strong>Headers</strong>, add: <code>x-api-key</code> with your secret API key.</li>
+                    </ol>
+                  </div>
+                )}
+
+                {activeGenericRecipeTab === "make" && (
+                  <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
+                    <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-purple-500" />
+                      Make.com (Integromat) Setup
+                    </div>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li>Add an <strong>HTTP</strong> module to your scenario &rarr; select <strong>Make a request</strong>.</li>
+                      <li>Set <strong>URL</strong> to your Intake URL.</li>
+                      <li>Set <strong>Method</strong> to <code>POST</code>.</li>
+                      <li>In <strong>Headers</strong>, add <code>x-api-key: [Your API Key]</code> and <code>Content-Type: application/json</code>.</li>
+                      <li>Set <strong>Body type</strong> to <code>Raw</code> &rarr; <strong>Content type</strong> to <code>JSON (application/json)</code>.</li>
+                      <li>Provide JSON with <code>name</code>, <code>email</code>, <code>phone</code>, <code>company</code>, and <code>source: &quot;Make.com&quot;</code>.</li>
+                    </ol>
+                  </div>
+                )}
+
+                {activeGenericRecipeTab === "n8n" && (
+                  <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
+                    <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-rose-500" />
+                      n8n (Self-Hosted / Cloud) Setup
+                    </div>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li>Add an <strong>HTTP Request</strong> node to your workflow.</li>
+                      <li>Set <strong>Method</strong> to <code>POST</code>.</li>
+                      <li>Set <strong>URL</strong> to your Intake URL.</li>
+                      <li>Under <strong>Authentication</strong>, choose <strong>Generic Credential Type</strong> &rarr; <strong>Header Auth</strong> (Name: <code>x-api-key</code>).</li>
+                      <li>Set <strong>Send Body</strong> to <code>true</code> &rarr; <strong>Specify Body</strong> as <code>JSON</code>.</li>
+                      <li>Pass mapped node parameters into the JSON body.</li>
+                    </ol>
+                  </div>
+                )}
+
+                {activeGenericRecipeTab === "pabbly" && (
+                  <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
+                    <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-blue-500" />
+                      Pabbly Connect Setup
+                    </div>
+                    <ol className="list-decimal pl-5 space-y-2">
+                      <li>Choose action step <strong>API by Pabbly</strong> &rarr; action event <strong>Execute API Request</strong>.</li>
+                      <li>Action Type: <strong>POST</strong>.</li>
+                      <li>API Endpoint URL: Your Inbound Intake URL.</li>
+                      <li>Headers: key <code>x-api-key</code> with your API key.</li>
+                      <li>Payload Type: <code>JSON</code>. Set Request Data with your lead attributes.</li>
+                    </ol>
+                  </div>
+                )}
+
+                {activeGenericRecipeTab === "curl" && (
+                  <div className="space-y-3">
+                    <div className="font-semibold text-slate-900 text-xs">Test Terminal Command:</div>
+                    <pre className="p-3 bg-slate-900 text-emerald-400 rounded-lg text-[11px] font-mono overflow-x-auto select-all">
+{`curl -X POST "${genericData.webhookUrl || "http://localhost:5000/api/integrations/webhooks/generic"}" \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: ${newlyGeneratedGenericKey || genericData.apiKeyMasked || "YOUR_API_KEY"}" \\
+  -d '{
+    "name": "Rohit Verma",
+    "email": "rohit@example.in",
+    "phone": "+91 98765 43210",
+    "company": "Apex Diagnostics",
+    "source": "Zapier",
+    "message": "Interested in diagnostic equipment demo."
+  }'`}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section C: Field Mapping Reference */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Supported Inbound Field Names</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Our intelligent normalizer automatically recognizes any of these standard naming conventions:
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border border-slate-200 rounded-lg">
+                  <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                    <tr>
+                      <th className="py-2.5 px-3">CRM Field</th>
+                      <th className="py-2.5 px-3">Accepted Inbound Keys</th>
+                      <th className="py-2.5 px-3">Requirement</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">Name</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">name, full_name, fullName, or first_name + last_name</td>
+                      <td className="py-2 px-3 text-emerald-600 font-medium">Auto-fallback</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">Email</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">email, email_address, emailAddress, work_email</td>
+                      <td className="py-2 px-3 text-slate-600">Email or Phone required</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">Phone</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">phone, phone_number, mobile, mobile_number, tel</td>
+                      <td className="py-2 px-3 text-slate-600">Normalized to E.164</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">Company</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">company, company_name, organization, org</td>
+                      <td className="py-2 px-3 text-slate-400">Optional</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">City / Location</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">city, location, town</td>
+                      <td className="py-2 px-3 text-slate-400">Optional</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">Attribution</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">utm_source, utm_medium, utm_campaign, gclid, fbclid</td>
+                      <td className="py-2 px-3 text-slate-400">Preserved in Multi-Touch</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-semibold text-slate-900">Custom Fields</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">Any other parameters (e.g. budget, requirement)</td>
+                      <td className="py-2 px-3 text-slate-600">Saved in metadata & notes</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Status & Operational Controls */}
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-violet-600" />
+                Connector Configuration
+              </h3>
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <div className="text-slate-500 font-medium mb-1">Assigned Agent</div>
+                  <div className="font-semibold text-slate-800 bg-slate-50 p-2.5 rounded-lg border border-slate-100 flex items-center justify-between">
+                    <span>{genericData.assignedStaffName || "Unassigned"}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowGenericModal(true)}
+                      className="text-violet-600 hover:text-violet-800 font-bold text-[11px] cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-500 font-medium mb-1">Duplicate Lead Policy</div>
+                  <div className="font-semibold text-slate-800 bg-slate-50 p-2.5 rounded-lg border border-slate-100 flex items-center justify-between">
+                    <span className="capitalize">{genericData.duplicateHandling || "update"}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowGenericModal(true)}
+                      className="text-violet-600 hover:text-violet-800 font-bold text-[11px] cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    {genericData.duplicateHandling === "update"
+                      ? "Appends new inquiries to the existing lead timeline."
+                      : "Rejects repeat submissions to avoid duplicates."}
+                  </p>
+                </div>
+              </div>
+
+              {/* Statistics */}
+              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase">Received</div>
+                  <div className="text-2xl font-bold text-slate-900 mt-1">
+                    {genericData.stats?.totalReceived || 0}
+                  </div>
+                </div>
+                <div className="p-3.5 bg-violet-50/50 rounded-xl border border-violet-100">
+                  <div className="text-[11px] font-medium text-violet-700 uppercase">Processed</div>
+                  <div className="text-2xl font-bold text-violet-700 mt-1">
+                    {genericData.stats?.totalSuccess || 0}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 rounded-xl text-xs space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Security Mode:</span>
+                  <span className="font-semibold text-violet-700">SHA-256 Constant-Time</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Tenant Isolation:</span>
+                  <span className="font-semibold text-emerald-700">Strict Ambient Context</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Last Delivery:</span>
+                  <span className="font-semibold text-slate-700">
+                    {genericData.stats?.lastReceivedAt
+                      ? new Date(genericData.stats.lastReceivedAt).toLocaleString()
+                      : "Never"}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSendGenericTest}
+                disabled={testingGeneric || genericData.status !== "active"}
+                className="w-full py-2.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+              >
+                <Send className={`w-3.5 h-3.5 ${testingGeneric ? "animate-spin" : ""}`} />
+                {testingGeneric ? "Dispatching Test Lead..." : "Send Test Inbound Lead"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          TAB 5: INTEGRATION EVENT LEDGER & AUDIT (PHASE 11)
       ======================================================== */}
       {activeTab === "events" && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -2593,6 +3179,146 @@ export default function LeadFeedsClient() {
                 className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL: CONFIGURE GENERIC CONNECTOR (PHASE 24)
+      ======================================================== */}
+      {showGenericModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Configure Generic Connector</h3>
+                  <p className="text-xs text-slate-500">Automation ingestion preferences</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGenericModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConnectGenericSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Default Assigned Staff Member
+                </label>
+                <select
+                  value={genericForm.assignedStaffId}
+                  onChange={(e) => setGenericForm({ ...genericForm, assignedStaffId: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-600"
+                >
+                  <option value="unassigned">Unassigned (Pool)</option>
+                  {staffList.map((s) => (
+                    <option key={s._id || s.id} value={s._id || s.id}>
+                      {s.name} ({s.email})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  All inbound automation leads without explicit assignee will be assigned to this user.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Duplicate Lead Policy
+                </label>
+                <select
+                  value={genericForm.duplicateHandling}
+                  onChange={(e) => setGenericForm({ ...genericForm, duplicateHandling: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-600"
+                >
+                  <option value="update">Update Existing Lead (Append Inquiry to Timeline Note)</option>
+                  <option value="reject">Reject Duplicate (Return HTTP 409 Conflict)</option>
+                  <option value="allow">Allow Duplicate (Create Separate Record)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Connector Status
+                </label>
+                <select
+                  value={genericForm.status}
+                  onChange={(e) => setGenericForm({ ...genericForm, status: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-600"
+                >
+                  <option value="active">Active (Accepting Inbound Leads)</option>
+                  <option value="inactive">Inactive (Reject With HTTP 403 Forbidden)</option>
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowGenericModal(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingGeneric}
+                  className="px-5 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  {savingGeneric && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  Save Configuration
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL: ROTATE GENERIC CONNECTOR KEY (PHASE 24)
+      ======================================================== */}
+      {showRotateGenericModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Rotate Generic Connector Key?</h3>
+                <p className="text-xs text-slate-500">Security credential regeneration</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Rotating your connector key will <strong>immediately invalidate</strong> the previous key. Any Zapier, Make, or n8n workflow currently dispatching leads with the old key will fail authentication until updated with the new key.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowRotateGenericModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRotateGenericKey}
+                disabled={rotatingGenericKey}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                {rotatingGenericKey && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                Yes, Rotate Key Now
               </button>
             </div>
           </div>

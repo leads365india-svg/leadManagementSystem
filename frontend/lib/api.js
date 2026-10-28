@@ -411,6 +411,30 @@ class ApiClient {
     })
   }
 
+  // --- Phase 24: Generic Connector (Zapier, Make, n8n, Pabbly) Endpoints ---
+  async getGenericConnectorStatus() {
+    return this.request("/integrations/generic/status")
+  }
+
+  async connectGenericConnector(payload) {
+    return this.request("/integrations/generic/connect", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async rotateGenericConnectorKey() {
+    return this.request("/integrations/generic/rotate-key", {
+      method: "POST",
+    })
+  }
+
+  async sendGenericConnectorTestLead() {
+    return this.request("/integrations/generic/test", {
+      method: "POST",
+    })
+  }
+
   // --- Staff & Team Management Endpoints (Phase 4) ---
   async getStaff(query = {}) {
     const searchParams = new URLSearchParams()

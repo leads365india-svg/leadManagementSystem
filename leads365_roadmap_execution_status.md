@@ -100,6 +100,9 @@ Located at: `D:\Leads Management Sytem\android-feasibility-spike`
 
 | Suite | Scope | Result |
 |---|---|---|
+
+| `verifyPhase24GenericConnector.js` | Generic Webhook Intake, Zapier/Make/n8n/Pabbly normalizer, timing-safe API key auth, idempotency dedupe, tenant isolation, key rotation | **41 Passed, 0 Failed** (20 Static, 21 Behavioral) |
+| `verifyPhase23GoogleLeadWebhook.js` | Official Google Ads Webhook Spec, HTTP 200 delivery contract, timing-safe key verification, gcl_id & user_column_data normalization, idempotency, test lead handling | **45 Passed, 0 Failed** (25 Static, 20 Behavioral) |
 | `verifyPhase22WebsiteSnippet.js` | Origin Normalization, Wildcards, Scheme/Host/Port Guards, SiteKey Auth, Honeypot Anti-Spam, Multi-Touch Attribution, Idempotency | **23 Passed, 0 Failed** (12 Static, 11 Behavioral) |
 | `verifyPhase21CallIngestion.js` | Audio Recording Ingestion, CSV Batch Records, Review Queue, Manual Lead Match, DNR Rejection, Idempotency | **33 Passed, 0 Failed** |
 | `verifyPhase20AndroidHardening.js` | Android Network Security, ProGuard, WorkManager Retries, OEM Autostart, Versioning, Dynamic Signing & Distribution Guide | **25 Passed, 0 Failed** |
@@ -287,20 +290,66 @@ Located at: `D:\Leads Management Sytem\android-feasibility-spike`
   - Step-by-step setup walkthrough for Google Ads Asset Library configuration.
 
 ### B. Files Created & Modified
-1. `backend/services/googleAdsService.js`: Core Google Ads service handling key generation (`generateGoogleKey`), constant-time verification (`verifyGoogleWebhookKey`), payload normalization (`normalizeGoogleLeadPayload`), lead processing (`processGoogleLead`), and key rotation (`rotateGoogleKey`).
+1. `backend/services/googleAdsService.js`: Core Google Ads service handling key generation (`generateGoogleKey`), constant-time verification (`verifyGoogleWebhookKey`), payload normalization (`normalizeGoogleLeadPayload`), lead processing (`processGoogleLead`), and key rotation (`rotateGoogleKey`). Updated to return HTTP 200 on successful delivery matching Google Ads official contract, support official parameter `gcl_id`, and handle optional unknown fields safely.
 2. `backend/controllers/googleAdsController.js`: Express controller implementing webhook intake (`handleGoogleWebhook`), status queries (`getGoogleConfig`), configuration updates (`connectGoogleIntegration`), key rotation (`rotateGoogleKey`), and test dispatch (`sendGoogleTestLead`).
 3. `backend/models/LeadFeedConfig.js`: Extended `googleSource` with `googleKeyHash`, `googleKeyMasked`, `googleKeyLastRotatedAt`, staff assignment, duplicate handling, stats, and JSON serialization exclusion of secret hashes.
 4. `backend/routes/integrationRoutes.js`: Mounted public webhook intake and authenticated admin routes.
 5. `frontend/lib/api.js`: Added `getGoogleAdsStatus()`, `connectGoogleAdsIntegration()`, `rotateGoogleAdsKey()`, and `sendGoogleAdsTestLead()`.
 6. `frontend/app/settings/lead-feeds/lead-feeds-client.jsx`: Added Google Ads tab, stats cards, secret key rotation modal, settings modal, and setup guide.
-7. `backend/tests/verifyPhase23GoogleLeadWebhook.js`: Comprehensive 39-test verification suite covering static invariants, security, tenant isolation, attribution, deduplication, test data handling, and key rotation.
+7. `backend/tests/verifyPhase23GoogleLeadWebhook.js`: Comprehensive 45-test verification suite covering static invariants, official Google Ads webhook spec (`gcl_id`, `user_column_data`, optional fields), HTTP 200 delivery contract, timing-safe verification, tenant isolation, attribution, deduplication, test data handling, and key rotation.
 
 ### C. Test Verification Results
-- `node backend/tests/verifyPhase23GoogleLeadWebhook.js`: **39/39 Passed (19 Static, 20 Behavioral)**
+- `node backend/tests/verifyPhase23GoogleLeadWebhook.js`: **45/45 Passed (25 Static, 20 Behavioral)**
 - `node backend/tests/verifyPhase22WebsiteSnippet.js`: **23/23 Passed**
 - `node backend/tests/verifyPhase21CallIngestion.js`: **33/33 Passed**
 - `node backend/tests/verifyPhase18ConsentPrivacy.js`: **29/29 Passed**
-- Total regression pass count: **124/124 Passed (100%)**
+- Total regression pass count: **130/130 Passed (100%)**
+
+---
+
+## 14. Phase 24: Generic Connector (Zapier, Make, n8n, Pabbly) Implementation Details
+
+### A. Architectural Scope & Implementation
+- **Public Feed Intake Endpoint (`POST /api/integrations/webhooks/generic`):**
+  - Rate-limited intake (`webhookLimiter`) accepting JSON lead payloads from Zapier, Make, n8n, Pabbly, or custom API scripts.
+  - Multi-location API key authentication: `x-api-key` header, `Authorization: Bearer <key>`, `?api_key=` query param, or payload body.
+  - Constant-time verification (`verifyGenericApiKey`) and server-side key lookup (`apiKeyHash`) without trusting client tenant claims.
+  - Fail-closed security: missing/invalid key returns HTTP 401; suspended accounts or disabled integrations return HTTP 403; empty/malformed payload returns HTTP 400.
+- **Intelligent Payload Normalization Engine (`normalizeGenericPayload`):**
+  - Names: auto-maps `name`, `fullName`, `full_name`, `lead_name`, or combines `first_name` + `last_name`.
+  - Contact Fields: auto-normalizes email (`email`, `work_email`, `email_address`) and phones (`phone`, `mobile_number`, `phoneNumber`, `tel`) with E.164 normalization.
+  - Organization & Location: maps `company`, `company_name`, `organization`, `city`, `location`.
+  - Attribution: extracts `source` (defaulting to `"Zapier"` or whatever platform sent it), `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `gclid`, `fbclid`, `campaign_id`.
+  - Custom Field Mappings: supports per-integration configurable field mappings with `trim`, `lowercase`, and `uppercase` transforms.
+  - Data Loss Prevention: unknown/custom keys are preserved in `customFields` object and formatted cleanly into the message summary.
+- **Idempotency & Duplicate Handling:**
+  - Idempotency keyed on `idempotency_key`, `event_id`, `lead_id`, or `id`. Duplicate deliveries return HTTP 200 with `idempotent: true` and `action: "idempotent_duplicate_skipped"`.
+  - Configurable duplicate policy: `update` merges new inquiries into existing lead timeline notes, while `reject` returns HTTP 409 Conflict.
+- **Audit Ledger:**
+  - Append-only records stored in `IntegrationEvent` with `integrationType: "generic"`, status, HTTP status, and payload.
+- **Frontend Settings UI (`frontend/app/settings/lead-feeds/lead-feeds-client.jsx`):**
+  - Added dedicated **Zapier, Make & n8n** tab in the Lead Feeds & Integration Center.
+  - Instant copy of Inbound Webhook URL and masked API Key (`gen_live_••••••••••••XXXX`).
+  - Interactive setup walkthrough tabs for **Zapier**, **Make.com**, **n8n**, **Pabbly Connect**, and **cURL**.
+  - Reference table of supported inbound field names.
+  - Staff assignment and duplicate handling configuration modal.
+  - Key rotation modal with immediate invalidation warning.
+  - Live "Send Test Inbound Lead" diagnostic test trigger.
+
+### B. Files Created & Modified
+1. `backend/services/genericConnectorService.js`: Core generic connector service handling API key generation, constant-time verification, flexible payload normalization, lead processing, and key rotation.
+2. `backend/controllers/genericConnectorController.js`: Controller implementing public webhook intake (`handleGenericWebhook`), config queries (`getGenericConfig`), settings update (`connectGenericIntegration`), key rotation (`rotateGenericKey`), and test dispatch (`sendGenericTestLead`).
+3. `backend/routes/integrationRoutes.js`: Mounted public intake `POST /api/integrations/webhooks/generic` and authenticated admin endpoints (`GET /generic/status`, `POST /generic/connect`, `POST /generic/rotate-key`, `POST /generic/test`).
+4. `frontend/lib/api.js`: Added client methods `getGenericConnectorStatus()`, `connectGenericConnector()`, `rotateGenericConnectorKey()`, and `sendGenericConnectorTestLead()`.
+5. `frontend/app/settings/lead-feeds/lead-feeds-client.jsx`: Added Zapier/Make/n8n tab, configuration cards, recipe guides, settings modal, and key rotation modal.
+6. `backend/tests/verifyPhase24GenericConnector.js`: Comprehensive 41-test suite covering static invariants, flexible normalization, authentication variants, security guards, tenant isolation, idempotency, duplicate policies, and key rotation.
+
+### C. Test Verification Results
+- `node backend/tests/verifyPhase24GenericConnector.js`: **41/41 Passed (20 Static, 21 Behavioral)**
+- `node backend/tests/verifyPhase23GoogleLeadWebhook.js`: **45/45 Passed (25 Static, 20 Behavioral)**
+- `node backend/tests/verifyPhase22WebsiteSnippet.js`: **23/23 Passed**
+- Total Phase 23 + 24 verification pass count: **109/109 Passed (100%)**
+
 
 
 

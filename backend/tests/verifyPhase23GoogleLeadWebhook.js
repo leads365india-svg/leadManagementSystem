@@ -165,6 +165,37 @@ async function runTests() {
   const testNorm2 = googleAdsService.normalizeGoogleLeadPayload(testPayload2)
   assertStatic(testNorm2.isTest === true, "normalizeGoogleLeadPayload detects test- prefix in lead_id")
 
+  // 5. Official Google Ads webhook specification fields (gcl_id, adgroup_id, creative_id, WORK_EMAIL, REGION, COUNTRY)
+  const officialGoogleSpecPayload = {
+    google_key: testKey,
+    lead_id: "google_lead_official_contract_999",
+    form_id: "form_contract_check",
+    campaign_id: "camp_contract_check",
+    adgroup_id: "adgroup_contract_777",
+    creative_id: "creative_contract_888",
+    api_version: "1.0",
+    gcl_id: "Cj0KCQ_OFFICIAL_GCL_ID_SPEC",
+    unknown_optional_google_field_v2: { nested_info: "future_param" },
+    random_google_meta_tag: "safe_ignore",
+    user_column_data: [
+      { column_id: "FULL_NAME", string_value: "Ananya Iyer" },
+      { column_id: "WORK_EMAIL", string_value: "ananya@healthtech.org" },
+      { column_id: "WORK_PHONE", string_value: "+91 91234 56789" },
+      { column_id: "COMPANY_NAME", string_value: "HealthTech Innovations" },
+      { column_id: "CITY", string_value: "Pune" },
+      { column_id: "REGION", string_value: "Maharashtra" },
+      { column_id: "COUNTRY", string_value: "India" }
+    ]
+  }
+
+  const officialNorm = googleAdsService.normalizeGoogleLeadPayload(officialGoogleSpecPayload)
+  assertStatic(officialNorm.gclid === "Cj0KCQ_OFFICIAL_GCL_ID_SPEC", "normalizeGoogleLeadPayload supports Google's official 'gcl_id' parameter")
+  assertStatic(officialNorm.email === "ananya@healthtech.org", "normalizeGoogleLeadPayload maps WORK_EMAIL")
+  assertStatic(officialNorm.phone === "+91 91234 56789", "normalizeGoogleLeadPayload maps WORK_PHONE")
+  assertStatic(officialNorm.message.includes("Region: Maharashtra") && officialNorm.message.includes("Country: India"), "normalizeGoogleLeadPayload maps REGION and COUNTRY")
+  assertStatic(officialNorm.message.includes("AdGroup ID: adgroup_contract_777") && officialNorm.message.includes("Creative ID: creative_contract_888"), "normalizeGoogleLeadPayload preserves adgroup_id and creative_id")
+  assertStatic(officialNorm.name === "Ananya Iyer" && officialNorm.city === "Pune", "normalizeGoogleLeadPayload safely handles unknown/unexpected fields without breaking")
+
   console.log("\n--- PART 2: Behavioral Integration & Tenant Security Tests ---")
 
   const mongoUri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/leads365_test"
@@ -298,8 +329,8 @@ async function runTests() {
     })
 
     assertBehavioral(
-      resValidLead.statusCode === 201 && resValidLead.success === true,
-      "Webhook intake accepts valid Google Ads lead with HTTP 201"
+      resValidLead.statusCode === 200 && resValidLead.success === true,
+      "Webhook intake accepts valid Google Ads lead with HTTP 200 (Google official contract)"
     )
 
     const createdLeadA = await Lead.findById(resValidLead.leadId).setOptions({ skipTenantFilter: true })
@@ -469,8 +500,8 @@ async function runTests() {
       ]
     })
     assertBehavioral(
-      resNewKeyAfterRotate.statusCode === 201,
-      "New rotated key successfully ingests leads"
+      resNewKeyAfterRotate.statusCode === 200,
+      "New rotated key successfully ingests leads with HTTP 200"
     )
 
     // Test 12: Data Safety: Serialized LeadFeedConfig JSON does NOT leak raw key hash

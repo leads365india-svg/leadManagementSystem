@@ -75,7 +75,10 @@ function normalizeGoogleLeadPayload(payload = {}) {
   const leadId = String(payload.lead_id || payload.leadId || "").trim()
   const formId = String(payload.form_id || payload.formId || "").trim()
   const campaignId = String(payload.campaign_id || payload.campaignId || "").trim()
-  const gclid = String(payload.gclid || "").trim()
+  const adgroupId = String(payload.adgroup_id || payload.adgroupId || "").trim()
+  const creativeId = String(payload.creative_id || payload.creativeId || "").trim()
+  const apiVersion = String(payload.api_version || payload.apiVersion || "").trim()
+  const gclid = String(payload.gcl_id || payload.gclid || "").trim()
   const isTest = Boolean(
     payload.is_test === true ||
     payload.isTest === true ||
@@ -89,6 +92,8 @@ function normalizeGoogleLeadPayload(payload = {}) {
   let phone = ""
   let company = ""
   let city = ""
+  let region = ""
+  let country = ""
   let postalCode = ""
   let jobTitle = ""
   const customQuestions = []
@@ -112,14 +117,10 @@ function normalizeGoogleLeadPayload(payload = {}) {
           lastName = val
           break
         case "EMAIL":
-          if (!email) email = val.toLowerCase()
-          break
         case "WORK_EMAIL":
           if (!email) email = val.toLowerCase()
           break
         case "PHONE_NUMBER":
-          if (!phone) phone = val
-          break
         case "WORK_PHONE":
           if (!phone) phone = val
           break
@@ -131,6 +132,12 @@ function normalizeGoogleLeadPayload(payload = {}) {
           break
         case "CITY":
           city = val
+          break
+        case "REGION":
+          region = val
+          break
+        case "COUNTRY":
+          country = val
           break
         case "POSTAL_CODE":
           postalCode = val
@@ -168,13 +175,23 @@ function normalizeGoogleLeadPayload(payload = {}) {
   if (!city && payload.city) {
     city = String(payload.city).trim()
   }
+  if (!region && payload.region) {
+    region = String(payload.region).trim()
+  }
+  if (!country && payload.country) {
+    country = String(payload.country).trim()
+  }
 
   // Construct readable message with any custom Google form questions
   let messageParts = []
   if (jobTitle) messageParts.push(`Job Title: ${jobTitle}`)
   if (postalCode) messageParts.push(`Postal Code: ${postalCode}`)
+  if (region) messageParts.push(`Region: ${region}`)
+  if (country) messageParts.push(`Country: ${country}`)
   if (formId) messageParts.push(`Google Form ID: ${formId}`)
   if (campaignId) messageParts.push(`Campaign ID: ${campaignId}`)
+  if (adgroupId) messageParts.push(`AdGroup ID: ${adgroupId}`)
+  if (creativeId) messageParts.push(`Creative ID: ${creativeId}`)
 
   for (const q of customQuestions) {
     messageParts.push(`${q.question}: ${q.answer}`)
@@ -427,7 +444,7 @@ async function processGoogleLead({
 
     // 13. Update ledger event
     event.status = serviceResult.action === "duplicate_rejected" ? "failed" : "processed"
-    event.httpStatus = serviceResult.action === "duplicate_rejected" ? 409 : (serviceResult.action === "merged" ? 200 : 201)
+    event.httpStatus = serviceResult.action === "duplicate_rejected" ? 409 : 200
     event.result = {
       action: serviceResult.action,
       leadId: serviceResult.lead?._id,
@@ -449,7 +466,7 @@ async function processGoogleLead({
 
     return {
       success: true,
-      status: serviceResult.action === "merged" ? 200 : 201,
+      status: 200, // Google Ads explicitly expects HTTP 200 OK on all successful deliveries
       action: serviceResult.action,
       leadId: serviceResult.lead?._id ? serviceResult.lead._id.toString() : null,
       message:

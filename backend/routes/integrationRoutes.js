@@ -37,9 +37,14 @@ const {
   handleGoogleWebhook,
   getGoogleConfig,
   connectGoogleIntegration,
-  rotateGoogleKey,
-  sendGoogleTestLead,
 } = require("../controllers/googleAdsController")
+const {
+  handleGenericWebhook,
+  getGenericConfig,
+  connectGenericIntegration,
+  rotateGenericKey,
+  sendGenericTestLead,
+} = require("../controllers/genericConnectorController")
 const { authenticate, requireAccountAdmin } = require("../middleware/authMiddleware")
 
 const router = express.Router()
@@ -100,7 +105,14 @@ router.post("/google/connect", authenticate, requireAccountAdmin, connectGoogleI
 router.post("/google/rotate-key", authenticate, requireAccountAdmin, rotateGoogleKey)
 router.post("/google/test", authenticate, requireAccountAdmin, sendGoogleTestLead)
 
-// 9. Phase 11 Multi-Tenant Integration Connectors CRUD
+// 9. Phase 24 Generic Connector Endpoints (Zapier, Make, n8n, Pabbly)
+router.post("/webhooks/generic", webhookLimiter, handleGenericWebhook)
+router.get("/generic/status", authenticate, getGenericConfig)
+router.post("/generic/connect", authenticate, requireAccountAdmin, connectGenericIntegration)
+router.post("/generic/rotate-key", authenticate, requireAccountAdmin, rotateGenericKey)
+router.post("/generic/test", authenticate, requireAccountAdmin, sendGenericTestLead)
+
+// 10. Phase 11 Multi-Tenant Integration Connectors CRUD
 router.get("/", authenticate, listIntegrations)
 router.post("/", authenticate, requireAccountAdmin, createIntegration)
 router.get("/:id", authenticate, getIntegrationById)
