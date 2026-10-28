@@ -5,6 +5,8 @@ const { IntegrationEvent } = require("../models/IntegrationEvent")
 const Lead = require("../models/Lead")
 const User = require("../models/User")
 const { normalizeSource } = require("../models/LeadSource")
+const Account = require("../models/Account")
+const { runWithTenantContext } = require("../middleware/tenantContext")
 const leadService = require("./leadService")
 const { maskSecret } = require("../utils/cryptoUtils")
 
@@ -252,104 +254,121 @@ async function processIndiaMartInquiry({
   integration,
   tenantId,
 }) {
-  const queryId = String(inquiry.UNIQUE_QUERY_ID || inquiry.query_id || "").trim()
+  const queryId = String(inquiry?.UNIQUE_QUERY_ID || inquiry?.query_id || "").trim()
   if (!queryId) {
     throw new Error("Missing UNIQUE_QUERY_ID in IndiaMART inquiry record")
   }
 
-  const idempotencyKey = `indiamart_inquiry_${queryId}`
+  // Validate contact info (phone or email is required)
+  const senderMobile = String(inquiry?.SENDER_MOBILE || inquiry?.mobile || inquiry?.phone || "").trim()
+  const senderEmail = String(inquiry?.SENDER_EMAIL || inquiry?.email || "").toLowerCase().trim()
+  if (!senderMobile && !senderEmail) {
+    throw new Error("Missing buyer contact info: SENDER_MOBILE or SENDER_EMAIL is required")
+  }
 
-  // 1. Check existing event ledger for idempotency
-  let event = await IntegrationEvent.findOne({
-    tenantId,
-    idempotencyKey,
-  }).setOptions({ skipTenantFilter: true })
+  // Check account suspension
+  const account = await Account.findOne({ accountId: tenantId }).setOptions({ skipTenantFilter: true })
+  if (account && account.status === "suspended") {
+    const suspErr = new Error(`Tenant account ${tenantId} is suspended`)
+    suspErr.statusCode = 403
+    throw suspErr
+  }
 
-  if (event && event.status === "processed" && event.result?.leadId) {
+  return await runWithTenantContext({ tenantId, isSuperAdmin: false }, async () => {
+    const idempotencyKey = `indiamart_inquiry_${queryId}`
+
+    // 1. Check existing event ledger for idempotency
+    let event = await IntegrationEvent.findOne({
+      tenantId,
+      idempotencyKey,
+    }).setOptions({ skipTenantFilter: true })
+
+    if (event && event.status === "processed" && event.result?.leadId) {
+      return {
+        action: "skipped_duplicate",
+        leadId: event.result.leadId.toString(),
+        inquiryId: queryId,
+      }
+    }
+
+    // Create event ledger record if not present
+    if (!event) {
+      event = new IntegrationEvent({
+        tenantId,
+        integrationId: integration._id,
+        platform: "indiamart",
+        source: "IndiaMART",
+        direction: "inbound",
+        status: "received",
+        idempotencyKey,
+        payload: inquiry,
+        headers: { "x-source": "indiamart-api" },
+      })
+      await event.save()
+    }
+
+    // 2. Map payload & normalize source
+    const crmPayload = mapIndiaMartInquiryToCrmPayload(inquiry, integration)
+    const canonicalSource = await normalizeSource(tenantId, "IndiaMART")
+
+    // 3. Resolve Assignment
+    let assignedStaffId = integration.assignedStaffId || "unassigned"
+    let assignedTo = integration.assignedStaffName || "Unassigned"
+
+    if (assignedStaffId && assignedStaffId !== "unassigned") {
+      const staffUser = await User.findOne({ _id: assignedStaffId, tenantId, status: "active" })
+      if (!staffUser) {
+        assignedStaffId = "unassigned"
+        assignedTo = "Unassigned"
+      }
+    }
+
+    // 4. Ingest via leadService
+    const duplicateHandling = integration.settings?.duplicateHandling || "update"
+
+    const serviceResult = await leadService.createOrMergeLead({
+      tenantId,
+      source: canonicalSource,
+      payload: {
+        ...crmPayload,
+        assignedTo,
+        assignedStaffId,
+        ownerId: assignedStaffId !== "unassigned" ? assignedStaffId : null,
+      },
+      options: {
+        duplicateHandling,
+      },
+      actor: {
+        role: "system",
+        name: `IndiaMART Ingestion (${integration.name})`,
+      },
+    })
+
+    const leadId = serviceResult.lead ? (serviceResult.lead._id || serviceResult.lead.id) : null
+
+    // 5. Update Event Ledger
+    event.status = "processed"
+    event.httpStatus = 200
+    event.result = {
+      action: serviceResult.action,
+      leadId,
+      timestamp: new Date(),
+    }
+    await event.save()
+
+    // 6. Update Integration Stats
+    integration.stats.totalReceived = (integration.stats.totalReceived || 0) + 1
+    integration.stats.totalSuccess = (integration.stats.totalSuccess || 0) + 1
+    integration.stats.lastReceivedAt = new Date()
+    integration.stats.lastSuccessAt = new Date()
+    await integration.save()
+
     return {
-      action: "skipped_duplicate",
-      leadId: event.result.leadId.toString(),
+      action: serviceResult.action,
+      leadId: leadId ? leadId.toString() : null,
       inquiryId: queryId,
     }
-  }
-
-  // Create event ledger record if not present
-  if (!event) {
-    event = new IntegrationEvent({
-      tenantId,
-      integrationId: integration._id,
-      platform: "indiamart",
-      source: "IndiaMART",
-      direction: "inbound",
-      status: "received",
-      idempotencyKey,
-      payload: inquiry,
-      headers: { "x-source": "indiamart-api" },
-    })
-    await event.save()
-  }
-
-  // 2. Map payload & normalize source
-  const crmPayload = mapIndiaMartInquiryToCrmPayload(inquiry, integration)
-  const canonicalSource = await normalizeSource(tenantId, "IndiaMART")
-
-  // 3. Resolve Assignment
-  let assignedStaffId = integration.assignedStaffId || "unassigned"
-  let assignedTo = integration.assignedStaffName || "Unassigned"
-
-  if (assignedStaffId && assignedStaffId !== "unassigned") {
-    const staffUser = await User.findOne({ _id: assignedStaffId, tenantId, status: "active" })
-    if (!staffUser) {
-      assignedStaffId = "unassigned"
-      assignedTo = "Unassigned"
-    }
-  }
-
-  // 4. Ingest via leadService
-  const duplicateHandling = integration.settings?.duplicateHandling || "update"
-
-  const serviceResult = await leadService.createOrMergeLead({
-    tenantId,
-    source: canonicalSource,
-    payload: {
-      ...crmPayload,
-      assignedTo,
-      assignedStaffId,
-      ownerId: assignedStaffId !== "unassigned" ? assignedStaffId : null,
-    },
-    options: {
-      duplicateHandling,
-    },
-    actor: {
-      role: "system",
-      name: `IndiaMART Ingestion (${integration.name})`,
-    },
   })
-
-  const leadId = serviceResult.lead ? (serviceResult.lead._id || serviceResult.lead.id) : null
-
-  // 5. Update Event Ledger
-  event.status = "processed"
-  event.httpStatus = 200
-  event.result = {
-    action: serviceResult.action,
-    leadId,
-    timestamp: new Date(),
-  }
-  await event.save()
-
-  // 6. Update Integration Stats
-  integration.stats.totalReceived = (integration.stats.totalReceived || 0) + 1
-  integration.stats.totalSuccess = (integration.stats.totalSuccess || 0) + 1
-  integration.stats.lastReceivedAt = new Date()
-  integration.stats.lastSuccessAt = new Date()
-  await integration.save()
-
-  return {
-    action: serviceResult.action,
-    leadId: leadId ? leadId.toString() : null,
-    inquiryId: queryId,
-  }
 }
 
 /**
@@ -373,118 +392,160 @@ async function syncIndiaMartLeads(integrationId, options = {}) {
     throw new Error(`IndiaMART integration not found for ID: ${integrationId}`)
   }
 
-  // 1. Recover decrypted credentials
-  let creds = null
-  try {
-    creds = integration.getDecryptedCredentials()
-  } catch (err) {
-    integration.status = "error"
-    integration.stats.lastErrorAt = new Date()
-    integration.stats.lastErrorMessage = `Decryption failure: ${err.message}`
-    await integration.save()
-    throw new Error(`Failed to decrypt IndiaMART credentials: ${err.message}`)
-  }
+  // Overlap lock check (prevents overlapping jobs and duplicate imports)
+  const customConfig = integration.settings?.customConfig || {}
+  const isSyncing = customConfig.isSyncing === true
+  const lastSyncAttemptAt = customConfig.lastSyncAttemptAt ? new Date(customConfig.lastSyncAttemptAt).getTime() : 0
+  const nowMs = Date.now()
 
-  const crmKey = creds?.crmKey || creds?.glusr_crm_key
-  if (!crmKey) {
-    integration.status = "error"
-    integration.stats.lastErrorAt = new Date()
-    integration.stats.lastErrorMessage = "Missing IndiaMART glusr_crm_key in credentials"
-    await integration.save()
-    throw new Error("Missing IndiaMART glusr_crm_key in integration credentials")
-  }
-
-  // 2. Determine time window
-  const now = new Date()
-  let startTime = null
-
-  if (options.startTime) {
-    startTime = new Date(options.startTime)
-  } else if (creds.lastSyncTime) {
-    // Pull starting from last sync watermark with a small 2-minute safety overlap
-    startTime = new Date(new Date(creds.lastSyncTime).getTime() - 2 * 60 * 1000)
-  } else {
-    const lookbackHours = options.lookbackHours || 24
-    startTime = new Date(now.getTime() - lookbackHours * 60 * 60 * 1000)
-  }
-
-  const endTime = options.endTime ? new Date(options.endTime) : now
-
-  // 3. Fetch from IndiaMART API
-  let apiResult
-  try {
-    apiResult = await fetchIndiaMartLeads({
-      crmKey,
-      startTime,
-      endTime,
-      customFetch: options.customFetch,
-    })
-  } catch (err) {
-    integration.stats.totalErrors = (integration.stats.totalErrors || 0) + 1
-    integration.stats.lastErrorAt = new Date()
-    integration.stats.lastErrorMessage = err.message
-
-    if (err.reconnectNeeded) {
-      integration.status = "error"
-      const updatedCreds = {
-        ...(creds || {}),
-        reconnectNeeded: true,
-        reconnectReason: err.message,
-      }
-      integration.setCredentials(updatedCreds)
+  // 5 minute timeout lock expiration
+  if (isSyncing && (nowMs - lastSyncAttemptAt) < 5 * 60 * 1000) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "Sync already in progress for this integration",
+      totalRecords: 0,
+      processedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
     }
-
-    await integration.save()
-    throw err
   }
 
-  // 4. Ingest retrieved records
-  const records = apiResult.records || []
-  let processedCount = 0
-  let skippedCount = 0
-  let failedCount = 0
-  const leadResults = []
+  // Acquire sync lock
+  await Integration.updateOne(
+    { _id: integration._id },
+    {
+      $set: {
+        "settings.customConfig.isSyncing": true,
+        "settings.customConfig.lastSyncAttemptAt": new Date(),
+      },
+    }
+  ).catch(() => {})
 
-  for (const inquiry of records) {
+  try {
+    // 1. Recover decrypted credentials
+    let creds = null
     try {
-      const res = await processIndiaMartInquiry({
-        inquiry,
-        integration,
-        tenantId: integration.tenantId,
-      })
-      if (res.action === "skipped_duplicate") {
-        skippedCount++
-      } else {
-        processedCount++
-      }
-      leadResults.push(res)
-    } catch (ingestErr) {
-      failedCount++
-      console.error(`[IndiaMART] Failed to ingest inquiry ${inquiry.UNIQUE_QUERY_ID}:`, ingestErr.message)
+      creds = integration.getDecryptedCredentials()
+    } catch (err) {
+      integration.status = "error"
+      integration.stats.lastErrorAt = new Date()
+      integration.stats.lastErrorMessage = `Decryption failure: ${err.message}`
+      await integration.save()
+      throw new Error(`Failed to decrypt IndiaMART credentials: ${err.message}`)
     }
-  }
 
-  // 5. Update watermark sync cursor in credentials
-  const updatedCreds = {
-    ...(creds || {}),
-    lastSyncTime: endTime.toISOString(),
-    reconnectNeeded: false,
-    reconnectReason: null,
-  }
-  integration.setCredentials(updatedCreds)
-  integration.status = "active"
-  integration.stats.lastSuccessAt = new Date()
-  await integration.save()
+    const crmKey = creds?.crmKey || creds?.glusr_crm_key
+    if (!crmKey) {
+      integration.status = "error"
+      integration.stats.lastErrorAt = new Date()
+      integration.stats.lastErrorMessage = "Missing IndiaMART glusr_crm_key in credentials"
+      await integration.save()
+      throw new Error("Missing IndiaMART glusr_crm_key in integration credentials")
+    }
 
-  return {
-    success: true,
-    totalRecords: records.length,
-    processedCount,
-    skippedCount,
-    failedCount,
-    startTime: startTime.toISOString(),
-    endTime: endTime.toISOString(),
-    results: leadResults,
+    // 2. Determine time window
+    const now = new Date()
+    let startTime = null
+
+    if (options.startTime) {
+      startTime = new Date(options.startTime)
+    } else if (creds.lastSyncTime) {
+      // Pull starting from last sync watermark with a small 2-minute safety overlap
+      startTime = new Date(new Date(creds.lastSyncTime).getTime() - 2 * 60 * 1000)
+    } else {
+      const lookbackHours = options.lookbackHours || 24
+      startTime = new Date(now.getTime() - lookbackHours * 60 * 60 * 1000)
+    }
+
+    const endTime = options.endTime ? new Date(options.endTime) : now
+
+    // 3. Fetch from IndiaMART API
+    let apiResult
+    try {
+      apiResult = await fetchIndiaMartLeads({
+        crmKey,
+        startTime,
+        endTime,
+        customFetch: options.customFetch,
+      })
+    } catch (err) {
+      integration.stats.totalErrors = (integration.stats.totalErrors || 0) + 1
+      integration.stats.lastErrorAt = new Date()
+      integration.stats.lastErrorMessage = err.message
+
+      if (err.reconnectNeeded) {
+        integration.status = "error"
+        const updatedCreds = {
+          ...(creds || {}),
+          reconnectNeeded: true,
+          reconnectReason: err.message,
+        }
+        integration.setCredentials(updatedCreds)
+      }
+
+      await integration.save()
+      throw err
+    }
+
+    // 4. Ingest retrieved records
+    const records = apiResult.records || []
+    let processedCount = 0
+    let skippedCount = 0
+    let failedCount = 0
+    const leadResults = []
+
+    for (const inquiry of records) {
+      try {
+        const res = await processIndiaMartInquiry({
+          inquiry,
+          integration,
+          tenantId: integration.tenantId,
+        })
+        if (res.action === "skipped_duplicate") {
+          skippedCount++
+        } else {
+          processedCount++
+        }
+        leadResults.push(res)
+      } catch (ingestErr) {
+        failedCount++
+        console.error(`[IndiaMART] Failed to ingest inquiry ${inquiry.UNIQUE_QUERY_ID}:`, ingestErr.message)
+      }
+    }
+
+    // 5. Update watermark sync cursor in credentials
+    const updatedCreds = {
+      ...(creds || {}),
+      lastSyncTime: endTime.toISOString(),
+      reconnectNeeded: false,
+      reconnectReason: null,
+    }
+    integration.setCredentials(updatedCreds)
+    integration.status = "active"
+    integration.stats.lastSuccessAt = new Date()
+    await integration.save()
+
+    return {
+      success: true,
+      totalRecords: records.length,
+      processedCount,
+      skippedCount,
+      failedCount,
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      results: leadResults,
+    }
+  } finally {
+    // Release sync lock
+    await Integration.updateOne(
+      { _id: integration._id },
+      {
+        $set: {
+          "settings.customConfig.isSyncing": false,
+        },
+      }
+    ).catch(() => {})
   }
 }
 
