@@ -120,9 +120,7 @@ const extractToken = (req) => {
       if (req.cookies.superadmin_token) {
         return req.cookies.superadmin_token
       }
-      if (req.cookies.client_token) {
-        return req.cookies.client_token
-      }
+      // Strict Auth Isolation (Phase 27): Never accept client_token on Super Admin routes
     } else {
       if (req.cookies.client_token) {
         return req.cookies.client_token
@@ -156,7 +154,7 @@ const authenticate = async (req, res, next) => {
 
     const decoded = jwt.verify(token, getJwtSecret())
 
-    const user = await User.findById(decoded.id)
+    const user = await User.findById(decoded.id).select("-password").lean()
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -263,7 +261,7 @@ const optionalAuthenticate = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, getJwtSecret())
-    const user = await User.findById(decoded.id)
+    const user = await User.findById(decoded.id).select("-password").lean()
 
     if (user && user.status !== "suspended" && user.isActive !== false) {
       if (

@@ -50,12 +50,12 @@ const NAV_CATEGORIES = [
     id: "main",
     label: "Home",
     icon: LayoutDashboard,
-    href: "/",
+    href: "/portal",
     items: [
       {
         id: "main-dashboard",
         label: "Home",
-        href: "/",
+        href: "/portal",
         description: "Pipeline KPIs, metrics & lead velocity",
         icon: LayoutDashboard,
       },
@@ -512,8 +512,9 @@ export default function Header() {
     .slice(0, 2)
     .toUpperCase() || "A"
 
-  // Hide Client CRM header on Super Admin console or login pages
+  // Hide Client CRM header on Super Admin console or login pages or root entry router
   if (
+    pathname === "/" ||
     pathname?.startsWith("/super-admin") ||
     pathname?.startsWith("/portal/login") ||
     pathname === "/login"

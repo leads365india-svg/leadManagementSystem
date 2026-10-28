@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 
 const PUBLIC_EXACT_ROUTES = new Set([
+  "/",
   "/portal/login",
   "/super-admin/login",
   "/login",
@@ -12,6 +13,9 @@ const PUBLIC_EXACT_ROUTES = new Set([
 
 function isExemptRoute(pathname) {
   if (!pathname) return true
+
+  // Root platform router handles its own redirection flow
+  if (pathname === "/") return true
 
   // Public login routes
   if (PUBLIC_EXACT_ROUTES.has(pathname)) return true

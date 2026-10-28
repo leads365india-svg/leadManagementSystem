@@ -409,8 +409,8 @@ export default function LeadFeedsClient() {
     }
   }
 
-  // Phase 26: Load all statuses for Integration Studio Overview
-  const loadAllStatuses = useCallback(async () => {
+  // Phase 26/27: Load all statuses for Integration Studio Overview (optimized, no redundant requests)
+  const loadAllStatuses = useCallback(async (showToast = false) => {
     try {
       setRefreshingAll(true)
       await Promise.allSettled([
@@ -421,27 +421,36 @@ export default function LeadFeedsClient() {
         loadGenericStatus(),
         loadEvents(),
       ])
-      toast.success("Integration feeds refreshed!")
+      if (showToast) {
+        toast.success("Integration feeds refreshed!")
+      }
     } catch (err) {
       console.error("Failed to refresh Integration Studio:", err)
-      toast.error("Failed to refresh feeds")
+      if (showToast) {
+        toast.error("Failed to refresh feeds")
+      }
     } finally {
       setRefreshingAll(false)
     }
   }, [loadSettings, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
 
   useEffect(() => {
-    loadSettings()
-  }, [loadSettings])
-
-  useEffect(() => {
-    if (activeTab === "overview") loadAllStatuses()
-    if (activeTab === "indiamart") loadIndiaMartStatus()
-    if (activeTab === "meta") loadMetaStatus()
-    if (activeTab === "google") loadGoogleStatus()
-    if (activeTab === "generic") loadGenericStatus()
-    if (activeTab === "events") loadEvents()
-  }, [activeTab, loadAllStatuses, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
+    if (activeTab === "overview") {
+      loadAllStatuses(false)
+    } else if (activeTab === "website") {
+      loadSettings()
+    } else if (activeTab === "indiamart") {
+      loadIndiaMartStatus()
+    } else if (activeTab === "meta") {
+      loadMetaStatus()
+    } else if (activeTab === "google") {
+      loadGoogleStatus()
+    } else if (activeTab === "generic") {
+      loadGenericStatus()
+    } else if (activeTab === "events") {
+      loadEvents()
+    }
+  }, [activeTab, loadAllStatuses, loadSettings, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
 
   // Save Website changes
   const handleSaveWebsite = async () => {
@@ -896,7 +905,7 @@ export default function LeadFeedsClient() {
           <div className="flex items-center gap-3 flex-wrap">
             <button
               type="button"
-              onClick={loadAllStatuses}
+              onClick={() => loadAllStatuses(true)}
               disabled={refreshingAll}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium shadow-sm transition-all cursor-pointer disabled:opacity-50"
             >

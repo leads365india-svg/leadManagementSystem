@@ -99,9 +99,9 @@ Located at: `D:\Leads Management Sytem\android-feasibility-spike`
 
 ## 4. Test Verification Results
 
-| Suite | Scope | Result |
-|---|---|---|
-
+| `verifyPhase27AuthPerformance.js` | Super Admin entry routing, AuthGuard root bypass, token isolation (client_token forbidden on super-admin routes), lean user queries, duplicate API call elimination | **21 Passed, 0 Failed** (11 Static, 10 Behavioral) |
+| `verifyPhase26IntegrationStudio.js` | Integration Studio Overview, multi-channel health status, event ledger, secret scrubbing, event replay, suspended account guard | **32 Passed, 0 Failed** (12 Static, 20 Behavioral) |
+| `verifyPhase25IndiaMart.js` | IndiaMART Lead Manager, AES-256-GCM vault, incremental watermark cursor, overlap lock, retry backoff, queue worker | **86 Passed, 0 Failed** |
 | `verifyPhase24GenericConnector.js` | Generic Webhook Intake, Zapier/Make/n8n/Pabbly normalizer, timing-safe API key auth, idempotency dedupe, tenant isolation, key rotation | **41 Passed, 0 Failed** (20 Static, 21 Behavioral) |
 | `verifyPhase23GoogleLeadWebhook.js` | Official Google Ads Webhook Spec, HTTP 200 delivery contract, timing-safe key verification, gcl_id & user_column_data normalization, idempotency, test lead handling | **45 Passed, 0 Failed** (25 Static, 20 Behavioral) |
 | `verifyPhase22WebsiteSnippet.js` | Origin Normalization, Wildcards, Scheme/Host/Port Guards, SiteKey Auth, Honeypot Anti-Spam, Multi-Touch Attribution, Idempotency | **23 Passed, 0 Failed** (12 Static, 11 Behavioral) |
@@ -454,9 +454,233 @@ Located at: `D:\Leads Management Sytem\android-feasibility-spike`
 - `node backend/tests/verifyPhase24GenericConnector.js`: **41/41 Passed (100%)**
 - Total Phase 24 + 25 + 26 combined pass count: **159/159 Passed (100%)**
 
+---
 
+## 28. Phase 27: Super Admin Entry Flow, Authentication Isolation & Performance Optimization (COMPLETED & VERIFIED)
 
+### A. Phase Summary
+- **Status:** **100% COMPLETE & VERIFIED**
+- **Architecture:** Platform Entry Flow Isolation, Super Admin vs. Tenant Session Separation, AuthGuard Boundary Hardening, Lean User Query Optimization, and Root CRM Request Elimination.
+- **Frontend Stack:** Next.js 15, React 19 (JavaScript/JSX only; zero TypeScript).
+- **Backend Stack:** Node.js, Express.js, MongoDB/Mongoose.
 
+### B. Core Implementations Delivered
 
+#### 1. Platform Root Entry Router (`frontend/app/page.jsx`)
+- Replaced the heavy, authenticated client CRM dashboard at `/` with a lightweight, high-performance `RootEntryPage` router.
+- **Strict Entry Isolation:**
+  - Fresh unauthenticated visitor → Immediately redirects to Super Admin login portal (`/super-admin/login`).
+  - Authenticated Super Admin session → Immediately redirects to Super Admin console (`/super-admin`).
+  - Authenticated Tenant session (`account_admin` / `agent`) → Immediately redirects to Tenant CRM portal (`/portal`).
+- **Complete Elimination of Premature Root Queries:**
+  - Previously, visiting `http://localhost:3000` mounted the CRM dashboard and fired concurrent requests to `/api/leads` and `/api/leads/stats`, resulting in 401s, network waterfall stalls, and database query churn on unauthenticated hits.
+  - Now, `RootEntryPage` performs **0 database queries** and **0 lead API calls** on landing, resolving authentication state directly from `useAuth()`.
+
+#### 2. AuthGuard & Layout Routing Isolation
+- **Root Exemption:** Updated `frontend/components/auth-guard.jsx` to exempt `"/"` from premature redirection, allowing `RootEntryPage` to resolve the platform routing cleanly without redirect loops.
+- **Visual Flash Suppression:**
+  - Updated `frontend/components/header.jsx` and `frontend/components/footer.jsx` to suppress rendering on `pathname === "/"`.
+  - Updated CRM navigation `Home` link to target `/portal` rather than `/`, preventing navigation bounces.
+- **Dashboard Route Cleanup:** Updated `frontend/app/dashboard/page.jsx` to cleanly redirect to `/portal`.
+
+#### 3. Strict Backend Token & Authorization Isolation (`backend/middleware/authMiddleware.js`)
+- **Super Admin Route Guard:** Fixed vulnerability in `extractToken(req)` where `client_token` was previously accepted on `isSuperAdminRoute`.
+  - Now, on `isSuperAdminRoute`, only `superadmin_token` (or valid bearer auth) is extracted. A tenant cookie (`client_token`) is strictly ignored, immediately returning **HTTP 401**.
+  - Any tenant user attempting to present tenant credentials via `Bearer <token>` to Super Admin endpoints is strictly rejected by `requireSuperAdmin` with **HTTP 403 Forbidden**.
+- **Cookie Isolation on Login (`backend/controllers/authController.js`):**
+  - Tenant login sets `client_token` and explicitly clears `superadmin_token`.
+  - Super Admin login sets `superadmin_token` and explicitly clears `client_token`.
+
+#### 4. Performance Optimizations & Duplicate Request Elimination
+- **Lean User Authentication Queries:** Updated `authenticate` and `optionalAuthenticate` in `backend/middleware/authMiddleware.js` to query `User.findById(decoded.id).select("-password").lean()`, avoiding Mongoose document hydration overhead on every authenticated API call.
+- **Integration Studio Redundant Call Elimination:**
+  - Removed duplicate `loadSettings()` invocation on mount in `frontend/app/settings/lead-feeds/lead-feeds-client.jsx`.
+  - Suppressed unsolicited `toast.success("Integration feeds refreshed!")` on initial component render, keeping notifications restricted to explicit manual refresh clicks (`onClick={() => loadAllStatuses(true)}`).
+
+### C. Test Verification Results
+- `node backend/tests/verifyPhase27AuthPerformance.js`: **21/21 Passed (100%)**
+  - Section 1 (Static Checks): Root page exports `RootEntryPage`, unauthenticated directs to `/super-admin/login`, super_admin directs to `/super-admin`, tenant directs to `/portal`, zero premature `getLeadStats` or `getLeads` calls, AuthGuard exempts `'/'`, header & footer suppress `'/'`, `authMiddleware.js` forbids `client_token` on `isSuperAdminRoute`, `.select("-password").lean()` query optimization, and `lead-feeds-client.jsx` duplicate call elimination (11 assertions).
+  - Section 2 (Behavioral Checks): Unauthenticated `/api/super-admin/accounts` returns HTTP 401, tenant cookie on Super Admin route returns HTTP 401, tenant bearer token rejected by `requireSuperAdmin` with HTTP 403, super admin cookie authenticated with HTTP 200, `getAccounts` returns HTTP 200, tenant login cookie isolation (sets `client_token`, clears `superadmin_token`), super admin login cookie isolation (sets `superadmin_token`, clears `client_token`), and lean `authenticate()` average latency benchmark (10 assertions).
+- `node backend/tests/verifyPhase26IntegrationStudio.js`: **32/32 Passed (100%)**
+- `node backend/tests/verifyPhase25IndiaMart.js`: **86/86 Passed (100%)**
+- Frontend Production Build (`npm run build`): **Compiled successfully in 82s, 36/36 static pages generated, exit code 0**.
+
+---
+
+## 29. Phase 28: Production Readiness, Security Audit & End-to-End Verification (COMPLETED & VERIFIED)
+
+### A. Phase Summary
+- **Status:** **100% COMPLETE & VERIFIED**
+- **Objective:** Production Readiness Audit, Route Integrity Verification, Authentication & Entry Flow Regression, Multi-Tenant Security Audit, and Multi-Suite Verification.
+- **Frontend Stack:** Next.js 15, React 19 (JavaScript/JSX only; zero TypeScript).
+- **Backend Stack:** Node.js, Express.js, MongoDB/Mongoose.
+
+### B. Verification Areas & Audit Findings
+
+#### 1. Backend Startup & Route Integrity
+- **HTTP Server & Database Connection:**
+  - Backend starts cleanly via `node start.js`.
+  - MongoDB Atlas connection established successfully.
+  - Health check endpoint `GET http://localhost:5000/health` verified operational:
+    `{ status: 'healthy', database: 'connected', message: 'Service is operational' }`.
+- **Router Audit:**
+  - Audited all 14 Express router modules (`leadRoutes`, `authRoutes`, `superAdminRoutes`, `integrationRoutes`, `followUpRoutes`, `staffRoutes`, `teamRoutes`, `roleRoutes`, `assignmentRuleRoutes`, `auditRoutes`, `queueMonitorRoutes`, `callRoutes`, `mobileRoutes`, `privacyRoutes`).
+  - Verified **0 undefined route handlers** across all router stacks (14/14 routers fully defined and valid).
+  - Explicitly verified `rotateGoogleKey` and `sendGoogleTestLead` are correctly exported by `backend/controllers/googleAdsController.js` and mounted on `/api/integrations/google/rotate-key` and `/api/integrations/google/test`.
+
+#### 2. Authentication & Platform Entry Flow Regression
+- **Root Entry Flow (`/`):**
+  - Unauthenticated browser session → Redirects directly to `/super-admin/login`.
+  - Authenticated Super Admin session → Redirects directly to `/super-admin`.
+  - Authenticated Tenant session → Redirects directly to `/portal`.
+  - Zero premature CRM API queries (`/api/leads`, `/api/leads/stats`) on root landing.
+- **Token & Session Isolation:**
+  - On `/api/super-admin/*`, `client_token` is never accepted (`extractToken` ignores tenant cookie; returns HTTP 401).
+  - Tenant bearer tokens sent to Super Admin APIs are rejected by `requireSuperAdmin` with HTTP 403 Forbidden.
+  - Super Admin session tokens accessing tenant CRM routes do not leak cross-tenant data.
+  - Login cookie isolation verified: Super Admin login clears `client_token`; Tenant login clears `superadmin_token`.
+
+#### 3. Integration Studio & Multi-Tenant Security Audit
+- **Secret Redaction:** Passwords, auth tokens, bearer credentials, and API keys are scrubbed and masked (`[REDACTED]`, `••••••••••••[VAULT]`, `••••••••••••[LOCKED]`).
+- **Tenant Isolation:** Event ledger (`/api/integrations/events`) enforces tenant isolation (Tenant A cannot view or replay Tenant B's integration events).
+- **Suspended Account Defense:** Suspended accounts are immediately rejected with HTTP 403 Forbidden on all incoming webhooks, manual sync triggers, and event replay requests.
+- **Overlap Lock:** IndiaMART sync protects against concurrent sync jobs with an in-memory lock.
+
+### C. End-to-End Suite Results Summary
+
+| Suite File | Scope | Status | Score |
+|---|---|---|---|
+| `backend/tests/verifyPhase27AuthPerformance.js` | Super Admin entry routing, AuthGuard root bypass, token isolation, lean queries | **PASSED** | **21 / 21** |
+| `backend/tests/verifyPhase26IntegrationStudio.js` | Integration Studio Overview, multi-channel health, event ledger, replay, secret scrubbing | **PASSED** | **32 / 32** |
+| `backend/tests/verifyPhase25IndiaMart.js` | IndiaMART Lead Manager, AES-256-GCM vault, incremental watermark, queue worker | **PASSED** | **86 / 86** |
+| `backend/tests/verifyPhase24GenericConnector.js` | Generic Webhook Intake, timing-safe API key auth, idempotency dedupe, tenant isolation | **PASSED** | **41 / 41** |
+| `backend/tests/verifyPhase23GoogleLeadWebhook.js` | Official Google Ads Webhook Spec, HTTP 200 delivery contract, test lead handling | **PASSED** | **45 / 45** |
+| **Combined Regression Pass Count** | **All Ingestion, Auth, Performance & Integration Endpoints** | **PASSED** | **225 / 225 (100%)** |
+| Frontend Production Build (`npm run build`) | Static prerendering, bundle compilation, and route verification | **PASSED** | **36 / 36 Routes Prerendered** |
+
+---
+
+## 30. Phase 29: Local Runtime Recovery, Browser E2E & Final Stability (COMPLETED & VERIFIED)
+
+### A. Phase Summary
+- **Status:** **100% COMPLETE & VERIFIED**
+- **Objective:** Diagnose and recover from Next.js 15 dev-tools runtime error, perform browser end-to-end entry flow automation, and verify all 5 regression suites.
+- **Frontend Stack:** Next.js 15, React 19 (JavaScript/JSX only; zero TypeScript).
+- **Backend Stack:** Node.js, Express.js, MongoDB/Mongoose.
+
+### B. Root Cause Analysis & Recovery
+- **Webpack Runtime Error Diagnosis:**
+  - `Error: Could not find the module "...next-devtools/userspace/app/segment-explorer-node.js#SegmentViewNode" in the React Client Manifest.` followed by `TypeError: __webpack_modules__[moduleId] is not a function`.
+  - **Root Cause:** A collision occurred when a production build (`npm run build`) was executed while an existing Next.js dev server instance (`npm run dev`) was simultaneously running in the background. The production build overwrote the generated `.next` manifest with production-only chunks, omitting dev-only tools (`segment-explorer-node.js`). When a user subsequently hit `/portal/login` in development mode, the dev server looked for the devtools segment explorer node in a production manifest, returning an HTTP 500 error.
+  - **Resolution & Stability:** Once the compilation refreshed, Next.js compiled `/_error` and immediately resolved subsequent requests with **HTTP 200**. Direct HTTP requests and browser sessions verified that `/`, `/super-admin/login`, and `/portal/login` all respond with HTTP 200.
+
+### C. Browser End-to-End Entry Flow Automation
+- Executed automated browser navigation in a fresh browser session:
+  1. `http://localhost:3000` → Evaluates `RootEntryPage` router and automatically redirects to `http://localhost:3000/super-admin/login` with zero premature CRM API requests.
+  2. `http://localhost:3000/super-admin/login` → Super Admin portal loads and renders cleanly with zero console exceptions or 500 errors.
+  3. `http://localhost:3000/portal/login` → Client Portal login page loads and renders cleanly with zero 500 errors.
+  4. `http://localhost:3000/super-admin` → Unauthenticated access to protected Super Admin dashboard is intercepted and redirected back to `/super-admin/login?session=expired`.
+  5. Session video recording preserved as artifact `phase29_entry_verification_1793186236123.webp`.
+
+### D. Regression Test Suites
+- `node backend/tests/verifyPhase27AuthPerformance.js`: **21 / 21 Passed (100%)**
+- `node backend/tests/verifyPhase26IntegrationStudio.js`: **32 / 32 Passed (100%)**
+- `node backend/tests/verifyPhase25IndiaMart.js`: **86 / 86 Passed (100%)**
+- `node backend/tests/verifyPhase24GenericConnector.js`: **41 / 41 Passed (100%)**
+- `node backend/tests/verifyPhase23GoogleLeadWebhook.js`: **45 / 45 Passed (100%)**
+- **Total Combined Regression Suite:** **225 / 225 Passed (100%)**
+
+---
+
+## 31. Phase 30: Final Git Review & Controlled Deployment Preparation (COMPLETED & VERIFIED)
+
+### A. Phase Summary
+- **Status:** **100% COMPLETE & VERIFIED**
+- **Objective:** Final Git Review, Secret Leak Audit, Route Handler Import Audit, Dev vs Prod Workflow Disambiguation, and Controlled Deployment Readiness.
+- **Frontend Stack:** Next.js 15, React 19 (JavaScript/JSX only; zero TypeScript).
+- **Backend Stack:** Node.js, Express.js, MongoDB/Mongoose.
+
+### B. Audit & Verification Findings
+
+#### 1. Git State & Clean Working Tree
+- **Current Branch:** `main`
+- **Latest Commit:** `301f9e8 phase 26 compelte`
+- **Git Diff & Formatting (`git diff --check`):** **0 merge conflicts, 0 formatting errors**.
+- **Accidental Secrets Audit:**
+  - Zero `.env`, `.env.local`, or credential files staged or modified.
+  - Zero raw secrets or keys hardcoded in any diff block.
+  - All credentials utilize AES-256-GCM vault encryption or SHA-256 key hashing with secret masking.
+
+#### 2. Modified & Untracked Files Review
+- **Backend Code:**
+  - `backend/middleware/authMiddleware.js`: Token isolation on Super Admin routes (`client_token` rejection) and `.select("-password").lean()` query optimization.
+  - `backend/tests/verifyPhase27AuthPerformance.js` (untracked): Automated test suite for Phase 27 routing, token isolation, and latency benchmarks.
+- **Frontend Code:**
+  - `frontend/app/page.jsx`: Lightweight `RootEntryPage` router (unauthenticated → `/super-admin/login`, super_admin → `/super-admin`, tenant → `/portal`).
+  - `frontend/app/dashboard/page.jsx`: Clean redirect to `/portal`.
+  - `frontend/components/auth-guard.jsx`: Exemption for root route `/`.
+  - `frontend/components/header.jsx`: Header suppression on `/` and Home target `/portal`.
+  - `frontend/components/footer.jsx`: Footer suppression on `/`.
+  - `frontend/app/settings/lead-feeds/lead-feeds-client.jsx`: Removed duplicate `loadSettings()` call on initial mount and suppressed unsolicited toast notification.
+- **Documentation:**
+  - `leads365_roadmap_execution_status.md`: Detailed documentation for Phases 27–30.
+
+#### 3. Route Handlers & Integration Integrity
+- Confirmed `rotateGoogleKey` and `sendGoogleTestLead` are correctly imported and exported by `backend/controllers/googleAdsController.js` and mounted in `backend/routes/integrationRoutes.js`.
+- Audited all 14 Express routers with zero undefined route handlers.
+
+#### 4. Local Development vs. Production Build Workflow
+- **Issue Documented:** Running `npm run build` while `npm run dev` is active causes webpack client manifest corruption in `.next`, leading to missing devtools modules.
+- **Standard Protocol:**
+  - Local Development: Use `npm run dev` in `frontend/`.
+  - Production Verification: Stop dev server, clear `.next` directory (`Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue`), then execute `npm run build`.
+
+### C. Final Regression & Build Summary
+- `verifyPhase27AuthPerformance.js`: **21 / 21 Passed (100%)**
+- `verifyPhase26IntegrationStudio.js`: **32 / 32 Passed (100%)**
+- `verifyPhase25IndiaMart.js`: **86 / 86 Passed (100%)**
+- `verifyPhase24GenericConnector.js`: **41 / 41 Passed (100%)**
+- `verifyPhase23GoogleLeadWebhook.js`: **45 / 45 Passed (100%)**
+- **Combined Test Invariants:** **225 / 225 Passed (100%)**
+- **Frontend Production Build:** **36 / 36 Routes Prerendered Cleanly (Exit code 0)**
+- **Deployment Readiness:** Ready for review and approval.
+
+---
+
+## 32. Phase 31: Final Diff Validation & Commit Preparation (COMPLETED & VERIFIED)
+
+### A. Phase Summary
+- **Status:** **100% COMPLETE & VERIFIED**
+- **Objective:** Final Diff Validation, Git Tree State Auditing, Phase 23–27 Test Re-execution, and Safe Commit Staging Preparation.
+- **Frontend Stack:** Next.js 15, React 19 (JavaScript/JSX only; zero TypeScript).
+- **Backend Stack:** Node.js, Express.js, MongoDB/Mongoose.
+
+### B. Audit & Git Tree Verification
+- **Branch:** `main`
+- **Head Commit:** `301f9e8 phase 26 compelte`
+- **Working Tree Analysis:**
+  - **Staged Changes:** None (0 files staged).
+  - **Unstaged Changes (8 files):**
+    1. `backend/middleware/authMiddleware.js` (+2 / -4 lines)
+    2. `frontend/app/dashboard/page.jsx` (+9 / -6 lines)
+    3. `frontend/app/page.jsx` (+35 / -395 lines)
+    4. `frontend/app/settings/lead-feeds/lead-feeds-client.jsx` (+24 / -17 lines)
+    5. `frontend/components/auth-guard.jsx` (+4 / -0 lines)
+    6. `frontend/components/footer.jsx` (+1 / -0 lines)
+    7. `frontend/components/header.jsx` (+4 / -3 lines)
+    8. `leads365_roadmap_execution_status.md` (roadmap tracker updates)
+  - **Untracked Files (1 file):**
+    1. `backend/tests/verifyPhase27AuthPerformance.js`
+- **Integrity (`git diff --check`):** Clean (0 formatting errors, 0 merge conflicts).
+- **Secret Scan:** 0 raw secrets, 0 credentials, 0 `.env` files present in diff.
+
+### C. Test Verification Re-Run (Phase 31)
+- `node backend/tests/verifyPhase27AuthPerformance.js`: **21 / 21 Passed (100%), Exit 0**
+- `node backend/tests/verifyPhase26IntegrationStudio.js`: **32 / 32 Passed (100%), Exit 0**
+- `node backend/tests/verifyPhase25IndiaMart.js`: **86 / 86 Passed (100%), Exit 0**
+- `node backend/tests/verifyPhase24GenericConnector.js`: **41 / 41 Passed (100%), Exit 0**
+- `node backend/tests/verifyPhase23GoogleLeadWebhook.js`: **45 / 45 Passed (100%), Exit 0**
+- **Combined Test Count:** **225 / 225 Passed (100%)**
+- **Commit Staging Readiness:** Safe for review and approval; no automatic staging or commit executed.
 
 
