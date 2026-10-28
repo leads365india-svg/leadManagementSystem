@@ -93,6 +93,10 @@ class ApiClient {
     return this.request(`/leads/${id}`)
   }
 
+  async getLeadCalls(id) {
+    return this.request(`/leads/${id}/calls`)
+  }
+
   async getLeadActivities(leadId, query = {}) {
     const searchParams = new URLSearchParams()
     Object.entries(query).forEach(([key, value]) => {

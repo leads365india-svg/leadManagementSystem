@@ -3,7 +3,7 @@ const tenantIsolationPlugin = require("../plugins/tenantIsolationPlugin")
 const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
 
 /**
- * Call Model - Roadmap Phase 14: Call, Device & Recording Data Model
+ * Call Model - Roadmap Phase 14 & Mobile Sync Call Model
  * 
  * Shared data structure for phone call tracking, telephony logging,
  * and audio recording metadata across manual and Android mobile syncs.
@@ -53,11 +53,20 @@ const callSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    isUnlinked: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     agentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "Agent ID is required"],
       index: true,
+    },
+    agentName: {
+      type: String,
+      default: "",
     },
     deviceId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -67,17 +76,28 @@ const callSchema = new mongoose.Schema(
     clientCallId: {
       type: String,
       default: null,
+      index: true,
+      sparse: true,
       trim: true,
     },
     direction: {
       type: String,
-      enum: ["inbound", "outbound"],
+      enum: ["inbound", "outbound", "INCOMING", "OUTGOING", "MISSED", "REJECTED"],
       default: "outbound",
-      required: true,
+    },
+    callDirection: {
+      type: String,
+      enum: ["OUTGOING", "INCOMING", "MISSED", "REJECTED", "inbound", "outbound"],
+      default: "OUTGOING",
     },
     number: {
       type: String,
-      required: [true, "Phone number is required"],
+      default: "",
+      trim: true,
+    },
+    phoneNumber: {
+      type: String,
+      default: "",
       trim: true,
     },
     phoneNormalized: {
@@ -90,15 +110,24 @@ const callSchema = new mongoose.Schema(
       default: Date.now,
       index: true,
     },
+    startTimeMs: {
+      type: Number,
+      default: () => Date.now(),
+      index: true,
+    },
     duration: {
       type: Number,
       default: 0,
       min: 0,
       description: "Duration in seconds",
     },
+    durationSeconds: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     status: {
       type: String,
-      enum: ["completed", "missed", "rejected", "busy", "failed"],
       default: "completed",
     },
     disposition: {
@@ -106,20 +135,42 @@ const callSchema = new mongoose.Schema(
       default: "connected",
       trim: true,
     },
+    callOutcome: {
+      type: String,
+      default: "Connected",
+      trim: true,
+    },
     notes: {
       type: String,
       default: "",
-      maxlength: [2000, "Notes cannot exceed 2000 characters"],
+      maxlength: [3000, "Notes cannot exceed 3000 characters"],
+      trim: true,
+    },
+    nextFollowUpAt: {
+      type: Number,
+      default: null,
+    },
+    simId: {
+      type: String,
+      default: null,
       trim: true,
     },
     source: {
       type: String,
-      enum: ["android_sync", "manual", "exotel", "twilio"],
+      enum: ["android_sync", "manual", "exotel", "twilio", "mobile"],
       default: "manual",
+    },
+    hasRecording: {
+      type: Boolean,
+      default: false,
     },
     recording: {
       type: recordingSubSchema,
       default: () => ({}),
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
   },
   {
@@ -135,15 +186,81 @@ const callSchema = new mongoose.Schema(
   },
 )
 
-// Pre-save hook: auto-normalize phone number if missing or updated
-callSchema.pre("save", function (next) {
-  if (this.number && (!this.phoneNormalized || this.isModified("number"))) {
-    this.phoneNormalized = normalizePhoneE164(this.number, "+91")
+function syncCallFields(doc) {
+  // Sync phone number
+  if (doc.phoneNumber && (!doc.number || doc.number === "")) {
+    doc.number = doc.phoneNumber
+  } else if (doc.number && (!doc.phoneNumber || doc.phoneNumber === "")) {
+    doc.phoneNumber = doc.number
   }
-  next()
+
+  // Normalize phone number
+  const rawNum = doc.number || doc.phoneNumber
+  if (rawNum && (!doc.phoneNormalized || (typeof doc.isModified === "function" && (doc.isModified("number") || doc.isModified("phoneNumber"))))) {
+    try {
+      doc.phoneNormalized = normalizePhoneE164(rawNum, "+91")
+    } catch (_) {
+      doc.phoneNormalized = rawNum
+    }
+  }
+
+  // Sync timestamp
+  if (doc.startTimeMs && !doc.startedAt) {
+    doc.startedAt = new Date(doc.startTimeMs)
+  } else if (doc.startedAt && !doc.startTimeMs) {
+    doc.startTimeMs = doc.startedAt.getTime()
+  }
+
+  // Sync duration
+  if (doc.durationSeconds && (!doc.duration || doc.duration === 0)) {
+    doc.duration = doc.durationSeconds
+  } else if (doc.duration && (!doc.durationSeconds || doc.durationSeconds === 0)) {
+    doc.durationSeconds = doc.duration
+  }
+
+  // Sync direction (mirrors inbound <-> INCOMING, outbound <-> OUTGOING)
+  if (doc.callDirection) {
+    const isIncoming = doc.callDirection.toLowerCase() === "incoming" || doc.callDirection.toLowerCase() === "inbound"
+    doc.direction = isIncoming ? "inbound" : "outbound"
+    doc.callDirection = isIncoming ? "INCOMING" : "OUTGOING"
+  } else if (doc.direction) {
+    const isIncoming = doc.direction.toLowerCase() === "inbound" || doc.direction.toLowerCase() === "incoming"
+    doc.callDirection = isIncoming ? "INCOMING" : "OUTGOING"
+    doc.direction = isIncoming ? "inbound" : "outbound"
+  }
+
+  // Sync outcome / disposition
+  if (doc.callOutcome && doc.callOutcome !== "Connected") {
+    doc.disposition = doc.callOutcome
+  } else if (doc.disposition && doc.disposition !== "connected") {
+    doc.callOutcome = doc.disposition
+  } else if (doc.callOutcome && (!doc.disposition || doc.disposition === "")) {
+    doc.disposition = doc.callOutcome
+  } else if (doc.disposition && (!doc.callOutcome || doc.callOutcome === "")) {
+    doc.callOutcome = doc.disposition
+  }
+
+  // Sync recording flag & status
+  if (doc.hasRecording && doc.recording && doc.recording.status === "pending") {
+    doc.recording.status = "ready"
+  }
+  if (doc.recording && (doc.recording.status === "stored" || doc.recording.status === "ready")) {
+    doc.hasRecording = true
+  }
+}
+
+callSchema.pre("validate", function () {
+  syncCallFields(this)
 })
 
-// Required Roadmap Indexes
+callSchema.pre("save", function () {
+  syncCallFields(this)
+})
+
+// Required Roadmap & Mobile Indexes
+callSchema.index({ tenantId: 1, startTimeMs: -1 })
+callSchema.index({ leadId: 1, startTimeMs: -1 })
+callSchema.index({ agentId: 1, startTimeMs: -1 })
 callSchema.index({ tenantId: 1, leadId: 1, startedAt: -1 })
 callSchema.index({ tenantId: 1, agentId: 1, startedAt: -1 })
 callSchema.index({ tenantId: 1, "recording.status": 1 })

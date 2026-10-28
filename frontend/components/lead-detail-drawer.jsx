@@ -1262,6 +1262,7 @@ export default function LeadDetailDrawer({
                               <span>{c.startedAt ? new Date(c.startedAt).toLocaleString() : "—"}</span>
                             </div>
                           </div>
+<<<<<<< HEAD
 
                           {/* Embedded In-Browser Audio Player */}
                           {playingCallId === c._id && (
@@ -1275,6 +1276,38 @@ export default function LeadDetailDrawer({
                                 compact={true}
                                 onClose={() => setPlayingCallId(null)}
                               />
+=======
+                          {(c.recording?.status === "ready" || c.hasRecording) && (
+                            <div className="bg-slate-50 p-2.5 rounded-md border border-slate-200/80 space-y-1.5 mt-2">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="inline-flex items-center space-x-1.5 text-emerald-700 font-semibold">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  <span>Server Confirmed Recording</span>
+                                </span>
+                                {(c.recording?.size || c.metadata?.recordingSizeBytes) > 0 && (
+                                  <span className="text-slate-500 font-mono text-[10px]">
+                                    {(((c.recording?.size || c.metadata?.recordingSizeBytes)) / (1024 * 1024)).toFixed(2)} MB
+                                  </span>
+                                )}
+                              </div>
+                              <audio
+                                controls
+                                preload="metadata"
+                                className="w-full h-8 rounded"
+                                src={`/api/calls/${c._id || c.id || c.clientCallId}/recording`}
+                                onError={(e) => {
+                                  const errEl = document.getElementById(`audio-err-${c._id || c.id || c.clientCallId}`)
+                                  if (errEl) {
+                                    errEl.classList.remove("hidden")
+                                  }
+                                }}
+                              >
+                                Your browser does not support the audio element.
+                              </audio>
+                              <div id={`audio-err-${c._id || c.id || c.clientCallId}`} className="hidden text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                Unable to play audio stream. Please verify your login session and tenant permissions.
+                              </div>
+>>>>>>> c4c1266ee0bad874a42493b9f77bb9b1bf213976
                             </div>
                           )}
                         </div>

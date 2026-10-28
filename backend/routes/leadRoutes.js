@@ -3,6 +3,7 @@ const {
   getLeads,
   createLead,
   getLeadById,
+  getLeadCalls,
   getLeadActivities,
   updateLead,
   deleteLead,
@@ -36,6 +37,9 @@ router.get("/:id/activities", checkPermission("leads.view"), getLeadActivities)
 
 // GET /api/leads/:id - View single lead by ID
 router.get("/:id", checkPermission("leads.view"), getLeadById)
+
+// GET /api/leads/:id/calls - View calls and recordings for lead
+router.get("/:id/calls", checkPermission("leads.view"), getLeadCalls)
 
 // POST /api/leads - Create new lead
 router.post("/", checkPermission("leads.create"), createLead)

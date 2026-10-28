@@ -142,12 +142,43 @@ export default function LeadsClient() {
 
   // Modals state
   const [activeLeadDetails, setActiveLeadDetails] = useState(null)
+  const [leadCalls, setLeadCalls] = useState([])
+  const [loadingCalls, setLoadingCalls] = useState(false)
   const [editingLead, setEditingLead] = useState(null)
   const [leadToDelete, setLeadToDelete] = useState(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [editFormErrors, setEditFormErrors] = useState({})
   const [updatingStatusId, setUpdatingStatusId] = useState(null)
+
+  useEffect(() => {
+    const leadId = activeLeadDetails?._id || activeLeadDetails?.id
+    if (!leadId) {
+      setLeadCalls([])
+      return
+    }
+
+    let isMounted = true
+    setLoadingCalls(true)
+    apiClient
+      .getLeadCalls(leadId)
+      .then((res) => {
+        if (isMounted && res.success && Array.isArray(res.data)) {
+          setLeadCalls(res.data)
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load calls for lead:", err)
+        if (isMounted) setLeadCalls([])
+      })
+      .finally(() => {
+        if (isMounted) setLoadingCalls(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [activeLeadDetails])
 
   // Fetch lead statistics for live tab badges
   const fetchLeadStats = useCallback(async () => {

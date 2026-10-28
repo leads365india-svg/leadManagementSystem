@@ -12,6 +12,7 @@ const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
 const integrationRoutes = require("./routes/integrationRoutes")
 const followUpRoutes = require("./routes/followUpRoutes")
+const path = require("path")
 const staffRoutes = require("./routes/staffRoutes")
 const teamRoutes = require("./routes/teamRoutes")
 const roleRoutes = require("./routes/roleRoutes")
@@ -76,6 +77,12 @@ const webhookCors = cors({
     "x-idempotency-key",
     "X-Idempotency-Key",
     "idempotency-key",
+    "X-Content-SHA256",
+    "x-content-sha256",
+    "X-Audio-SHA256",
+    "x-audio-sha256",
+    "X-File-Name",
+    "x-file-name",
   ],
 })
 app.use("/api/integrations/leads/website", webhookCors)
@@ -116,6 +123,12 @@ const corsOptions = {
     "x-idempotency-key",
     "X-Idempotency-Key",
     "idempotency-key",
+    "X-Content-SHA256",
+    "x-content-sha256",
+    "X-Audio-SHA256",
+    "x-audio-sha256",
+    "X-File-Name",
+    "x-file-name",
   ],
   credentials: true, // Allow cookies to be sent across origins
   maxAge: 86400, // Cache preflight requests for 24 hours
@@ -189,6 +202,7 @@ app.use("/api/auth", authRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/leads", leadRoutes)
 app.use("/api/follow-ups", followUpRoutes)
+app.use("/api/followups", followUpRoutes)
 app.use("/api/staff", staffRoutes)
 app.use("/api/teams", teamRoutes)
 app.use("/api/roles", roleRoutes)
@@ -196,9 +210,27 @@ app.use("/api/assignment-rules", assignmentRuleRoutes)
 app.use("/api/audit-logs", auditRoutes)
 app.use("/api/admin/queues", queueMonitorRoutes)
 app.use("/api/integrations", integrationLimiter, integrationRoutes)
+
+// Secure Call Recording Streaming & Playback endpoints (Phase 8 + Final Integration)
+const {
+  uploadMobileRecording,
+  mobileRefreshToken,
+  streamCallRecording,
+  streamRecordingByPath,
+} = require("./controllers/mobileController")
+const { authenticate } = require("./middleware/authMiddleware")
+
+// Strictly authenticated recording access — prevents unauthenticated streaming or cross-tenant exposure
+app.get("/uploads/recordings/:tenantId/:fileName", checkDbConnection, authenticate, streamRecordingByPath)
+app.get("/api/calls/:callId/recording", checkDbConnection, authenticate, streamCallRecording)
+app.put("/api/calls/:callId/recording", checkDbConnection, authenticate, uploadMobileRecording)
+app.post("/api/auth/refresh", mobileRefreshToken)
+
 app.use("/api/calls", callRoutes)
 app.use("/api/devices", callRoutes)
 app.use("/api/mobile", mobileRoutes)
+app.use("/api/mobile/v1", mobileRoutes)
+app.use("/mobile/v1", checkDbConnection, mobileRoutes)
 app.use("/api/privacy", privacyRoutes)
 
 // Error handling middleware

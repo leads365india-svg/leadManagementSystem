@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const RolePermission = require("../models/RolePermission")
+const Device = require("../models/Device")
 const { getEffectiveTenant, tenantStorage } = require("./tenantContext")
 
 const Role = require("../models/Role")
@@ -135,6 +136,9 @@ const extractToken = (req) => {
   if (authHeader && authHeader.startsWith("Bearer ")) {
     return authHeader.split(" ")[1]
   }
+  if (req.query && req.query.token) {
+    return req.query.token
+  }
   return null
 }
 
@@ -208,6 +212,25 @@ const authenticate = async (req, res, next) => {
 
     if (user.tenantId) {
       req.tenantId = user.tenantId
+    }
+
+    // Check device revocation status if x-device-id header is provided
+    const deviceIdHeader = req.headers["x-device-id"]
+    if (deviceIdHeader) {
+      const device = await Device.findOne({
+        $or: [
+          { deviceId: deviceIdHeader.trim() },
+          { deviceUuid: deviceIdHeader.trim() },
+        ],
+      }).lean()
+      if (device && (device.status === "REVOKED" || device.status === "revoked")) {
+        return res.status(403).json({
+          success: false,
+          error: "This device has been revoked by your agency administrator.",
+          errorCode: "DEVICE_REVOKED",
+          code: "DEVICE_REVOKED",
+        })
+      }
     }
 
     const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
