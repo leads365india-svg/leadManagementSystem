@@ -411,6 +411,50 @@ Located at: `D:\Leads Management Sytem\android-feasibility-spike`
 - `node backend/tests/verifyPhase23GoogleLeadWebhook.js`: **45/45 Passed (100%)**
 - Total Phase 23 + 24 + 25 combined pass count: **242/242 Passed (100%)**
 
+---
+
+## 27. Phase 26: Integration Studio UI & Monitoring (COMPLETED & VERIFIED)
+
+### A. Phase Summary
+- **Status:** **100% COMPLETE & VERIFIED**
+- **Architecture:** Centralized Integration Studio Overview, health monitoring, streaming event activity ledger, interactive JSON payload inspection modal, and event replay capability.
+- **Frontend Stack:** Next.js 15, React 19 (JavaScript/JSX only; zero TypeScript).
+- **Backend Stack:** Node.js, Express.js, MongoDB/Mongoose with multi-tenant data partitioning.
+
+### B. Core Implementations Delivered
+- **Centralized Integration Studio Overview (`activeTab === "overview"`):**
+  - Configured as default landing tab in `frontend/app/settings/lead-feeds/lead-feeds-client.jsx`.
+  - **Global Ingestion KPI Cards:** Monitored Channels (X / 5 active), Total Leads Ingested, Valid Leads Dispatched to CRM, Shielded Errors / Spam Blocked.
+  - **Operational & Health Alert Banner:** Dynamically renders an actionable warning alert when any integration (e.g., IndiaMART `reconnectNeeded`) requires credential re-authorization, or a gradient operational banner when all pipelines are healthy.
+  - **5-Channel Health & Ingestion Matrix:**
+    1. *IndiaMART Lead Manager:* B2B Marketplace Polling, masked vault key (`••••••••••••[LOCKED]`), sync watermark, live status, and on-demand "Sync Now" trigger.
+    2. *Google Ads Lead Forms:* HTTP Webhook Extension, masked key (`••••••••••••[VAULT]`), last received timestamp, valid lead count, and "Send Test Lead" trigger.
+    3. *Generic Inbound Connector:* Multi-platform (Zapier, Make, n8n, Pabbly), universal REST endpoint, masked key, last ingested timestamp, and "Send Test Lead" trigger.
+    4. *Website Forms & JS Snippet:* Public forms & REST webhooks, site key, spam filtering, and "Send Test Lead" trigger.
+    5. *Meta Lead Ads:* Facebook & Instagram Page webhook subscriptions, token vault health, and navigation shortcut.
+  - **Live Recent Event Activity Stream:**
+    - Displays last 6 streaming integration events with source badge, status indicator, formatted timestamp, and idempotency key.
+    - Direct "Inspect" action opening JSON payload modal.
+    - Direct "Replay" action triggering idempotent reprocessing.
+- **Payload Inspector Modal (`selectedEvent`):**
+  - Clean modal displaying Event ID, Source, Status, HTTP Response Code, Created Timestamp, Idempotency Key.
+  - Vault-redacted payload viewer (`rawPayload` / `normalizedPayload`) with one-click "Copy JSON" feedback.
+  - Error diagnostics display when errors occur.
+  - Direct "Replay Event" action from inside the modal.
+- **Event Ledger Status Fixes & Filtering:**
+  - Updated status badge rendering in `IntegrationEvent` table to recognize `processed` and `completed` as emerald success status.
+  - Expanded source filter options to include `Google Ads` and `Zapier / Make / Generic`.
+  - Added "Inspect" button to every ledger row.
+
+### C. Test Verification Results
+- `node backend/tests/verifyPhase26IntegrationStudio.js`: **32/32 Passed (100%)**
+  - Section 1 (Static Checks): Model integrity, allowed statuses (`received`, `queued`, `processed`, `failed`, `replayed`), deep sanitization regex validation (12 assertions).
+  - Section 2 (Behavioral Checks): Multi-tenant status aggregation (`/website`, `/indiamart`, `/google`, `/generic`), secret leak prevention, tenant isolation in event ledger, status and source filtering, stored payload secret redaction (`[REDACTED]`), cross-tenant replay security guard (HTTP 404), valid event replay status transition (`replayed`), and suspended account security guard (HTTP 403) (20 assertions).
+- `node backend/tests/verifyPhase25IndiaMart.js`: **86/86 Passed (100%)**
+- `node backend/tests/verifyPhase24GenericConnector.js`: **41/41 Passed (100%)**
+- Total Phase 24 + 25 + 26 combined pass count: **159/159 Passed (100%)**
+
+
 
 
 

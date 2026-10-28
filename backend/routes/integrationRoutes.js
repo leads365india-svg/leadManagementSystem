@@ -37,6 +37,8 @@ const {
   handleGoogleWebhook,
   getGoogleConfig,
   connectGoogleIntegration,
+  rotateGoogleKey,
+  sendGoogleTestLead,
 } = require("../controllers/googleAdsController")
 const {
   handleGenericWebhook,

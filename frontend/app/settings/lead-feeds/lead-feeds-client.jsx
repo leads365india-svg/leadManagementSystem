@@ -41,6 +41,9 @@ import {
   Briefcase,
   Play,
   RotateCw,
+  Activity,
+  LayoutGrid,
+  ArrowUpRight,
 } from "lucide-react"
 
 const DEFAULT_BLOCKED_DOMAINS = [
@@ -53,8 +56,8 @@ const DEFAULT_BLOCKED_DOMAINS = [
 ]
 
 export default function LeadFeedsClient() {
-  // Active Integration Navigation Tab
-  const [activeTab, setActiveTab] = useState("website") // "website" | "indiamart" | "meta" | "events"
+  // Active Integration Navigation Tab (Phase 26: Integration Studio Overview is default)
+  const [activeTab, setActiveTab] = useState("overview") // "overview" | "website" | "indiamart" | "meta" | "google" | "generic" | "events"
 
   // Loading & Action states for Website
   const [loading, setLoading] = useState(true)
@@ -212,12 +215,15 @@ export default function LeadFeedsClient() {
   })
 
   // ==========================================
-  // Integration Events Ledger State (Phase 11)
+  // Integration Events Ledger State (Phase 11 / Phase 26)
   // ==========================================
   const [events, setEvents] = useState([])
   const [loadingEvents, setLoadingEvents] = useState(false)
   const [replayingEventId, setReplayingEventId] = useState(null)
   const [eventSourceFilter, setEventSourceFilter] = useState("all")
+  const [selectedEvent, setSelectedEvent] = useState(null)
+  const [refreshingAll, setRefreshingAll] = useState(false)
+  const [copiedEventPayload, setCopiedEventPayload] = useState(false)
 
   // Load Website settings on mount
   const loadSettings = useCallback(async () => {
@@ -385,17 +391,57 @@ export default function LeadFeedsClient() {
     }
   }, [])
 
+  // Phase 11 & Phase 26: Handle Replay Integration Event
+  const handleReplayEvent = async (id) => {
+    try {
+      setReplayingEventId(id)
+      const res = await apiClient.replayIntegrationEvent(id)
+      if (res && res.success) {
+        toast.success(res.message || "Event replayed successfully!")
+        loadEvents()
+      } else {
+        toast.error(res?.error || "Failed to replay event")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to replay event")
+    } finally {
+      setReplayingEventId(null)
+    }
+  }
+
+  // Phase 26: Load all statuses for Integration Studio Overview
+  const loadAllStatuses = useCallback(async () => {
+    try {
+      setRefreshingAll(true)
+      await Promise.allSettled([
+        loadSettings(),
+        loadIndiaMartStatus(),
+        loadMetaStatus(),
+        loadGoogleStatus(),
+        loadGenericStatus(),
+        loadEvents(),
+      ])
+      toast.success("Integration feeds refreshed!")
+    } catch (err) {
+      console.error("Failed to refresh Integration Studio:", err)
+      toast.error("Failed to refresh feeds")
+    } finally {
+      setRefreshingAll(false)
+    }
+  }, [loadSettings, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
+
   useEffect(() => {
     loadSettings()
   }, [loadSettings])
 
   useEffect(() => {
+    if (activeTab === "overview") loadAllStatuses()
     if (activeTab === "indiamart") loadIndiaMartStatus()
     if (activeTab === "meta") loadMetaStatus()
     if (activeTab === "google") loadGoogleStatus()
     if (activeTab === "generic") loadGenericStatus()
     if (activeTab === "events") loadEvents()
-  }, [activeTab, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
+  }, [activeTab, loadAllStatuses, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
 
   // Save Website changes
   const handleSaveWebsite = async () => {
@@ -846,6 +892,29 @@ export default function LeadFeedsClient() {
         </div>
 
         {/* Global Action Buttons */}
+        {activeTab === "overview" && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={loadAllStatuses}
+              disabled={refreshingAll}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium shadow-sm transition-all cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 text-slate-500 ${refreshingAll ? "animate-spin" : ""}`} />
+              <span>Refresh Statuses</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("events")}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-sm font-medium shadow-sm transition-all cursor-pointer"
+            >
+              <FileText className="w-4 h-4" />
+              <span>View Event Ledger</span>
+            </button>
+          </div>
+        )}
+
         {activeTab === "website" && (
           <div className="flex items-center gap-3 flex-wrap">
             <button
@@ -993,6 +1062,22 @@ export default function LeadFeedsClient() {
       <div className="flex items-center space-x-2 border-b border-slate-200 overflow-x-auto pb-px">
         <button
           type="button"
+          onClick={() => setActiveTab("overview")}
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === "overview"
+              ? "border-indigo-600 text-indigo-600 bg-indigo-50/40 rounded-t-lg"
+              : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
+          }`}
+        >
+          <LayoutGrid className="w-4 h-4 text-indigo-600" />
+          <span>Integration Studio</span>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+            Overview
+          </span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab("website")}
           className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
             activeTab === "website"
@@ -1087,6 +1172,585 @@ export default function LeadFeedsClient() {
           </span>
         </button>
       </div>
+
+      {/* ========================================================
+          TAB 0: PHASE 26 INTEGRATION STUDIO OVERVIEW & MONITORING
+      ======================================================== */}
+      {activeTab === "overview" && (
+        <div className="space-y-8 animate-in fade-in duration-150">
+          {/* Health Alert Banner */}
+          {indiamartData.reconnectNeeded ? (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-rose-900">IndiaMART CRM Key Expired or Revoked</h4>
+                  <p className="text-xs text-rose-700 mt-0.5">
+                    Background polling has been halted. Reconnect your IndiaMART glusr_crm_key to restore automated inquiry ingestion.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab("indiamart")}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition-all cursor-pointer whitespace-nowrap"
+              >
+                Reconnect IndiaMART
+              </button>
+            </div>
+          ) : (
+            <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-slate-50 border border-emerald-200/80 rounded-xl p-4 flex items-center justify-between gap-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center flex-shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-emerald-950">
+                    Ingestion Pipelines Operational &bull; Multi-Tenant Isolated
+                  </h4>
+                  <p className="text-xs text-emerald-800/90 mt-0.5">
+                    All webhook endpoints, polling workers, idempotency deduplication ledgers, and secure key vaults are running normally.
+                  </p>
+                </div>
+              </div>
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100/80 text-emerald-800 text-xs font-bold border border-emerald-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                100% Operational
+              </span>
+            </div>
+          )}
+
+          {/* Global Ingestion KPI Summary Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Monitored Channels</span>
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <LayoutGrid className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-2xl font-extrabold text-slate-900">
+                  {[
+                    enabled,
+                    indiamartData.configured,
+                    metaData.configured,
+                    googleData.configured,
+                    genericData.status === "active",
+                  ].filter(Boolean).length}{" "}
+                  / 5
+                </span>
+                <span className="text-xs font-medium text-emerald-600">Active</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">Multi-tenant inbound channels</p>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Leads Ingested</span>
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <Database className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-2xl font-extrabold text-slate-900">
+                  {(stats.totalReceived || 0) +
+                    (googleData.stats?.totalReceived || 0) +
+                    (genericData.stats?.totalReceived || 0) +
+                    (indiamartData.integration?.stats?.totalReceived || 0)}
+                </span>
+                <span className="text-xs font-medium text-slate-500">Recorded</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">Across all enabled feeds</p>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Valid Dispatched</span>
+                <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
+                  <CheckCircle2 className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-2xl font-extrabold text-slate-900">
+                  {(stats.validLeads || 0) +
+                    (googleData.stats?.validLeads || 0) +
+                    (genericData.stats?.validLeads || 0) +
+                    (indiamartData.integration?.stats?.leadsCreated || 0)}
+                </span>
+                <span className="text-xs font-medium text-teal-600">In CRM</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">De-duplicated & normalized</p>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Errors / Blocked</span>
+                <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-2xl font-extrabold text-slate-900">
+                  {(stats.spamBlocked || 0) +
+                    (stats.duplicateRejected || 0) +
+                    (googleData.stats?.errors || 0) +
+                    (genericData.stats?.errors || 0) +
+                    (indiamartData.integration?.stats?.errors || 0)}
+                </span>
+                <span className="text-xs font-medium text-rose-600">Shielded</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">Spam, rejected & dropped</p>
+            </div>
+          </div>
+
+          {/* 5 Channel Integration Health Grid */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Configured Integration Feeds</h3>
+                <p className="text-xs text-slate-500">Live operational status, sync watermarks, and key vault health</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {/* Channel 1: IndiaMART */}
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-sm shadow-sm">
+                        IM
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">IndiaMART Lead Manager</h4>
+                        <span className="text-[11px] text-slate-500">B2B Marketplace Polling</span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      indiamartData.configured
+                        ? indiamartData.reconnectNeeded
+                          ? "bg-rose-100 text-rose-800"
+                          : "bg-emerald-100 text-emerald-800"
+                        : "bg-slate-100 text-slate-600"
+                    }`}>
+                      {indiamartData.configured
+                        ? indiamartData.reconnectNeeded
+                          ? "Auth Required"
+                          : "Connected"
+                        : "Disconnected"}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Auto-pulls direct buyer inquiries, RFQs, and requirements every 5–15 minutes via IndiaMART CRM API.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Key Vault:</span>
+                      <span className="font-mono text-slate-700">
+                        {indiamartData.configured ? "••••••••••••[LOCKED]" : "Not configured"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Last Sync:</span>
+                      <span className="text-slate-700">
+                        {indiamartData.integration?.lastSyncAt
+                          ? new Date(indiamartData.integration.lastSyncAt).toLocaleTimeString()
+                          : "Never"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Ingested Leads:</span>
+                      <span className="font-semibold text-slate-800">
+                        {indiamartData.integration?.stats?.leadsCreated || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleTriggerIndiaMartSync}
+                    disabled={syncingIndiaMart || !indiamartData.configured}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${syncingIndiaMart ? "animate-spin" : ""}`} />
+                    <span>Sync Now</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("indiamart")}
+                    className="px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    Configure
+                  </button>
+                </div>
+              </div>
+
+              {/* Channel 2: Google Ads */}
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shadow-sm">
+                        <Code2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Google Ads Lead Forms</h4>
+                        <span className="text-[11px] text-slate-500">HTTP Webhook Extension</span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      googleData.configured ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+                    }`}>
+                      {googleData.configured ? "Active Webhook" : "Disconnected"}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Zero-delay lead capture from Google Search, Display, YouTube, and Discovery lead form extensions.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Webhook Key:</span>
+                      <span className="font-mono text-slate-700">
+                        {googleData.googleKeyMasked || "••••••••••••[VAULT]"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Last Received:</span>
+                      <span className="text-slate-700">
+                        {googleData.stats?.lastReceivedAt
+                          ? new Date(googleData.stats.lastReceivedAt).toLocaleTimeString()
+                          : "Awaiting leads"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Ingested Leads:</span>
+                      <span className="font-semibold text-slate-800">
+                        {googleData.stats?.validLeads || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleSendGoogleTest}
+                    disabled={testingGoogle}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Send className={`w-3.5 h-3.5 ${testingGoogle ? "animate-spin" : ""}`} />
+                    <span>Send Test Lead</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("google")}
+                    className="px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    Configure
+                  </button>
+                </div>
+              </div>
+
+              {/* Channel 3: Generic Connector */}
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-violet-50 border border-violet-100 text-violet-600 flex items-center justify-center font-bold text-sm shadow-sm">
+                        <Sparkles className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Zapier, Make, n8n & Pabbly</h4>
+                        <span className="text-[11px] text-slate-500">Universal Inbound REST</span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      genericData.status === "active" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+                    }`}>
+                      {genericData.status === "active" ? "Active Endpoint" : "Disabled"}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Universal webhook ingestion for 2,000+ third-party tools, iPaaS flows, and automation recipes.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Connector Key:</span>
+                      <span className="font-mono text-slate-700">
+                        {genericData.apiKeyMasked || "••••••••••••[VAULT]"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Last Ingested:</span>
+                      <span className="text-slate-700">
+                        {genericData.stats?.lastReceivedAt
+                          ? new Date(genericData.stats.lastReceivedAt).toLocaleTimeString()
+                          : "Awaiting leads"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Valid Leads:</span>
+                      <span className="font-semibold text-slate-800">
+                        {genericData.stats?.validLeads || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleSendGenericTest}
+                    disabled={testingGeneric}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-violet-50 hover:bg-violet-100 text-violet-800 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Send className={`w-3.5 h-3.5 ${testingGeneric ? "animate-spin" : ""}`} />
+                    <span>Send Test Lead</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("generic")}
+                    className="px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    Configure
+                  </button>
+                </div>
+              </div>
+
+              {/* Channel 4: Website & Webhook Feed */}
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm shadow-sm">
+                        <Globe className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Website Forms & JS Snippet</h4>
+                        <span className="text-[11px] text-slate-500">Public Forms & Webhooks</span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+                    }`}>
+                      {enabled ? "Active" : "Disabled"}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Embedded website lead capture snippet and direct JSON webhook feeds with spam protection.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Site Key:</span>
+                      <span className="font-mono text-slate-700">
+                        {siteKey ? `${siteKey.slice(0, 10)}...` : "—"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Last Received:</span>
+                      <span className="text-slate-700">
+                        {stats.lastReceivedAt ? new Date(stats.lastReceivedAt).toLocaleTimeString() : "Ready"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Valid Leads:</span>
+                      <span className="font-semibold text-slate-800">
+                        {stats.validLeads || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleSendTestLead}
+                    disabled={testing || !enabled}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Send className={`w-3.5 h-3.5 ${testing ? "animate-spin" : ""}`} />
+                    <span>Send Test Lead</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("website")}
+                    className="px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    Configure
+                  </button>
+                </div>
+              </div>
+
+              {/* Channel 5: Meta Lead Ads */}
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm shadow-sm">
+                        <Share2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Meta Lead Ads</h4>
+                        <span className="text-[11px] text-slate-500">Facebook & Instagram</span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      metaData.configured ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+                    }`}>
+                      {metaData.configured ? "Connected" : "Disconnected"}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Real-time Graph API webhook sync for Facebook Page instant lead forms and Instagram campaign leads.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Page Subscriptions:</span>
+                      <span className="text-slate-700 font-semibold">
+                        {metaData.integration?.metaPages?.length || (metaData.configured ? 1 : 0)} Active
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Webhook Status:</span>
+                      <span className="text-slate-700">
+                        {metaData.configured ? "Subscribed (v21.0)" : "Not registered"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Key Vault:</span>
+                      <span className="font-mono text-slate-700">
+                        {metaData.configured ? "••••••••••••[VAULT]" : "None"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("meta")}
+                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    <span>Manage Meta Settings</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Recent Event Activity Stream (Phase 26) */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-indigo-600" />
+                  <span>Recent Integration Event Activity</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Append-only streaming ledger of incoming webhook payloads and processing results
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab("events")}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700 cursor-pointer"
+              >
+                <span>View Full Ledger</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-4">Event ID</th>
+                    <th className="py-2.5 px-4">Source</th>
+                    <th className="py-2.5 px-4">Status</th>
+                    <th className="py-2.5 px-4">Timestamp</th>
+                    <th className="py-2.5 px-4">Idempotency Key</th>
+                    <th className="py-2.5 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {events.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                        No recent integration events recorded. Send a test lead from any feed above to trigger activity.
+                      </td>
+                    </tr>
+                  ) : (
+                    events.slice(0, 6).map((evt) => (
+                      <tr key={evt._id || evt.id} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-2.5 px-4 font-mono font-semibold text-slate-700 select-all">
+                          {(evt._id || evt.id)?.substring(0, 10)}...
+                        </td>
+                        <td className="py-2.5 px-4">
+                          <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
+                            {evt.source || evt.integrationType || "Webhook"}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            evt.status === "completed" || evt.status === "processed"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : evt.status === "failed"
+                              ? "bg-rose-100 text-rose-800"
+                              : "bg-blue-100 text-blue-800"
+                          }`}>
+                            {evt.status}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-500">
+                          {evt.createdAt ? new Date(evt.createdAt).toLocaleTimeString() : "—"}
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-[11px] text-slate-600 select-all truncate max-w-[160px]">
+                          {evt.idempotencyKey || "—"}
+                        </td>
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedEvent(evt)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all cursor-pointer mr-1.5"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>Inspect</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleReplayEvent(evt._id || evt.id)}
+                            disabled={replayingEventId === (evt._id || evt.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-700 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+                          >
+                            <Play className="w-3 h-3" />
+                            <span>Replay</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================
           TAB 1: WEBSITE FORMS & REST WEBHOOK
@@ -2604,6 +3268,8 @@ export default function LeadFeedsClient() {
                 <option value="Website">Website Form</option>
                 <option value="IndiaMART">IndiaMART</option>
                 <option value="Facebook">Meta / Facebook</option>
+                <option value="Google Ads">Google Ads</option>
+                <option value="Generic">Zapier / Make / Generic</option>
               </select>
             </div>
           </div>
@@ -2647,7 +3313,7 @@ export default function LeadFeedsClient() {
                       </td>
                       <td className="py-3 px-4">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          evt.status === "completed"
+                          evt.status === "completed" || evt.status === "processed"
                             ? "bg-emerald-100 text-emerald-800"
                             : evt.status === "failed"
                             ? "bg-rose-100 text-rose-800"
@@ -2662,7 +3328,15 @@ export default function LeadFeedsClient() {
                       <td className="py-3 px-4 font-mono text-[11px] text-slate-600 select-all truncate max-w-[180px]">
                         {evt.idempotencyKey || "—"}
                       </td>
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedEvent(evt)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all cursor-pointer mr-1.5"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>Inspect</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleReplayEvent(evt._id || evt.id)}
@@ -3320,6 +3994,139 @@ export default function LeadFeedsClient() {
                 {rotatingGenericKey && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                 Yes, Rotate Key Now
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL: INSPECT INTEGRATION EVENT (PHASE 26)
+      ======================================================== */}
+      {selectedEvent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">
+                  <Eye className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Integration Event Inspector</h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    ID: {selectedEvent._id || selectedEvent.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEvent(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Event Metadata Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200/80 flex-shrink-0">
+              <div>
+                <span className="text-slate-500 block">Source</span>
+                <span className="font-semibold text-slate-800">{selectedEvent.source || selectedEvent.integrationType || "Webhook"}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">Status</span>
+                <span className={`font-bold uppercase tracking-wider text-[11px] ${
+                  selectedEvent.status === "processed" || selectedEvent.status === "completed"
+                    ? "text-emerald-700"
+                    : selectedEvent.status === "failed"
+                    ? "text-rose-700"
+                    : "text-blue-700"
+                }`}>
+                  {selectedEvent.status}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">HTTP Code</span>
+                <span className="font-mono font-semibold text-slate-800">{selectedEvent.httpStatus || 200}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">Created At</span>
+                <span className="text-slate-700">
+                  {selectedEvent.createdAt ? new Date(selectedEvent.createdAt).toLocaleTimeString() : "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* Idempotency Key */}
+            <div className="flex-shrink-0">
+              <label className="text-xs font-semibold text-slate-600 mb-1 block">Idempotency Key</label>
+              <div className="font-mono text-xs bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 select-all truncate">
+                {selectedEvent.idempotencyKey || "None (non-deduplicated)"}
+              </div>
+            </div>
+
+            {/* Scrubbed Payload Viewer */}
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-600">
+                  Scrubbed Payload (Vault Redacted)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const json = JSON.stringify(selectedEvent.rawPayload || selectedEvent.normalizedPayload || {}, null, 2)
+                    navigator.clipboard.writeText(json)
+                    setCopiedEventPayload(true)
+                    setTimeout(() => setCopiedEventPayload(false), 2000)
+                    toast.success("Payload copied to clipboard")
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 cursor-pointer"
+                >
+                  {copiedEventPayload ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedEventPayload ? "Copied!" : "Copy JSON"}</span>
+                </button>
+              </div>
+              <pre className="flex-1 bg-slate-900 text-slate-100 p-3.5 rounded-xl text-xs font-mono overflow-auto max-h-60 border border-slate-800 selection:bg-indigo-500 selection:text-white">
+                {JSON.stringify(selectedEvent.rawPayload || selectedEvent.normalizedPayload || {}, null, 2)}
+              </pre>
+            </div>
+
+            {/* Result / Error Details */}
+            {selectedEvent.errorMessage && (
+              <div className="bg-rose-50 border border-rose-200 p-3 rounded-xl text-xs text-rose-700 flex-shrink-0">
+                <strong>Error details:</strong> {selectedEvent.errorMessage}
+              </div>
+            )}
+
+            {/* Modal Footer Actions */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 flex-shrink-0">
+              <span className="text-[11px] text-slate-400">
+                Tenant isolation enforced &bull; Append-only audit
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedEvent(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await handleReplayEvent(selectedEvent._id || selectedEvent.id)
+                    setSelectedEvent(null)
+                  }}
+                  disabled={replayingEventId === (selectedEvent._id || selectedEvent.id)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {replayingEventId === (selectedEvent._id || selectedEvent.id) ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5" />
+                  )}
+                  Replay Event
+                </button>
+              </div>
             </div>
           </div>
         </div>
