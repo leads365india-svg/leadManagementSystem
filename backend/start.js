@@ -41,11 +41,11 @@ const app = express()
 const PORT = process.env.PORT || 5000
 app.set("trust proxy", 1)
 
+// Import CORS origin parsing and matching helpers
+const { parseAllowedOrigins, isOriginAllowed } = require("./utils/corsHelper")
+
 // CORS configuration supporting comma-separated FRONTEND_URL or local defaults
-const configuredFrontendUrls = (process.env.FRONTEND_URL || "")
-  .split(",")
-  .map((url) => url.trim().replace(/\/+$/, ""))
-  .filter(Boolean)
+const configuredFrontendUrls = parseAllowedOrigins(process.env.FRONTEND_URL || "")
 
 const defaultLocalOrigins = [
   "http://localhost:3000",
@@ -56,9 +56,15 @@ const defaultLocalOrigins = [
   "http://127.0.0.1:3002",
 ]
 
+// Support Vercel production & preview deployments alongside configured origins
+const vercelDefaults = [
+  "https://*.vercel.app",
+]
+
 const allowedOrigins = [
   ...new Set([
     ...configuredFrontendUrls,
+    ...vercelDefaults,
     ...defaultLocalOrigins,
   ]),
 ]
@@ -91,27 +97,7 @@ app.options("/api/integrations/leads/website", webhookCors)
 const isDevelopment = process.env.NODE_ENV !== "production"
 
 const isAllowedOrigin = (origin) => {
-  if (!origin) return true
-  const normalized = origin.trim().replace(/\/+$/, "")
-  if (allowedOrigins.includes(normalized)) return true
-
-  // Support wildcard patterns in allowedOrigins (e.g. https://*.vercel.app)
-  const isWildcardAllowed = allowedOrigins.some((pattern) => {
-    if (pattern.includes("://*.")) {
-      const [proto, domain] = pattern.split("://*.")
-      const escapedDomain = domain.replace(/\./g, "\\.")
-      const regex = new RegExp(`^${proto}:\\/\\/([a-z0-9-]+\\.)*${escapedDomain}$`, "i")
-      return regex.test(normalized)
-    }
-    return false
-  })
-  if (isWildcardAllowed) return true
-
-  // In development, dynamically allow any localhost / 127.0.0.1 port
-  if (isDevelopment && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(normalized)) {
-    return true
-  }
-  return false
+  return isOriginAllowed(origin, allowedOrigins, isDevelopment)
 }
 
 const corsOptions = {
@@ -126,24 +112,6 @@ const corsOptions = {
     callback(null, false)
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Requested-With",
-    "x-api-key",
-    "X-Api-Key",
-    "x-site-key",
-    "X-Site-Key",
-    "x-idempotency-key",
-    "X-Idempotency-Key",
-    "idempotency-key",
-    "X-Content-SHA256",
-    "x-content-sha256",
-    "X-Audio-SHA256",
-    "x-audio-sha256",
-    "X-File-Name",
-    "x-file-name",
-  ],
   credentials: true, // Allow cookies to be sent across origins
   maxAge: 86400, // Cache preflight requests for 24 hours
 }
@@ -151,6 +119,7 @@ const corsOptions = {
 // Apply CORS middleware
 app.use(cors(corsOptions))
 // Handle preflight OPTIONS requests
+app.options("/api/*", cors(corsOptions))
 app.options("*", cors(corsOptions))
 
 // Enforce HTTPS in production behind reverse proxies / balancers

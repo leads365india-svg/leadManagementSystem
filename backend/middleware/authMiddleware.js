@@ -471,20 +471,7 @@ const requirePermission = (requiredPermission, options = {}) => {
 // checkPermission is an alias to requirePermission for full backward compatibility
 const checkPermission = requirePermission
 
-const isOriginMatch = (origin, patterns = []) => {
-  if (!origin) return false
-  const normalized = origin.trim().replace(/\/+$/, "")
-  if (patterns.includes(normalized)) return true
-  return patterns.some((pattern) => {
-    if (pattern && pattern.includes("://*.")) {
-      const [proto, domain] = pattern.split("://*.")
-      const escapedDomain = domain.replace(/\./g, "\\.")
-      const regex = new RegExp(`^${proto}:\\/\\/([a-z0-9-]+\\.)*${escapedDomain}$`, "i")
-      return regex.test(normalized)
-    }
-    return false
-  })
-}
+const { isOriginAllowed } = require("../utils/corsHelper")
 
 // CSRF Protection Middleware for state-changing requests using cookie authentication
 const verifyCSRF = (allowedOrigins = []) => {
@@ -494,12 +481,14 @@ const verifyCSRF = (allowedOrigins = []) => {
       return next()
     }
 
-    // Skip CSRF verification for public integration webhooks (authenticated via API key/signature, no session cookies)
+    // Skip CSRF verification for public integration webhooks and login routes (no session to protect)
     if (
       req.originalUrl &&
       (req.originalUrl.includes("/integrations/leads/website") ||
         req.originalUrl.includes("/integrations/webhooks") ||
-        req.originalUrl.includes("/webhooks/"))
+        req.originalUrl.includes("/webhooks/") ||
+        req.originalUrl.includes("/auth/login") ||
+        req.originalUrl.includes("/super-admin/login"))
     ) {
       return next()
     }
@@ -510,12 +499,13 @@ const verifyCSRF = (allowedOrigins = []) => {
         try {
           // Exact-origin match check (parse with new URL(origin).origin) to block prefix-spoofed domains
           const parsedOrigin = new URL(originHeader).origin
-          const isExplicitlyAllowed = isOriginMatch(parsedOrigin, allowedOrigins)
-          const isDevLocalhost =
-            process.env.NODE_ENV !== "production" &&
-            /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(parsedOrigin)
+          const isExplicitlyAllowed = isOriginAllowed(
+            parsedOrigin,
+            allowedOrigins,
+            process.env.NODE_ENV !== "production"
+          )
 
-          if (!isExplicitlyAllowed && !isDevLocalhost) {
+          if (!isExplicitlyAllowed) {
             return res.status(403).json({
               success: false,
               error: "CSRF verification failed: Origin not allowed",
