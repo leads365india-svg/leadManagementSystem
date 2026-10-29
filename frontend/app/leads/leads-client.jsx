@@ -7,6 +7,7 @@ import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
+import InBrowserAudioPlayer from "@/components/in-browser-audio-player"
 
 const LeadDetailDrawer = dynamic(() => import("@/components/lead-detail-drawer"), {
   ssr: false,
@@ -16,6 +17,7 @@ import {
   User,
   UserPlus,
   Plus,
+  Play,
   Search,
   Filter,
   RefreshCw,
@@ -142,6 +144,8 @@ export default function LeadsClient() {
 
   // Modals state
   const [activeLeadDetails, setActiveLeadDetails] = useState(null)
+  const [activePlayingCall, setActivePlayingCall] = useState(null)
+  const [loadingRecordingId, setLoadingRecordingId] = useState(null)
   const [leadCalls, setLeadCalls] = useState([])
   const [loadingCalls, setLoadingCalls] = useState(false)
   const [editingLead, setEditingLead] = useState(null)
@@ -535,30 +539,13 @@ export default function LeadsClient() {
 
   return (
     <>
-      <Breadcrumb
-        items={[
-          { label: "Home", href: "/" },
-          { label: "Leads", href: "/leads" },
-          { label: displayTitle },
-        ]}
-      />
       <div className="w-full px-4 sm:px-6 lg:px-8 py-5 space-y-5 animate-in fade-in duration-200">
       {/* =========================================================================
           PAGE HEADER & PRIMARY ACTIONS
       ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center space-x-2.5">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{displayTitle}</h1>
-            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
-              {totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-1">
-            {currentStatus === "all"
-              ? "Real-time pipeline management backed by MongoDB Atlas with strict tenant isolation."
-              : `Viewing ${displayTitle} filtered from your database with real-time pipeline status.`}
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Manage Leads</h1>
         </div>
 
         {/* Action Buttons */}
@@ -613,13 +600,6 @@ export default function LeadsClient() {
               }`}
             >
               <span>{tab.label}</span>
-              <span
-                className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
-                  isActive ? "bg-indigo-600 text-white font-bold" : "bg-slate-100 text-slate-600 font-medium"
-                }`}
-              >
-                {tab.count}
-              </span>
             </button>
           )
         })}
@@ -916,7 +896,6 @@ export default function LeadsClient() {
                     className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer disabled:opacity-40"
                   />
                 </th>
-                <th className="py-3 px-4">Lead ID</th>
                 <th className="py-3 px-4 cursor-pointer hover:text-slate-900" onClick={() => handleSort("name")}>
                   <div className="flex items-center space-x-1">
                     <span>Name</span>
@@ -941,7 +920,7 @@ export default function LeadsClient() {
               {loading ? (
                 /* Loading State Rows */
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-500">
+                  <td colSpan={8} className="py-16 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center space-y-3">
                       <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
                       <p className="text-xs font-medium text-slate-600">Loading leads database from Atlas...</p>
@@ -951,7 +930,7 @@ export default function LeadsClient() {
               ) : error ? (
                 /* Error State Row */
                 <tr>
-                  <td colSpan={9} className="py-12 text-center">
+                  <td colSpan={8} className="py-12 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2 text-rose-600">
                       <AlertCircle className="w-8 h-8" />
                       <p className="font-semibold text-xs">{error}</p>
@@ -968,7 +947,7 @@ export default function LeadsClient() {
               ) : allLeadsList.length === 0 ? (
                 /* Empty State */
                 <tr>
-                  <td colSpan={9} className="py-16 sm:py-20 text-center">
+                  <td colSpan={8} className="py-16 sm:py-20 text-center">
                     <div className="max-w-md mx-auto px-4 flex flex-col items-center justify-center animate-in fade-in duration-200">
                       <div className="w-16 h-16 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 mb-4 shadow-2xs">
                         <Users className="w-8 h-8 stroke-[1.8]" />
@@ -1037,26 +1016,7 @@ export default function LeadsClient() {
                         />
                       </td>
 
-                      {/* 2. Lead ID */}
-                      <td className="py-3 px-4 font-mono font-medium text-slate-600 whitespace-nowrap">
-                        <div className="flex items-center space-x-1.5">
-                          <span className="bg-slate-100 px-2 py-0.5 rounded text-[11px] font-bold text-slate-700">
-                            #LD-{shortId}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(leadIdStr, leadIdStr)}
-                            className="text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
-                            title="Copy full Lead ID"
-                          >
-                            {copiedId === leadIdStr ? (
-                              <Check className="w-3 h-3 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3 h-3" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
+
 
                       {/* 3. Name & Company */}
                       <td className="py-3 px-4 font-semibold text-slate-900 whitespace-nowrap">
@@ -1120,25 +1080,25 @@ export default function LeadsClient() {
                         </span>
                       </td>
 
-                      {/* 6. Pipeline Status (Quick Interactive Transition) */}
+                      {/* Pipeline Status (Compact Enterprise Pill) */}
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="relative inline-flex items-center group">
+                        <div className="relative inline-flex items-center w-[124px]">
                           <select
                             value={lead.status || "New"}
                             onChange={(e) => handleQuickStatusChange(leadIdStr, e.target.value, lead.status)}
                             disabled={updatingStatusId === leadIdStr}
                             aria-label={`Update pipeline status for ${lead.name}`}
-                            className={`inline-flex items-center text-[11px] font-bold rounded-full pl-6 pr-6 py-1 border transition-colors cursor-pointer appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 ${statusInfo.badgeClasses}`}
-                            title="Click to transition pipeline status"
+                            className={`w-full text-[11px] font-semibold rounded-md pl-5 pr-5 py-1 border transition-colors cursor-pointer appearance-none focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 truncate shadow-2xs ${statusInfo.badgeClasses}`}
+                            title="Click to change pipeline status"
                           >
                             {ALL_STATUSES.map((s) => (
                               <option key={s} value={s} className="bg-white text-slate-800 font-medium py-1">
-                                {s} {s === "Engaged" ? "(Active)" : s === "Closed-Won" ? "(Order Placed)" : s === "Closed-Lost" ? "(Lost)" : ""}
+                                {s} {s === "Engaged" ? "(Active)" : s === "Closed-Won" ? "(Won)" : s === "Closed-Lost" ? "(Lost)" : ""}
                               </option>
                             ))}
                           </select>
-                          <span className={`w-1.5 h-1.5 rounded-full absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${statusInfo.dotColor}`} />
-                          <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-slate-600" />
+                          <span className={`w-1.5 h-1.5 rounded-full absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none ${statusInfo.dotColor}`} />
+                          <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                         </div>
                       </td>
 
@@ -1178,13 +1138,20 @@ export default function LeadsClient() {
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          <Link
-                            href={`/communication/follow-ups?leadId=${leadIdStr}&action=schedule`}
-                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                            title="Schedule Follow-up"
+                          <button
+                            type="button"
+                            onClick={() => handlePlayRecording(lead)}
+                            disabled={loadingRecordingId === leadIdStr}
+                            className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                            title="Play Call Recording"
+                            aria-label={`Play call recording for ${lead.name}`}
                           >
-                            <CalendarClock className="w-3.5 h-3.5" />
-                          </Link>
+                            {loadingRecordingId === leadIdStr ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                            ) : (
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                            )}
+                          </button>
 
                           <button
                             type="button"
@@ -1298,6 +1265,20 @@ export default function LeadsClient() {
           setActiveLeadDetails(null)
         }}
       />
+
+      {/* In-Browser Streaming Audio Player Dock */}
+      {activePlayingCall && (
+        <div className="fixed bottom-6 right-6 z-50 w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
+          <InBrowserAudioPlayer
+            callId={activePlayingCall._id || activePlayingCall.id || activePlayingCall.clientCallId}
+            recording={activePlayingCall.recording}
+            agentName={activePlayingCall.agentName || activePlayingCall.agentId?.name || "Agent"}
+            leadPhone={activePlayingCall.number || activePlayingCall.phoneNumber || activePlayingCall.phone}
+            direction={activePlayingCall.direction}
+            onClose={() => setActivePlayingCall(null)}
+          />
+        </div>
+      )}
 
       {/* =========================================================================
           IN-PLACE EDIT LEAD MODAL
