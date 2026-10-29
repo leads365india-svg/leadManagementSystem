@@ -384,75 +384,6 @@ export default function LeadsClient() {
     }
   }
 
-  // Play latest call recording for lead directly from table action button
-  const handlePlayRecording = async (lead) => {
-    const leadId = lead?._id || lead?.id
-    if (!leadId) return
-
-    try {
-      setLoadingRecordingId(leadId)
-      const res = await apiClient.getLeadCalls(leadId)
-      const calls = res?.success && Array.isArray(res.data) ? res.data : []
-
-      if (calls.length === 0) {
-        toast.error(`No calls recorded yet for ${lead.name || "this lead"}`)
-        return
-      }
-
-      // Helper to compute call timestamp
-      const getCallTime = (c) => {
-        const t = c.createdAt || c.startedAt || c.recording?.createdAt || c.timestamp
-        return t ? new Date(t).getTime() : 0
-      }
-
-      // Sort calls descending by creation / start timestamp
-      const sortedCalls = [...calls].sort((a, b) => getCallTime(b) - getCallTime(a))
-      const latestCall = sortedCalls[0]
-
-      // Filter calls that have valid playable audio recording
-      const validCallsWithRecording = sortedCalls.filter((c) => {
-        const rec = c.recording
-        if (rec?.status === "skipped_dnr" || rec?.status === "expired") {
-          return false
-        }
-        return Boolean(
-          c.hasRecording ||
-          rec?.fileId ||
-          rec?.status === "ready" ||
-          rec?.status === "stored" ||
-          c.metadata?.recordingUrl ||
-          c.recordingUrl ||
-          (rec?.sizeBytes && rec.sizeBytes > 0)
-        )
-      })
-
-      if (validCallsWithRecording.length > 0) {
-        const newestRecordingCall = validCallsWithRecording[0]
-        setActivePlayingCall({
-          ...newestRecordingCall,
-          phone: lead.phone,
-          number: newestRecordingCall.number || newestRecordingCall.phoneNumber || lead.phone,
-          agentName: newestRecordingCall.agentName || newestRecordingCall.agentId?.name || "Agent",
-        })
-        const dateStr = newestRecordingCall.startedAt || newestRecordingCall.createdAt
-          ? new Date(newestRecordingCall.startedAt || newestRecordingCall.createdAt).toLocaleDateString()
-          : ""
-        toast.success(`Playing latest recording for ${lead.name || "Lead"}${dateStr ? ` (${dateStr})` : ""}`)
-      } else if (latestCall.recording?.status === "skipped_dnr") {
-        toast.error(`Latest call for ${lead.name || "this lead"} was skipped (Do-Not-Record policy)`)
-      } else if (latestCall.recording?.status === "expired") {
-        toast.error(`Latest recording for ${lead.name || "this lead"} has expired (retention policy)`)
-      } else {
-        toast.error(`No valid audio recording found for ${lead.name || "this lead"}`)
-      }
-    } catch (err) {
-      console.error("Failed to load recording:", err)
-      toast.error(err?.message || "Failed to retrieve call recordings")
-    } finally {
-      setLoadingRecordingId(null)
-    }
-  }
-
   // Quick lead status change directly from table row or modal
   const handleQuickStatusChange = async (leadId, newStatus, currentStatus) => {
     if (newStatus === currentStatus) return
@@ -579,8 +510,14 @@ export default function LeadsClient() {
         return
       }
 
-      // 2. Identify the latest call with an audio recording
-      const playableCall = calls.find(
+      // 2. Identify the latest call with an audio recording (sorted newest first)
+      const getCallTime = (c) => {
+        const t = c.createdAt || c.startedAt || c.recording?.createdAt || c.timestamp
+        return t ? new Date(t).getTime() : 0
+      }
+      const sortedCalls = [...calls].sort((a, b) => getCallTime(b) - getCallTime(a))
+
+      const playableCall = sortedCalls.find(
         (c) =>
           c.recording?.status === "stored" ||
           c.recording?.status === "ready" ||

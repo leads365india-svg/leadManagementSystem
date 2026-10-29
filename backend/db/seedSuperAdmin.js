@@ -127,34 +127,6 @@ const bootstrapSuperAdmin = async () => {
       const email = configuredEmail || "superadmin@leadflow.io"
       const password = configuredPassword || "SuperAdmin@2026!"
       const name = configuredName || "LeadFlow Super Admin"
-    // Check if any Super Admin currently exists in the database
-    const superAdminExists = await User.findOne({ role: "super_admin" }).select("+password")
-
-    // If SUPERADMIN_PASSWORD is set in environment, ensure the hash in DB matches
-    if (superAdminExists && process.env.SUPERADMIN_PASSWORD) {
-      const bcrypt = require("bcryptjs")
-      const isMatch = superAdminExists.password
-        ? await bcrypt.compare(process.env.SUPERADMIN_PASSWORD, superAdminExists.password)
-        : false
-      if (!isMatch) {
-        superAdminExists.password = process.env.SUPERADMIN_PASSWORD
-        if (process.env.SUPERADMIN_EMAIL) {
-          superAdminExists.email = process.env.SUPERADMIN_EMAIL.toLowerCase().trim()
-        }
-        await superAdminExists.save()
-        console.log("✅ Super Admin password synchronized from SUPERADMIN_PASSWORD environment variable.")
-      }
-    }
-
-    // If already bootstrapped in the past and not explicitly forced, do not recreate default credentials
-    if (bootstrapMarker && !isForceReseed) {
-      return
-    }
-
-    if (!superAdminExists || isForceReseed) {
-      const email = (process.env.SUPERADMIN_EMAIL || "superadmin@leadflow.io").toLowerCase().trim()
-      const password = process.env.SUPERADMIN_PASSWORD || "SuperAdmin@2026!"
-      const name = process.env.SUPERADMIN_NAME || "LeadFlow Super Admin"
 
       const superAdmin = new User({
         name,
