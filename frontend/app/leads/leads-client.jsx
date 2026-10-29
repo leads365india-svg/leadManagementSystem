@@ -151,9 +151,10 @@ export default function LeadsClient() {
   const [editFormErrors, setEditFormErrors] = useState({})
   const [updatingStatusId, setUpdatingStatusId] = useState(null)
 
+  const activeLeadId = activeLeadDetails?._id || activeLeadDetails?.id
+
   useEffect(() => {
-    const leadId = activeLeadDetails?._id || activeLeadDetails?.id
-    if (!leadId) {
+    if (!activeLeadId) {
       setLeadCalls([])
       return
     }
@@ -161,7 +162,7 @@ export default function LeadsClient() {
     let isMounted = true
     setLoadingCalls(true)
     apiClient
-      .getLeadCalls(leadId)
+      .getLeadCalls(activeLeadId)
       .then((res) => {
         if (isMounted && res.success && Array.isArray(res.data)) {
           setLeadCalls(res.data)
@@ -178,7 +179,7 @@ export default function LeadsClient() {
     return () => {
       isMounted = false
     }
-  }, [activeLeadDetails])
+  }, [activeLeadId])
 
   // Fetch lead statistics for live tab badges
   const fetchLeadStats = useCallback(async () => {
@@ -243,8 +244,11 @@ export default function LeadsClient() {
 
   useEffect(() => {
     fetchLeads()
+  }, [fetchLeads])
+
+  useEffect(() => {
     fetchLeadStats()
-  }, [fetchLeads, fetchLeadStats])
+  }, [fetchLeadStats])
 
   // Sync local inputs when URL search params change
   useEffect(() => {

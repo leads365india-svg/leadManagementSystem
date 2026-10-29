@@ -234,9 +234,12 @@ function FollowUpsContent() {
 
   useEffect(() => {
     fetchFollowUps()
+  }, [fetchFollowUps])
+
+  useEffect(() => {
     fetchStats()
     fetchLeadsForSelection()
-  }, [fetchFollowUps, fetchStats, fetchLeadsForSelection])
+  }, [fetchStats, fetchLeadsForSelection])
 
   // Sync search input with URL params
   useEffect(() => {

@@ -194,8 +194,11 @@ function CallReportsClient() {
 
   useEffect(() => {
     fetchCalls()
+  }, [fetchCalls])
+
+  useEffect(() => {
     fetchMetrics()
-  }, [fetchCalls, fetchMetrics])
+  }, [fetchMetrics])
 
   useEffect(() => {
     if (activeTab === "devices") {

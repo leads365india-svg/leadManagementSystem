@@ -51,6 +51,13 @@ const accountSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    slug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      index: true,
+      default: "",
+    },
     // White-Label Settings
     customDomain: {
       type: String,

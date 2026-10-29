@@ -115,8 +115,8 @@ export default function AssignLeadsClient() {
   const loadStaffAndTeams = useCallback(async () => {
     try {
       const [staffRes, teamRes] = await Promise.all([
-        apiClient.request("/staff?status=all&limit=100").catch(() => ({ success: false, data: [] })),
-        apiClient.request("/teams").catch(() => ({ success: false, data: [] })),
+        apiClient.getStaff({ status: "all", limit: 100 }).catch(() => ({ success: false, data: [] })),
+        apiClient.getTeams().catch(() => ({ success: false, data: [] })),
       ])
 
       if (staffRes.success && Array.isArray(staffRes.data)) {

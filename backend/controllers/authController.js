@@ -278,11 +278,19 @@ const getTenantInfo = async (req, res) => {
       })
     }
 
-    const account = await Account.findOne({ accountId: tenantId.trim() }).lean()
+    const cleanTerm = tenantId.trim().toLowerCase()
+    const account = await Account.findOne({
+      $or: [
+        { accountId: tenantId.trim() },
+        { slug: cleanTerm },
+        { customDomain: cleanTerm },
+      ],
+    }).lean()
+
     if (!account) {
       return res.status(404).json({
         success: false,
-        error: "No active Leads Account found with this Tenant ID",
+        error: "No active Leads Account found with this identifier or slug",
       })
     }
 
@@ -293,6 +301,11 @@ const getTenantInfo = async (req, res) => {
         companyName: account.companyName,
         displayName: account.displayName,
         status: account.status,
+        slug: account.slug || "",
+        customDomain: account.customDomain || "",
+        logoUrl: account.logoUrl || "",
+        primaryColor: account.primaryColor || "#4f46e5",
+        pageTitle: account.pageTitle || account.displayName || account.companyName,
       },
     })
   } catch (error) {

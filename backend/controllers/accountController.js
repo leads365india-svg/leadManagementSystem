@@ -50,6 +50,24 @@ const isValidIndianMobile = (number) => {
   return /^[6-9]\d{9}$/.test(clean)
 }
 
+// Helper to generate unique, URL-safe slug from company name
+const generateSafeSlug = async (name) => {
+  if (!name || typeof name !== "string") return ""
+  let base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  if (!base) base = "tenant"
+  let candidate = base
+  let counter = 1
+  while (await Account.findOne({ slug: candidate })) {
+    counter++
+    candidate = `${base}-${counter}`
+  }
+  return candidate
+}
+
 // Generate clean, secure unique tenant/account ID with collision protection
 const generateUniqueAccountId = async () => {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -128,6 +146,7 @@ const getAccounts = async (req, res) => {
       adminEmail: acc.adminEmail,
       contactNumber: acc.contactNumber || "",
       status: acc.status,
+      slug: acc.slug || "",
       customDomain: acc.customDomain || "",
       domainStatus: acc.domainStatus || "unconfigured",
       logoUrl: acc.logoUrl || "",
@@ -377,6 +396,7 @@ const createAccount = async (req, res) => {
 
   const normalizedStatus = status === "suspended" ? "suspended" : "active"
   const accountId = await generateUniqueAccountId()
+  const slug = await generateSafeSlug(companyName || displayName)
 
   // Safe compensation/rollback transaction strategy
   let createdUser = null
@@ -400,6 +420,7 @@ const createAccount = async (req, res) => {
       accountId,
       companyName: companyName.trim(),
       displayName: displayName.trim(),
+      slug,
       adminUserId: createdUser._id,
       adminName: createdUser.name,
       adminEmail: createdUser.email,

@@ -75,20 +75,34 @@ export default function StaffClient() {
     managerId: "",
   })
 
-  // Fetch staff and teams
-  const fetchStaffData = useCallback(async () => {
+  // Fetch teams and roles metadata once or on team updates
+  const fetchTeamsAndRoles = useCallback(async () => {
     try {
-      setLoading(true)
-      const [staffRes, teamsRes, rolesRes] = await Promise.all([
-        apiClient.getStaff({
-          search,
-          role: roleFilter,
-          teamId: teamFilter,
-          status: statusFilter,
-        }),
+      const [teamsRes, rolesRes] = await Promise.all([
         apiClient.getTeams().catch(() => ({ data: [] })),
         apiClient.getRoles().catch(() => ({ data: { roles: [] } })),
       ])
+
+      if (teamsRes.success) {
+        setTeams(teamsRes.data || [])
+      }
+
+      if (rolesRes.success && rolesRes.data?.roles) {
+        setAvailableRoles(rolesRes.data.roles)
+      }
+    } catch (_) {}
+  }, [])
+
+  // Fetch staff list based on search and filters
+  const fetchStaffData = useCallback(async () => {
+    try {
+      setLoading(true)
+      const staffRes = await apiClient.getStaff({
+        search,
+        role: roleFilter,
+        teamId: teamFilter,
+        status: statusFilter,
+      })
 
       if (staffRes.success) {
         setStaff(staffRes.data.staff || [])
@@ -101,14 +115,6 @@ export default function StaffClient() {
           }
         )
       }
-
-      if (teamsRes.success) {
-        setTeams(teamsRes.data || [])
-      }
-
-      if (rolesRes.success && rolesRes.data?.roles) {
-        setAvailableRoles(rolesRes.data.roles)
-      }
     } catch (err) {
       console.error("Failed to load staff:", err)
       toast.error(err.message || "Failed to load staff list")
@@ -116,6 +122,10 @@ export default function StaffClient() {
       setLoading(false)
     }
   }, [search, roleFilter, teamFilter, statusFilter])
+
+  useEffect(() => {
+    fetchTeamsAndRoles()
+  }, [fetchTeamsAndRoles])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -231,6 +241,7 @@ export default function StaffClient() {
       if (res.success) {
         toast.success(`Team '${res.data.name}' created successfully`)
         setTeamFormData({ name: "", description: "", managerId: "" })
+        fetchTeamsAndRoles()
         fetchStaffData()
       }
     } catch (err) {

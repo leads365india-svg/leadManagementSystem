@@ -1,8 +1,8 @@
 "use client"
 
-import React, { useState, useEffect, useMemo, useCallback } from "react"
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
-import { apiClient } from "@/lib/api"
+import { apiClient, API_BASE_URL } from "@/lib/api"
 import InBrowserAudioPlayer from "@/components/in-browser-audio-player"
 import { toast } from "react-hot-toast"
 import {
@@ -98,14 +98,20 @@ export default function LeadDetailDrawer({
   const [timelineFilter, setTimelineFilter] = useState("all") // "all" | "status" | "assignment" | "followup" | "notes"
   const [playingCallId, setPlayingCallId] = useState(null)
 
-  // Update lead when initialLead or leadId changes
+  const onLeadUpdatedRef = useRef(onLeadUpdated)
+  useEffect(() => {
+    onLeadUpdatedRef.current = onLeadUpdated
+  })
+
+  // Update lead when initialLead or leadId changes (keyed by ID to prevent loop)
+  const initialLeadId = initialLead?._id || initialLead?.id
   useEffect(() => {
     if (initialLead) {
       setLead(initialLead)
     }
-  }, [initialLead])
+  }, [initialLeadId])
 
-  // Fetch full lead details on drawer open
+  // Fetch full lead details on drawer open (Passive read: does NOT notify parent to avoid cascading re-renders)
   const fetchLeadDetails = useCallback(async () => {
     if (!leadId) return
     try {
@@ -113,7 +119,6 @@ export default function LeadDetailDrawer({
       const res = await apiClient.getLeadById(leadId)
       if (res.success && res.data) {
         setLead(res.data)
-        if (onLeadUpdated) onLeadUpdated(res.data)
       }
     } catch (err) {
       console.error("Failed to load lead details:", err)
@@ -121,7 +126,7 @@ export default function LeadDetailDrawer({
     } finally {
       setLoading(false)
     }
-  }, [leadId, onLeadUpdated])
+  }, [leadId])
 
   const fetchLeadFollowUps = useCallback(async () => {
     if (!leadId) return
@@ -248,7 +253,7 @@ export default function LeadDetailDrawer({
       fetchLeadActivities()
       fetchLeadCalls()
     }
-  }, [isOpen, leadId, fetchLeadDetails, fetchLeadFollowUps, fetchLeadActivities, fetchLeadCalls])
+  }, [isOpen, leadId])
 
   // Close on ESC key
   useEffect(() => {
@@ -1294,8 +1299,9 @@ export default function LeadDetailDrawer({
                               <audio
                                 controls
                                 preload="metadata"
+                                crossOrigin="use-credentials"
                                 className="w-full h-8 rounded"
-                                src={`/api/calls/${c._id || c.id || c.clientCallId}/recording`}
+                                src={`${API_BASE_URL}/calls/${c._id || c.id || c.clientCallId}/recording`}
                                 onError={(e) => {
                                   const errEl = document.getElementById(`audio-err-${c._id || c.id || c.clientCallId}`)
                                   if (errEl) {
@@ -1306,7 +1312,7 @@ export default function LeadDetailDrawer({
                                 Your browser does not support the audio element.
                               </audio>
                               <div id={`audio-err-${c._id || c.id || c.clientCallId}`} className="hidden text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                                Unable to play audio stream. Please verify your login session and tenant permissions.
+                                Recording unavailable or restricted by compliance policy.
                               </div>
                             </div>
                           )}
