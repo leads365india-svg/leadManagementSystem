@@ -386,6 +386,50 @@ export default function LeadsClient() {
     }
   }
 
+  // Play call recording for lead directly from table action button
+  const handlePlayRecording = async (lead) => {
+    const leadId = lead?._id || lead?.id
+    if (!leadId) return
+
+    try {
+      setLoadingRecordingId(leadId)
+      const res = await apiClient.getLeadCalls(leadId)
+      if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+        const recordingCalls = res.data.filter(
+          (c) =>
+            c.hasRecording ||
+            c.recording?.fileId ||
+            c.recording?.status === "ready" ||
+            c.recording?.status === "stored" ||
+            c.metadata?.recordingUrl ||
+            c.recordingUrl ||
+            (c.recording?.sizeBytes > 0)
+        )
+
+        if (recordingCalls.length === 1) {
+          setActivePlayingCall({
+            ...recordingCalls[0],
+            phone: lead.phone,
+            number: recordingCalls[0].number || lead.phone,
+          })
+          toast.success(`Playing recording for ${lead.name || "Lead"}`)
+        } else if (recordingCalls.length > 1) {
+          setActiveLeadDetails(lead)
+          toast(`Found ${recordingCalls.length} recordings for ${lead.name || "Lead"}. Details drawer opened.`, { icon: "🎧" })
+        } else {
+          toast.error(`No audio recording available for ${lead.name || "this lead"}`)
+        }
+      } else {
+        toast.error(`No call recordings found for ${lead.name || "this lead"}`)
+      }
+    } catch (err) {
+      console.error("Failed to load recording:", err)
+      toast.error(err?.message || "Failed to retrieve call recordings")
+    } finally {
+      setLoadingRecordingId(null)
+    }
+  }
+
   // Quick lead status change directly from table row or modal
   const handleQuickStatusChange = async (leadId, newStatus, currentStatus) => {
     if (newStatus === currentStatus) return
@@ -539,7 +583,7 @@ export default function LeadsClient() {
 
   return (
     <>
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-5 space-y-5 animate-in fade-in duration-200">
+      <div className="w-full max-w-full min-w-0 overflow-x-hidden px-4 sm:px-6 lg:px-8 py-5 space-y-5 animate-in fade-in duration-200">
       {/* =========================================================================
           PAGE HEADER & PRIMARY ACTIONS
       ========================================================================= */}
@@ -844,7 +888,7 @@ export default function LeadsClient() {
       {/* =========================================================================
           LEADS DATA TABLE
       ========================================================================= */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden max-w-full">
         {/* Table Summary Bar */}
         <div className="px-4 py-3 bg-slate-50/60 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
           <div className="text-slate-600 font-medium">
@@ -882,8 +926,8 @@ export default function LeadsClient() {
         </div>
 
         {/* Table Content */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+        <div className="overflow-x-auto w-full">
+          <table className="w-full text-left border-collapse text-xs min-w-[760px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-4 w-10 text-center">
