@@ -39,12 +39,14 @@ const bootstrapSuperAdmin = async () => {
     ).setOptions({ skipTenantFilter: true })
 
     // Check if any Super Admin currently exists in the database
-    const superAdminExists = await User.findOne({ role: "super_admin" })
+    const superAdminExists = await User.findOne({ role: "super_admin" }).select("+password")
 
     // If SUPERADMIN_PASSWORD is set in environment, ensure the hash in DB matches
     if (superAdminExists && process.env.SUPERADMIN_PASSWORD) {
       const bcrypt = require("bcryptjs")
-      const isMatch = await bcrypt.compare(process.env.SUPERADMIN_PASSWORD, superAdminExists.password)
+      const isMatch = superAdminExists.password
+        ? await bcrypt.compare(process.env.SUPERADMIN_PASSWORD, superAdminExists.password)
+        : false
       if (!isMatch) {
         superAdminExists.password = process.env.SUPERADMIN_PASSWORD
         if (process.env.SUPERADMIN_EMAIL) {
