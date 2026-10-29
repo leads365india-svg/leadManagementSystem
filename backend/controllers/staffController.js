@@ -276,7 +276,8 @@ const createStaff = async (req, res) => {
     // 5. Construct invite URL
     const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http"
     const host = req.get("host") || "localhost:3000"
-    const inviteUrl = `${protocol}://${host}/invite/accept?token=${rawInviteToken}&email=${encodeURIComponent(cleanEmail)}`
+    const frontendBase = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",")[0].trim().replace(/\/+$/, "") : `${protocol}://${host}`
+    const inviteUrl = `${frontendBase}/invite/accept?token=${rawInviteToken}&email=${encodeURIComponent(cleanEmail)}`
 
     // Log staff creation event to audit trail
     await audit.log({
@@ -686,7 +687,8 @@ const adminResetPassword = async (req, res) => {
 
     const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http"
     const host = req.get("host") || "localhost:3000"
-    const resetUrl = `${protocol}://${host}/reset-password?token=${rawResetToken}&email=${encodeURIComponent(staff.email)}`
+    const frontendBase = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",")[0].trim().replace(/\/+$/, "") : `${protocol}://${host}`
+    const resetUrl = `${frontendBase}/reset-password?token=${rawResetToken}&email=${encodeURIComponent(staff.email)}`
 
     await audit.log({
       tenantId: staff.tenantId,

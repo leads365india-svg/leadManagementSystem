@@ -46,6 +46,7 @@ export default function SuperAdminDashboardPage() {
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalAccountsCount, setTotalAccountsCount] = useState(0)
+  const [accountsLoadError, setAccountsLoadError] = useState(null)
 
   const activeReqIdRef = useRef(0)
 
@@ -125,6 +126,7 @@ export default function SuperAdminDashboardPage() {
   const loadAccounts = useCallback(async (queryTerm, statusVal, pageVal) => {
     const reqId = ++activeReqIdRef.current
     setIsSearching(true)
+    setAccountsLoadError(null)
     try {
       const accountsRes = await apiClient.getSuperAdminAccounts({
         page: pageVal,
@@ -137,10 +139,12 @@ export default function SuperAdminDashboardPage() {
         setAccounts(accountsRes.data.accounts || [])
         setTotalPages(accountsRes.data.totalPages || 1)
         setTotalAccountsCount(accountsRes.data.total || 0)
+        setAccountsLoadError(null)
       }
     } catch (error) {
       if (reqId === activeReqIdRef.current) {
         console.error("Failed to load accounts:", error)
+        setAccountsLoadError(error.message || "Failed to load accounts list")
         toast.error("Failed to load accounts list")
       }
     } finally {
@@ -769,6 +773,24 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
                       <span>Loading Leads Accounts...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : accountsLoadError ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <AlertTriangle className="w-8 h-8 text-rose-500" />
+                      <p className="font-bold text-slate-800">Failed to Load Leads Accounts</p>
+                      <p className="text-xs text-rose-600 max-w-sm">{accountsLoadError}</p>
+                      <button
+                        type="button"
+                        onClick={() => loadAccounts(debouncedSearch, statusFilter, page)}
+                        className="mt-2 inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Retry</span>
+                      </button>
                     </div>
                   </td>
                 </tr>

@@ -111,48 +111,80 @@ const getJwtSecret = () => {
   return (secret && secret.trim()) || "leadflow-dev-secret-key-min32-chars-for-local-only"
 }
 
-// Extract JWT token from cookie or Authorization header
-const extractToken = (req) => {
-  const isSuperAdminRoute = req.originalUrl && req.originalUrl.includes("/super-admin")
+// Extract candidate JWT tokens from cookies or Authorization header
+const extractCandidateTokens = (req) => {
+  const isSuperAdminRoute =
+    Boolean(req.originalUrl && req.originalUrl.includes("/super-admin")) ||
+    Boolean(req.headers?.referer && req.headers.referer.includes("/super-admin"))
 
+  const tokens = []
   if (req.cookies) {
     if (isSuperAdminRoute) {
       if (req.cookies.superadmin_token) {
-        return req.cookies.superadmin_token
+        tokens.push(req.cookies.superadmin_token)
       }
       // Strict Auth Isolation (Phase 27): Never accept client_token on Super Admin routes
     } else {
       if (req.cookies.client_token) {
-        return req.cookies.client_token
+        tokens.push(req.cookies.client_token)
       }
       if (req.cookies.superadmin_token) {
-        return req.cookies.superadmin_token
+        tokens.push(req.cookies.superadmin_token)
       }
     }
   }
-  const authHeader = req.headers.authorization
+  const authHeader = req.headers?.authorization
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    return authHeader.split(" ")[1]
+    tokens.push(authHeader.split(" ")[1])
   }
   if (req.query && req.query.token) {
-    return req.query.token
+    tokens.push(req.query.token)
   }
-  return null
+  return tokens
+}
+
+// Extract JWT token from cookie or Authorization header (primary)
+const extractToken = (req) => {
+  const tokens = extractCandidateTokens(req)
+  return tokens.length > 0 ? tokens[0] : null
 }
 
 // Authenticate user token - Mandatory
 const authenticate = async (req, res, next) => {
   try {
-    const token = extractToken(req)
+    const candidateTokens = extractCandidateTokens(req)
 
-    if (!token) {
+    if (candidateTokens.length === 0) {
       return res.status(401).json({
         success: false,
         error: "Authentication required. Please log in.",
       })
     }
 
-    const decoded = jwt.verify(token, getJwtSecret())
+    let decoded = null
+    let lastError = null
+
+    for (const token of candidateTokens) {
+      try {
+        decoded = jwt.verify(token, getJwtSecret())
+        if (decoded) break
+      } catch (err) {
+        lastError = err
+      }
+    }
+
+    if (!decoded) {
+      if (lastError && (lastError.name === "TokenExpiredError" || lastError.name === "JsonWebTokenError")) {
+        return res.status(401).json({
+          success: false,
+          error: "Session expired or invalid. Please log in again.",
+        })
+      }
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required. Please log in.",
+      })
+    }
 
     const user = await User.findById(decoded.id).select("-password").lean()
     if (!user) {
@@ -439,6 +471,21 @@ const requirePermission = (requiredPermission, options = {}) => {
 // checkPermission is an alias to requirePermission for full backward compatibility
 const checkPermission = requirePermission
 
+const isOriginMatch = (origin, patterns = []) => {
+  if (!origin) return false
+  const normalized = origin.trim().replace(/\/+$/, "")
+  if (patterns.includes(normalized)) return true
+  return patterns.some((pattern) => {
+    if (pattern && pattern.includes("://*.")) {
+      const [proto, domain] = pattern.split("://*.")
+      const escapedDomain = domain.replace(/\./g, "\\.")
+      const regex = new RegExp(`^${proto}:\\/\\/([a-z0-9-]+\\.)*${escapedDomain}$`, "i")
+      return regex.test(normalized)
+    }
+    return false
+  })
+}
+
 // CSRF Protection Middleware for state-changing requests using cookie authentication
 const verifyCSRF = (allowedOrigins = []) => {
   return (req, res, next) => {
@@ -447,8 +494,13 @@ const verifyCSRF = (allowedOrigins = []) => {
       return next()
     }
 
-    // Skip CSRF verification for public integration webhook (authenticated via API key, no session cookies)
-    if (req.originalUrl && req.originalUrl.includes("/integrations/leads/website")) {
+    // Skip CSRF verification for public integration webhooks (authenticated via API key/signature, no session cookies)
+    if (
+      req.originalUrl &&
+      (req.originalUrl.includes("/integrations/leads/website") ||
+        req.originalUrl.includes("/integrations/webhooks") ||
+        req.originalUrl.includes("/webhooks/"))
+    ) {
       return next()
     }
 
@@ -458,7 +510,7 @@ const verifyCSRF = (allowedOrigins = []) => {
         try {
           // Exact-origin match check (parse with new URL(origin).origin) to block prefix-spoofed domains
           const parsedOrigin = new URL(originHeader).origin
-          const isExplicitlyAllowed = allowedOrigins.includes(parsedOrigin)
+          const isExplicitlyAllowed = isOriginMatch(parsedOrigin, allowedOrigins)
           const isDevLocalhost =
             process.env.NODE_ENV !== "production" &&
             /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(parsedOrigin)

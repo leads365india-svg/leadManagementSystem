@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react"
 import { useAuth } from "@/lib/auth-context"
+import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import {
   History,
@@ -79,8 +80,7 @@ export default function AuditLogClient() {
   // Fetch filter options once
   const fetchFilterOptions = useCallback(async () => {
     try {
-      const res = await fetch("/api/audit-logs/filters", { credentials: "include" })
-      const json = await res.json()
+      const json = await apiClient.getAuditLogFilters()
       if (json.success && json.data) {
         setFilterOptions(json.data)
       }
@@ -92,18 +92,17 @@ export default function AuditLogClient() {
     async (pageToLoad = pagination.page) => {
       try {
         setLoading(true)
-        const params = new URLSearchParams({
+        const query = {
           page: String(pageToLoad),
           limit: String(pagination.limit),
-        })
+        }
 
-        if (debouncedSearch.trim()) params.append("search", debouncedSearch.trim())
-        if (selectedEntity !== "all") params.append("entity", selectedEntity)
-        if (selectedAction !== "all") params.append("action", selectedAction)
-        if (dateParams.startDate) params.append("startDate", dateParams.startDate)
+        if (debouncedSearch.trim()) query.search = debouncedSearch.trim()
+        if (selectedEntity !== "all") query.entity = selectedEntity
+        if (selectedAction !== "all") query.action = selectedAction
+        if (dateParams.startDate) query.startDate = dateParams.startDate
 
-        const res = await fetch(`/api/audit-logs?${params.toString()}`, { credentials: "include" })
-        const json = await res.json()
+        const json = await apiClient.getAuditLogs(query)
 
         if (json.success) {
           setLogs(json.data || [])

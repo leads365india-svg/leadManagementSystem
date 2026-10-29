@@ -1,5 +1,7 @@
-/** @type {import('next').NextConfig} */
-const backendUrl = process.env.INTERNAL_BACKEND_URL || (process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/?$/, '') : 'http://localhost:5000')
+const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || "").trim().replace(/\/+$/, "")
+const backendUrl = process.env.INTERNAL_BACKEND_URL
+  ? process.env.INTERNAL_BACKEND_URL.trim().replace(/\/+$/, "")
+  : (rawApiUrl ? rawApiUrl.replace(/\/api\/?$/, "") : "http://localhost:5000")
 
 const nextConfig = {
   devIndicators: false,

@@ -1,23 +1,43 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+// Robust API base URL normalization: trims whitespace, strips trailing slashes, ensures /api suffix
+const normalizeApiBase = (url) => {
+  const clean = (url || "http://localhost:5000/api").trim().replace(/\/+$/, "")
+  return clean.endsWith("/api") ? clean : `${clean}/api`
+}
+
+export const API_BASE_URL = normalizeApiBase(process.env.NEXT_PUBLIC_API_URL)
 
 class ApiClient {
   async request(endpoint, options = {}) {
-    const url = `${API_BASE_URL}${endpoint}`
+    const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`
+    const finalEndpoint = cleanEndpoint.startsWith("/api/") ? cleanEndpoint.slice(4) : cleanEndpoint
+    const url = `${API_BASE_URL}${finalEndpoint}`
+
+    // Include credentials so HTTP-only session cookies are sent across origins
+    const headers = {
+      "Content-Type": "application/json",
+      ...options.headers,
+    }
+
+    // Attach Authorization Bearer token as a reliable cross-origin fallback
+    if (!headers.Authorization && !headers.authorization && typeof window !== "undefined") {
+      try {
+        const storedToken = localStorage.getItem("leadflow_token")
+        if (storedToken) {
+          headers["Authorization"] = `Bearer ${storedToken}`
+        }
+      } catch (_) {}
+    }
 
     const config = {
       method: options.method || "GET",
-      // Include credentials so HTTP-only session cookies are sent across origins
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
+      headers,
       ...options,
     }
 
     try {
       const response = await fetch(url, config)
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
         if (response.status === 401 && typeof window !== "undefined") {
@@ -39,6 +59,10 @@ class ApiClient {
       return data
     } catch (error) {
       if (error instanceof Error) {
+        // Safe, clear error reporting for browser network disconnections
+        if (error.name === "TypeError" && error.message.toLowerCase().includes("fetch")) {
+          throw new Error("Unable to connect to the backend server. Please verify your internet connection or check backend service availability.")
+        }
         throw new Error(error.message)
       } else {
         throw new Error("API request failed with an unexpected error")
@@ -157,16 +181,47 @@ class ApiClient {
 
   // --- Authentication Endpoints ---
   async login(credentials) {
-    return this.request("/auth/login", {
+    const res = await this.request("/auth/login", {
       method: "POST",
       body: JSON.stringify(credentials),
     })
+    if (res?.data?.token && typeof window !== "undefined") {
+      try {
+        localStorage.setItem("leadflow_token", res.data.token)
+      } catch (_) {}
+    }
+    return res
   }
 
   async logout() {
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("leadflow_token")
+      }
+    } catch (_) {}
     return this.request("/auth/logout", {
       method: "POST",
     })
+  }
+
+  // --- Audit Log Endpoints ---
+  async getAuditLogs(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/audit-logs${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getAuditLogFilters() {
+    return this.request("/audit-logs/filters")
+  }
+
+  async getAuditLogById(id) {
+    return this.request(`/audit-logs/${id}`)
   }
 
   async getMe() {

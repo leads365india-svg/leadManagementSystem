@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { toast } from "react-hot-toast"
-import { apiClient } from "@/lib/api"
+import { apiClient, API_BASE_URL } from "@/lib/api"
 import {
   Globe,
   Key,
@@ -3083,7 +3083,7 @@ export default function LeadFeedsClient() {
                   <div className="space-y-3">
                     <div className="font-semibold text-slate-900 text-xs">Test Terminal Command:</div>
                     <pre className="p-3 bg-slate-900 text-emerald-400 rounded-lg text-[11px] font-mono overflow-x-auto select-all">
-{`curl -X POST "${genericData.webhookUrl || "http://localhost:5000/api/integrations/webhooks/generic"}" \\
+{`curl -X POST "${genericData.webhookUrl || `${API_BASE_URL}/integrations/webhooks/generic`}" \\
   -H "Content-Type: application/json" \\
   -H "x-api-key: ${newlyGeneratedGenericKey || genericData.apiKeyMasked || "YOUR_API_KEY"}" \\
   -d '{

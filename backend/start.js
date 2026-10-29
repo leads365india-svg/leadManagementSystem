@@ -44,7 +44,7 @@ app.set("trust proxy", 1)
 // CORS configuration supporting comma-separated FRONTEND_URL or local defaults
 const configuredFrontendUrls = (process.env.FRONTEND_URL || "")
   .split(",")
-  .map((url) => url.trim())
+  .map((url) => url.trim().replace(/\/+$/, ""))
   .filter(Boolean)
 
 const defaultLocalOrigins = [
@@ -92,9 +92,23 @@ const isDevelopment = process.env.NODE_ENV !== "production"
 
 const isAllowedOrigin = (origin) => {
   if (!origin) return true
-  if (allowedOrigins.includes(origin)) return true
+  const normalized = origin.trim().replace(/\/+$/, "")
+  if (allowedOrigins.includes(normalized)) return true
+
+  // Support wildcard patterns in allowedOrigins (e.g. https://*.vercel.app)
+  const isWildcardAllowed = allowedOrigins.some((pattern) => {
+    if (pattern.includes("://*.")) {
+      const [proto, domain] = pattern.split("://*.")
+      const escapedDomain = domain.replace(/\./g, "\\.")
+      const regex = new RegExp(`^${proto}:\\/\\/([a-z0-9-]+\\.)*${escapedDomain}$`, "i")
+      return regex.test(normalized)
+    }
+    return false
+  })
+  if (isWildcardAllowed) return true
+
   // In development, dynamically allow any localhost / 127.0.0.1 port
-  if (isDevelopment && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+  if (isDevelopment && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(normalized)) {
     return true
   }
   return false

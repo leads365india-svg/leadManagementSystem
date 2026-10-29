@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useRef, useEffect, useCallback } from "react"
+import { API_BASE_URL } from "@/lib/api"
 import {
   Play,
   Pause,
@@ -49,8 +50,7 @@ export default function InBrowserAudioPlayer({
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-  const audioStreamUrl = `${apiBaseUrl}/calls/${callId}/recording`
+  const audioStreamUrl = `${API_BASE_URL}/calls/${callId}/recording`
 
   useEffect(() => {
     setIsLoading(true)
