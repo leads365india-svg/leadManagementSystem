@@ -41,6 +41,9 @@ export default function InBrowserAudioPlayer({
   compact = false,
 }) {
   const audioRef = useRef(null)
+  const blobUrlRef = useRef(null)
+  const abortControllerRef = useRef(null)
+  const [blobUrl, setBlobUrl] = useState(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -50,16 +53,113 @@ export default function InBrowserAudioPlayer({
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const audioStreamUrl = `${API_BASE_URL}/calls/${callId}/recording`
-
+  // 1. Authenticated audio fetch into local managed Blob URL
   useEffect(() => {
     setIsLoading(true)
     setError(null)
     setIsPlaying(false)
     setCurrentTime(0)
+    setDuration(0)
 
+    // Abort previous in-flight request if user switches calls
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    // Clean up previous blob URL to prevent memory leaks
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current)
+      blobUrlRef.current = null
+      setBlobUrl(null)
+    }
+
+    if (!callId) {
+      setIsLoading(false)
+      setError("No recording identifier provided.")
+      return
+    }
+
+    const audioStreamUrl = `${API_BASE_URL}/calls/${callId}/recording`
+
+    const fetchAudio = async () => {
+      try {
+        let token = null
+        if (typeof window !== "undefined") {
+          try {
+            token = localStorage.getItem("leadflow_token")
+          } catch (_) {}
+        }
+
+        const headers = {}
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`
+        }
+
+        const response = await fetch(audioStreamUrl, {
+          method: "GET",
+          headers,
+          credentials: "include",
+          signal: controller.signal,
+        })
+
+        if (!response.ok) {
+          let errorMsg = "Unable to stream audio recording."
+          if (response.status === 401) {
+            errorMsg = "Authentication required. Please log in again."
+          } else if (response.status === 403) {
+            errorMsg = "Playback restricted by compliance policy or permissions."
+          } else if (response.status === 404) {
+            errorMsg = "Recording audio not found on server."
+          } else if (response.status === 410) {
+            errorMsg = "Recording has expired per retention policy."
+          } else {
+            const errData = await response.json().catch(() => ({}))
+            if (errData && errData.error) {
+              errorMsg = errData.error
+            }
+          }
+          throw new Error(errorMsg)
+        }
+
+        const contentType = response.headers.get("content-type") || ""
+        if (contentType.includes("application/json")) {
+          const errData = await response.json().catch(() => ({}))
+          throw new Error(errData.error || "Server returned an error instead of audio data.")
+        }
+
+        const blob = await response.blob()
+        if (!blob || blob.size === 0) {
+          throw new Error("Recording audio file is empty (0 bytes).")
+        }
+
+        const objectUrl = URL.createObjectURL(blob)
+        blobUrlRef.current = objectUrl
+        setBlobUrl(objectUrl)
+      } catch (err) {
+        if (controller.signal.aborted) return
+        console.warn("[AudioPlayback Error]:", err.message || err)
+        setError(err.message || "Unable to stream audio recording. It may be restricted by privacy policy or expired.")
+        setIsLoading(false)
+      }
+    }
+
+    fetchAudio()
+
+    return () => {
+      controller.abort()
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
+    }
+  }, [callId])
+
+  // 2. Audio DOM event handlers on Blob URL change
+  useEffect(() => {
     const audio = audioRef.current
-    if (!audio) return
+    if (!audio || !blobUrl) return
 
     const handleLoadedMetadata = () => {
       setDuration(audio.duration || 0)
@@ -78,9 +178,8 @@ export default function InBrowserAudioPlayer({
     const handleError = (e) => {
       setIsLoading(false)
       setIsPlaying(false)
-      console.warn("[AudioPlayback Error]:", e)
-      // Check HTTP error status if possible
-      setError("Unable to stream audio recording. It may be restricted by privacy policy or expired.")
+      console.warn("[AudioPlayback Decode Error]:", e)
+      setError("Audio decode error. The audio format may not be supported by your browser.")
     }
 
     audio.addEventListener("loadedmetadata", handleLoadedMetadata)
@@ -95,7 +194,7 @@ export default function InBrowserAudioPlayer({
       audio.removeEventListener("error", handleError)
       audio.pause()
     }
-  }, [callId])
+  }, [blobUrl])
 
   const togglePlay = () => {
     const audio = audioRef.current
@@ -146,10 +245,12 @@ export default function InBrowserAudioPlayer({
     }
   }
 
-  // Calculate days until expiration
-  const daysUntilExpiry = recording?.expiresAt
-    ? Math.max(0, Math.ceil((new Date(recording.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)))
-    : 30
+  // Calculate genuine days until expiration when expiresAt is populated
+  const expiryDate = recording?.expiresAt ? new Date(recording.expiresAt) : null
+  const hasValidExpiry = expiryDate && !isNaN(expiryDate.getTime())
+  const daysUntilExpiry = hasValidExpiry
+    ? Math.max(0, Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)))
+    : null
 
   return (
     <div
@@ -161,9 +262,8 @@ export default function InBrowserAudioPlayer({
     >
       <audio
         ref={audioRef}
-        src={audioStreamUrl}
+        src={blobUrl || undefined}
         preload="metadata"
-        crossOrigin="use-credentials"
       />
 
       {/* Header Info */}
@@ -179,8 +279,17 @@ export default function InBrowserAudioPlayer({
             </div>
             <div className="text-[10px] text-slate-400 flex items-center gap-2">
               <span className="capitalize">{direction} Call</span>
-              <span>•</span>
-              <span className="text-amber-400">Retained {daysUntilExpiry}d remaining</span>
+              {daysUntilExpiry !== null ? (
+                <>
+                  <span>•</span>
+                  <span className="text-amber-400">Retained {daysUntilExpiry}d remaining</span>
+                </>
+              ) : recording?.status === "stored" || recording?.status === "ready" ? (
+                <>
+                  <span>•</span>
+                  <span className="text-emerald-400">Retained (Policy: 30d)</span>
+                </>
+              ) : null}
             </div>
           </div>
         </div>

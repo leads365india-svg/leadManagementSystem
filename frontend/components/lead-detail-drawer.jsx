@@ -1243,14 +1243,14 @@ export default function LeadDetailDrawer({
                               <span>{c.agentId?.name || "Agent"}</span>
                             </div>
                             <div className="flex items-center space-x-1.5">
-                              {c.recording?.status === "stored" || c.recording?.status === "ready" ? (
+                              {c.recording?.status === "stored" || c.recording?.status === "ready" || c.hasRecording ? (
                                 <button
                                   type="button"
-                                  onClick={() => setPlayingCallId(playingCallId === c._id ? null : c._id)}
+                                  onClick={() => setPlayingCallId(playingCallId === (c._id || c.id || c.clientCallId) ? null : (c._id || c.id || c.clientCallId))}
                                   className="inline-flex items-center text-indigo-600 hover:text-indigo-800 font-bold gap-1 px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 transition"
                                 >
                                   <Mic className="w-3 h-3" />
-                                  <span>{playingCallId === c._id ? "Hide Player" : "Play Recording"}</span>
+                                  <span>{playingCallId === (c._id || c.id || c.clientCallId) ? "Hide Player" : "Play Recording"}</span>
                                 </button>
                               ) : c.recording?.status === "skipped_dnr" ? (
                                 <span className="inline-flex items-center text-rose-600 text-[10px] font-semibold gap-1">
@@ -1279,41 +1279,6 @@ export default function LeadDetailDrawer({
                                 compact={true}
                                 onClose={() => setPlayingCallId(null)}
                               />
-                            </div>
-                          )}
-
-                          {/* Native Audio Fallback Player (Remote) */}
-                          {(c.recording?.status === "ready" || c.hasRecording) && playingCallId !== (c._id || c.id || c.clientCallId) && (
-                            <div className="bg-slate-50 p-2.5 rounded-md border border-slate-200/80 space-y-1.5 mt-2">
-                              <div className="flex items-center justify-between text-[11px]">
-                                <span className="inline-flex items-center space-x-1.5 text-emerald-700 font-semibold">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                  <span>Server Confirmed Recording</span>
-                                </span>
-                                {((c.recording?.size || c.metadata?.recordingSizeBytes) > 0) && (
-                                  <span className="text-slate-500 font-mono text-[10px]">
-                                    {(((c.recording?.size || c.metadata?.recordingSizeBytes)) / (1024 * 1024)).toFixed(2)} MB
-                                  </span>
-                                )}
-                              </div>
-                              <audio
-                                controls
-                                preload="metadata"
-                                crossOrigin="use-credentials"
-                                className="w-full h-8 rounded"
-                                src={`${API_BASE_URL}/calls/${c._id || c.id || c.clientCallId}/recording`}
-                                onError={(e) => {
-                                  const errEl = document.getElementById(`audio-err-${c._id || c.id || c.clientCallId}`)
-                                  if (errEl) {
-                                    errEl.classList.remove("hidden")
-                                  }
-                                }}
-                              >
-                                Your browser does not support the audio element.
-                              </audio>
-                              <div id={`audio-err-${c._id || c.id || c.clientCallId}`} className="hidden text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                                Recording unavailable or restricted by compliance policy.
-                              </div>
                             </div>
                           )}
                         </div>
