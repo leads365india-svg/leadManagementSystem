@@ -501,6 +501,79 @@ export default function LeadsClient() {
     setSelectedIds(next)
   }
 
+  // Handle Play Recording for Lead table row
+  const handlePlayRecording = async (lead) => {
+    if (!lead) return
+    const leadIdStr = String(lead._id || lead.id || "")
+    if (!leadIdStr) {
+      toast.error("Lead identifier missing.")
+      return
+    }
+
+    // Toggle off if currently playing this lead's recording
+    if (
+      activePlayingCall &&
+      (activePlayingCall.leadId === leadIdStr ||
+        (lead.phone && (activePlayingCall.leadPhone === lead.phone || activePlayingCall.number === lead.phone)))
+    ) {
+      setActivePlayingCall(null)
+      return
+    }
+
+    setLoadingRecordingId(leadIdStr)
+    try {
+      // 1. Fetch call records associated with this lead
+      const res = await apiClient.getLeadCalls(leadIdStr)
+      const calls = res?.success && Array.isArray(res.data) ? res.data : []
+
+      if (calls.length === 0) {
+        toast.error(`No call recordings found for ${lead.name || "this lead"}.`)
+        return
+      }
+
+      // 2. Identify the latest call with an audio recording
+      const playableCall = calls.find(
+        (c) =>
+          c.recording?.status === "stored" ||
+          c.recording?.status === "ready" ||
+          Boolean(c.recording?.fileId) ||
+          Boolean(c.metadata?.recordingUrl) ||
+          Boolean(c.hasRecording)
+      )
+
+      if (!playableCall) {
+        // Provide informative feedback if recordings were skipped or expired
+        const hasDnr = calls.some((c) => c.recording?.status === "skipped_dnr")
+        const hasExpired = calls.some((c) => c.recording?.status === "expired")
+        if (hasDnr) {
+          toast.error("Call recording skipped due to Do-Not-Record compliance policy.")
+        } else if (hasExpired) {
+          toast.error("Call recording has expired per the 30-day retention policy.")
+        } else {
+          toast.error(`No audio recording available for ${lead.name || "this lead"}.`)
+        }
+        return
+      }
+
+      // 3. Set the active playing call with all necessary player metadata
+      const callId = playableCall._id || playableCall.id || playableCall.clientCallId
+      setActivePlayingCall({
+        ...playableCall,
+        callId,
+        leadId: leadIdStr,
+        leadPhone: lead.phone || playableCall.number || playableCall.phone,
+        leadName: lead.name,
+        agentName: playableCall.agentName || playableCall.agentId?.name || lead.assignedTo || "Agent",
+      })
+      toast.success(`Playing recording for ${lead.name || "lead"}`)
+    } catch (err) {
+      console.error("Failed to load recording for lead:", err)
+      toast.error(err.message || "Failed to load recording for this lead.")
+    } finally {
+      setLoadingRecordingId(null)
+    }
+  }
+
   // Filter count badge calculation
   const activeFiltersCount = useMemo(() => {
     let count = 0
@@ -1138,20 +1211,32 @@ export default function LeadsClient() {
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => handlePlayRecording(lead)}
-                            disabled={loadingRecordingId === leadIdStr}
-                            className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                            title="Play Call Recording"
-                            aria-label={`Play call recording for ${lead.name}`}
-                          >
-                            {loadingRecordingId === leadIdStr ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                            ) : (
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                            )}
-                          </button>
+                          {(() => {
+                            const isPlayingThisLead =
+                              activePlayingCall &&
+                              (activePlayingCall.leadId === leadIdStr ||
+                                (lead.phone && (activePlayingCall.leadPhone === lead.phone || activePlayingCall.number === lead.phone)))
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => handlePlayRecording(lead)}
+                                disabled={loadingRecordingId === leadIdStr}
+                                className={`p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50 ${
+                                  isPlayingThisLead
+                                    ? "text-emerald-700 bg-emerald-100/90 hover:bg-emerald-200 ring-1 ring-emerald-400"
+                                    : "text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"
+                                }`}
+                                title={isPlayingThisLead ? "Close Playing Recording" : "Play Call Recording"}
+                                aria-label={`Play call recording for ${lead.name}`}
+                              >
+                                {loadingRecordingId === leadIdStr ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                                ) : (
+                                  <Play className={`w-3.5 h-3.5 fill-current ${isPlayingThisLead ? "text-emerald-600" : ""}`} />
+                                )}
+                              </button>
+                            )
+                          })()}
 
                           <button
                             type="button"
@@ -1270,11 +1355,11 @@ export default function LeadsClient() {
       {activePlayingCall && (
         <div className="fixed bottom-6 right-6 z-50 w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
           <InBrowserAudioPlayer
-            callId={activePlayingCall._id || activePlayingCall.id || activePlayingCall.clientCallId}
+            callId={activePlayingCall.callId || activePlayingCall._id || activePlayingCall.id || activePlayingCall.clientCallId}
             recording={activePlayingCall.recording}
             agentName={activePlayingCall.agentName || activePlayingCall.agentId?.name || "Agent"}
-            leadPhone={activePlayingCall.number || activePlayingCall.phoneNumber || activePlayingCall.phone}
-            direction={activePlayingCall.direction}
+            leadPhone={activePlayingCall.leadPhone || activePlayingCall.number || activePlayingCall.phoneNumber || activePlayingCall.phone}
+            direction={activePlayingCall.direction || "outbound"}
             onClose={() => setActivePlayingCall(null)}
           />
         </div>

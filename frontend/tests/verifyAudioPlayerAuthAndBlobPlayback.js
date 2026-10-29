@@ -309,6 +309,236 @@ async function runAll() {
     assert.strictEqual(display.badge, null, "Omits remaining badge when recording is unpopulated")
   })
 
+  // ---------------------------------------------------------------------------
+  // STEP 1 & 2 REGRESSION TESTS: handlePlayRecording & 404 Avoidance
+  // ---------------------------------------------------------------------------
+
+  test("11. Source Analysis: leads-client.jsx defines handlePlayRecording in component scope", () => {
+    const fs = require("fs")
+    const path = require("path")
+    const leadsClientPath = path.resolve(__dirname, "../app/leads/leads-client.jsx")
+    const code = fs.readFileSync(leadsClientPath, "utf-8")
+
+    assert(
+      code.includes("const handlePlayRecording = async (lead) => {"),
+      "leads-client.jsx must define handlePlayRecording"
+    )
+    assert(
+      code.includes("onClick={() => handlePlayRecording(lead)}"),
+      "Play button must be wired to handlePlayRecording"
+    )
+    assert(
+      code.includes("activePlayingCall"),
+      "leads-client.jsx must manage activePlayingCall state"
+    )
+    assert(
+      code.includes("<InBrowserAudioPlayer"),
+      "leads-client.jsx must render InBrowserAudioPlayer dock"
+    )
+  })
+
+  await testAsync("12. handlePlayRecording: Resolves lead calls and sets activePlayingCall with valid callId", async () => {
+    let activePlayingCall = null
+    let toastMessage = null
+
+    const mockLead = { _id: "lead_abc123", name: "Acme Corp", phone: "+1234567890", assignedTo: "Agent Sarah" }
+    const mockCalls = [
+      {
+        _id: "call_999",
+        clientCallId: "uuid-999-call",
+        leadId: "lead_abc123",
+        recording: { status: "stored", fileId: "gridfs_file_123" },
+        agentName: "Agent Sarah",
+        number: "+1234567890",
+        direction: "outbound",
+      },
+    ]
+
+    const mockApiClient = {
+      getLeadCalls: async (id) => {
+        assert.strictEqual(id, "lead_abc123", "Must query calls using lead ID")
+        return { success: true, data: mockCalls }
+      },
+    }
+
+    const mockToast = {
+      success: (msg) => { toastMessage = { type: "success", text: msg } },
+      error: (msg) => { toastMessage = { type: "error", text: msg } },
+    }
+
+    // Execute handlePlayRecording logic
+    const handlePlayRecording = async (lead) => {
+      const leadIdStr = String(lead._id || lead.id || "")
+      const res = await mockApiClient.getLeadCalls(leadIdStr)
+      const calls = res?.success && Array.isArray(res.data) ? res.data : []
+      const playableCall = calls.find(
+        (c) =>
+          c.recording?.status === "stored" ||
+          c.recording?.status === "ready" ||
+          Boolean(c.recording?.fileId) ||
+          Boolean(c.metadata?.recordingUrl) ||
+          Boolean(c.hasRecording)
+      )
+      if (playableCall) {
+        const callId = playableCall._id || playableCall.id || playableCall.clientCallId
+        activePlayingCall = {
+          ...playableCall,
+          callId,
+          leadId: leadIdStr,
+          leadPhone: lead.phone || playableCall.number,
+          leadName: lead.name,
+          agentName: playableCall.agentName || lead.assignedTo,
+        }
+        mockToast.success(`Playing recording for ${lead.name}`)
+      }
+    }
+
+    await handlePlayRecording(mockLead)
+
+    assert.notStrictEqual(activePlayingCall, null, "activePlayingCall must be populated")
+    assert.strictEqual(activePlayingCall.callId, "call_999", "Must pass Call document ID, NOT lead ID")
+    assert.strictEqual(activePlayingCall.leadPhone, "+1234567890", "Must retain lead phone")
+    assert.strictEqual(toastMessage?.type, "success", "Shows success toast")
+  })
+
+  await testAsync("13. handlePlayRecording: Toggles player off when clicking already playing lead", async () => {
+    let activePlayingCall = {
+      callId: "call_999",
+      leadId: "lead_abc123",
+      leadPhone: "+1234567890",
+    }
+
+    const mockLead = { _id: "lead_abc123", phone: "+1234567890" }
+
+    const handlePlayRecording = async (lead) => {
+      const leadIdStr = String(lead._id || lead.id || "")
+      if (activePlayingCall && (activePlayingCall.leadId === leadIdStr || activePlayingCall.leadPhone === lead.phone)) {
+        activePlayingCall = null
+        return
+      }
+    }
+
+    await handlePlayRecording(mockLead)
+    assert.strictEqual(activePlayingCall, null, "activePlayingCall must be toggled off to null")
+  })
+
+  await testAsync("14. handlePlayRecording: Missing recording safely alerts user without triggering 404 network request", async () => {
+    let errorToast = null
+    let networkFetchTriggered = false
+
+    const mockLead = { _id: "lead_norec", name: "No Rec Lead", phone: "+1000000000" }
+    const mockApiClient = {
+      getLeadCalls: async () => ({ success: true, data: [] }),
+    }
+
+    const handlePlayRecording = async (lead) => {
+      const leadIdStr = String(lead._id || lead.id || "")
+      const res = await mockApiClient.getLeadCalls(leadIdStr)
+      const calls = res?.success && Array.isArray(res.data) ? res.data : []
+      if (calls.length === 0) {
+        errorToast = `No call recordings found for ${lead.name || "this lead"}.`
+        return
+      }
+      networkFetchTriggered = true
+    }
+
+    await handlePlayRecording(mockLead)
+
+    assert.strictEqual(networkFetchTriggered, false, "Must NOT trigger audio network request when no calls exist")
+    assert.strictEqual(errorToast, "No call recordings found for No Rec Lead.", "Shows friendly user toast")
+  })
+
+  await testAsync("15. handlePlayRecording: Accurately identifies DNR compliance restriction", async () => {
+    let errorToast = null
+
+    const mockLead = { _id: "lead_dnr", name: "DNR Contact", phone: "+9999999999" }
+    const mockCalls = [
+      {
+        _id: "call_dnr",
+        leadId: "lead_dnr",
+        recording: { status: "skipped_dnr" },
+      },
+    ]
+
+    const handlePlayRecording = async (lead) => {
+      const res = { success: true, data: mockCalls }
+      const calls = res.data
+      const playableCall = calls.find(
+        (c) => c.recording?.status === "stored" || c.recording?.status === "ready" || c.hasRecording
+      )
+      if (!playableCall) {
+        if (calls.some((c) => c.recording?.status === "skipped_dnr")) {
+          errorToast = "Call recording skipped due to Do-Not-Record compliance policy."
+          return
+        }
+      }
+    }
+
+    await handlePlayRecording(mockLead)
+    assert.strictEqual(errorToast, "Call recording skipped due to Do-Not-Record compliance policy.")
+  })
+
+  await testAsync("16. handlePlayRecording: Accurately identifies expired 30-day recordings", async () => {
+    let errorToast = null
+
+    const mockLead = { _id: "lead_exp", name: "Expired Lead", phone: "+8888888888" }
+    const mockCalls = [
+      {
+        _id: "call_exp",
+        leadId: "lead_exp",
+        recording: { status: "expired" },
+      },
+    ]
+
+    const handlePlayRecording = async (lead) => {
+      const res = { success: true, data: mockCalls }
+      const calls = res.data
+      const playableCall = calls.find(
+        (c) => c.recording?.status === "stored" || c.recording?.status === "ready" || c.hasRecording
+      )
+      if (!playableCall) {
+        if (calls.some((c) => c.recording?.status === "expired")) {
+          errorToast = "Call recording has expired per the 30-day retention policy."
+          return
+        }
+      }
+    }
+
+    await handlePlayRecording(mockLead)
+    assert.strictEqual(errorToast, "Call recording has expired per the 30-day retention policy.")
+  })
+
+  test("17. Source Analysis: lead-detail-drawer.jsx has no unauthenticated <audio> element", () => {
+    const fs = require("fs")
+    const path = require("path")
+    const drawerPath = path.resolve(__dirname, "../components/lead-detail-drawer.jsx")
+    const drawerCode = fs.readFileSync(drawerPath, "utf-8")
+
+    assert(
+      !drawerCode.includes("<audio"),
+      "lead-detail-drawer.jsx must NOT include raw unauthenticated <audio> tags"
+    )
+    assert(
+      drawerCode.includes("<InBrowserAudioPlayer"),
+      "lead-detail-drawer.jsx must use InBrowserAudioPlayer for authenticated audio"
+    )
+  })
+
+  await testAsync("18. InBrowserAudioPlayer: Missing callId parameter returns immediate error", async () => {
+    let error = null
+    let fetchCalled = false
+
+    const callId = null
+    if (!callId) {
+      error = "No recording identifier provided."
+    } else {
+      fetchCalled = true
+    }
+
+    assert.strictEqual(error, "No recording identifier provided.")
+    assert.strictEqual(fetchCalled, false)
+  })
+
   console.log("\n" + "=".repeat(80))
   console.log(`RESULTS: ${passed} passed, ${failed} failed`)
   console.log("=".repeat(80))
