@@ -69,14 +69,24 @@ async function ensureGridFSIndexes() {
  * Validates whether a call is eligible for recording storage.
  */
 async function validateUploadEligibility({ callId, tenantId, user, allowUnmatchedReview = false }) {
-  if (!mongoose.Types.ObjectId.isValid(callId)) {
-    const err = new Error("Invalid Call ID format")
+  if (!callId) {
+    const err = new Error("Call ID is required")
     err.statusCode = 400
     throw err
   }
 
-  // 1. Fetch Call ensuring tenant isolation
-  const call = await Call.findOne({ _id: callId, tenantId })
+  const trimmedCallId = (callId || "").toString().trim()
+  const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
+
+  // 1. Fetch Call ensuring tenant isolation (support clientCallId UUID or _id)
+  const callQuery = {
+    tenantId,
+    $or: [
+      { clientCallId: trimmedCallId },
+      ...(isObjectId ? [{ _id: trimmedCallId }] : [])
+    ]
+  }
+  const call = await Call.findOne(callQuery)
     .setOptions({ skipTenantFilter: true })
 
   if (!call) {
@@ -87,7 +97,9 @@ async function validateUploadEligibility({ callId, tenantId, user, allowUnmatche
 
   // 2. Ownership check: agent must own the call unless admin
   const isPrivileged = user && (user.role === "account_admin" || user.role === "super_admin")
-  if (!isPrivileged && user && call.agentId.toString() !== user._id.toString()) {
+  const currentUserId = (user?._id || user?.id || "").toString()
+  const isCallAgent = call.agentId && currentUserId && (call.agentId.toString() === currentUserId)
+  if (!isPrivileged && user && !isCallAgent) {
     const err = new Error("Forbidden: You can only upload recordings for your own calls")
     err.statusCode = 403
     throw err
@@ -267,7 +279,8 @@ async function streamUpload({
           { $set: { "metadata.sha256": computedSha256, "metadata.bytes": bytesWritten } }
         )
 
-        // Update Call document
+        // Update Call document with canonical recording reference and compatible metadata
+        call.hasRecording = true
         call.recording = {
           fileId: uploadStream.id,
           sizeBytes: bytesWritten,
@@ -275,6 +288,14 @@ async function streamUpload({
           status: "stored",
           expiresAt,
         }
+        call.metadata = call.metadata || {}
+        call.metadata.recordingUrl = `/api/calls/${call._id}/recording`
+        call.metadata.recordingSha256 = computedSha256
+        call.metadata.recordingSizeBytes = bytesWritten
+        call.metadata.recordingMimeType = cleanMime
+        call.metadata.recordingUploadedAt = Date.now()
+        call.markModified("metadata")
+        call.markModified("recording")
         await call.save()
 
         // Audit log recording upload
@@ -321,12 +342,22 @@ async function streamUpload({
  * Handles secure streaming playback from GridFS with HTTP Range support.
  */
 async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
-  if (!mongoose.Types.ObjectId.isValid(callId)) {
-    return res.status(400).json({ success: false, error: "Invalid Call ID format" })
+  if (!callId) {
+    return res.status(400).json({ success: false, error: "Call ID parameter is required" })
   }
 
-  // 1. Fetch Call with tenant isolation
-  const call = await Call.findOne({ _id: callId, tenantId })
+  const trimmedCallId = (callId || "").toString().trim()
+  const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
+
+  // 1. Fetch Call with tenant isolation (support clientCallId UUID or _id)
+  const callQuery = {
+    tenantId,
+    $or: [
+      { clientCallId: trimmedCallId },
+      ...(isObjectId ? [{ _id: trimmedCallId }] : [])
+    ]
+  }
+  const call = await Call.findOne(callQuery)
     .setOptions({ skipTenantFilter: true })
 
   if (!call) {
@@ -335,19 +366,21 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
 
   // 2. RBAC & ownership check
   const isPrivileged = user && (user.role === "account_admin" || user.role === "super_admin")
-  if (!isPrivileged && user) {
+  const currentUserId = (user?._id || user?.id || "").toString()
+  const isCallAgent = call.agentId && currentUserId && (call.agentId.toString() === currentUserId)
+  if (!isPrivileged && user && !isCallAgent) {
     const { checkDirectObjectAccess } = require("../utils/rbacScope")
     const access = await checkDirectObjectAccess(user, call, "calls", "view")
-    if (!access.allowed && call.agentId.toString() !== user._id.toString()) {
+    if (!access.allowed) {
       return res.status(403).json({ success: false, error: "Forbidden: You do not have permission to access this recording" })
     }
   }
 
   // 3. Expiration / Purged check
-  if (!call.recording || call.recording.status === "expired" || call.recording.status === "purged") {
+  if (call.recording && (call.recording.status === "expired" || call.recording.status === "purged")) {
     return res.status(410).json({
       success: false,
-      error: "Recording has expired and was purged per 30-day retention policy",
+      error: "Recording has expired and was purged per retention policy",
       status: "expired",
     })
   }
@@ -370,104 +403,108 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     }
   }
 
-  if (!call.recording || call.recording.status !== "stored" || !call.recording.fileId) {
-    // Check if recording is stored on filesystem via mobile sync
-    const rawPath = call.metadata?.recordingUrl || call.recordingUrl
-    if (rawPath) {
-      const path = require("path")
-      const fs = require("fs")
-      const safeTenantId = (tenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
-      const fileName = path.basename(rawPath)
-      const filePath = path.join(__dirname, "../uploads/recordings", safeTenantId, fileName)
-      if (fs.existsSync(filePath)) {
-        const stats = fs.statSync(filePath)
-        if (stats.size > 0) {
-          const mobileController = require("../controllers/mobileController")
-          if (typeof mobileController.streamAudioFile === "function") {
-            return mobileController.streamAudioFile(
-              { headers: { range: rangeHeader } },
-              res,
-              filePath,
-              call.metadata?.recordingMimeType
-            )
-          }
+  // 5. GridFS Primary Storage Playback
+  let file = null
+  let bucket = null
+  if (call.recording?.fileId && call.recording.status === "stored") {
+    try {
+      bucket = getBucket()
+      file = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": tenantId }).next()
+    } catch (bucketErr) {
+      console.warn("[RecordingStorage Playback] GridFS lookup error:", bucketErr.message)
+    }
+  }
+
+  if (file && file.length > 0) {
+    const totalLength = file.length
+    const mimeType = file.contentType || file.metadata?.mimeType || "audio/m4a"
+
+    // Audit playback action
+    if (audit && typeof audit.log === "function") {
+      audit.log({
+        tenantId,
+        action: "recording.listen",
+        category: "recordings",
+        entity: "Call",
+        entityId: call._id,
+        summary: `Streamed playback for Call ${call._id}`,
+        actor: user,
+        target: { type: "Call", id: call._id },
+        details: { fileId: file._id, duration: call.duration },
+      }).catch(() => {})
+    }
+
+    if (rangeHeader) {
+      const parts = rangeHeader.replace(/bytes=/, "").split("-")
+      const start = parseInt(parts[0], 10)
+      const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1
+
+      if (isNaN(start) || start >= totalLength || (parts[1] && end >= totalLength) || start > end) {
+        res.setHeader("Content-Range", `bytes */${totalLength}`)
+        return res.status(416).send("Requested Range Not Satisfiable")
+      }
+
+      const chunksize = end - start + 1
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${totalLength}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunksize,
+        "Content-Type": mimeType,
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+      })
+
+      const downloadStream = bucket.openDownloadStream(file._id, {
+        start,
+        end: end + 1,
+      })
+      return downloadStream.pipe(res)
+    } else {
+      res.writeHead(200, {
+        "Content-Length": totalLength,
+        "Content-Type": mimeType,
+        "Accept-Ranges": "bytes",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+      })
+
+      const downloadStream = bucket.openDownloadStream(file._id)
+      return downloadStream.pipe(res)
+    }
+  }
+
+  // 6. Backward Compatibility: Fallback to local filesystem if legacy file exists
+  const rawPath = call.metadata?.recordingUrl || call.recordingUrl
+  if (rawPath) {
+    const path = require("path")
+    const fs = require("fs")
+    const safeTenantId = (tenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
+    const fileName = path.basename(rawPath)
+    const baseUploadDir = path.resolve(__dirname, "../uploads/recordings")
+    const resolvedPath = path.resolve(baseUploadDir, safeTenantId, fileName)
+
+    // Security: Strict path traversal prevention ensuring path stays within uploads directory
+    if (resolvedPath.startsWith(baseUploadDir) && fs.existsSync(resolvedPath)) {
+      const stats = fs.statSync(resolvedPath)
+      if (stats.size > 0) {
+        const mobileController = require("../controllers/mobileController")
+        if (typeof mobileController.streamAudioFile === "function") {
+          return mobileController.streamAudioFile(
+            { headers: { range: rangeHeader } },
+            res,
+            resolvedPath,
+            call.metadata?.recordingMimeType
+          )
         }
       }
     }
-
-    return res.status(404).json({
-      success: false,
-      error: "No audio recording available for this call",
-      status: call.recording?.status || "none",
-    })
   }
 
-  const bucket = getBucket()
-  const file = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": tenantId }).next()
-
-  if (!file) {
-    return res.status(404).json({ success: false, error: "Audio file not found in storage" })
-  }
-
-  const totalLength = file.length
-  if (!totalLength || totalLength <= 0) {
-    return res.status(404).json({
-      success: false,
-      error: "Audio recording file is empty (0 bytes)",
-      status: "empty",
-    })
-  }
-  const mimeType = file.contentType || file.metadata?.mimeType || "audio/mp4"
-
-  // Audit playback action
-  if (audit && typeof audit.log === "function") {
-    audit.log({
-      tenantId,
-      action: "recording.listen",
-      category: "recordings",
-      entity: "Call",
-      entityId: call._id,
-      summary: `Streamed playback for Call ${call._id}`,
-      actor: user,
-      target: { type: "Call", id: call._id },
-      details: { fileId: file._id, duration: call.duration },
-    }).catch(() => {})
-  }
-
-  // HTTP Range Request handling for seeking
-  if (rangeHeader) {
-    const parts = rangeHeader.replace(/bytes=/, "").split("-")
-    const start = parseInt(parts[0], 10)
-    const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1
-
-    if (start >= totalLength || end >= totalLength) {
-      res.setHeader("Content-Range", `bytes */${totalLength}`)
-      return res.status(416).send("Requested Range Not Satisfiable")
-    }
-
-    const chunksize = end - start + 1
-    res.writeHead(206, {
-      "Content-Range": `bytes ${start}-${end}/${totalLength}`,
-      "Accept-Ranges": "bytes",
-      "Content-Length": chunksize,
-      "Content-Type": mimeType,
-    })
-
-    const downloadStream = bucket.openDownloadStream(file._id, {
-      start,
-      end: end + 1,
-    })
-    downloadStream.pipe(res)
-  } else {
-    res.writeHead(200, {
-      "Content-Length": totalLength,
-      "Content-Type": mimeType,
-      "Accept-Ranges": "bytes",
-    })
-
-    const downloadStream = bucket.openDownloadStream(file._id)
-    downloadStream.pipe(res)
-  }
+  return res.status(404).json({
+    success: false,
+    error: "No audio recording available for this call",
+    status: call.recording?.status || "none",
+  })
 }
 
 /**

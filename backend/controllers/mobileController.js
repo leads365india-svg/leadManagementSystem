@@ -885,7 +885,7 @@ const uploadMobileRecording = async (req, res) => {
         ...(mongoose.Types.ObjectId.isValid(trimmedCallId) ? [{ _id: trimmedCallId }] : [])
       ]
     }
-    const call = await Call.findOne(callQuery)
+    const call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
     if (!call) {
       return res.status(404).json({
         success: false,
@@ -902,7 +902,8 @@ const uploadMobileRecording = async (req, res) => {
     }
 
     const isTenantAdmin = user.role === "account_admin" || user.role === "super_admin"
-    const isCallAgent = call.agentId && call.agentId.toString() === user.id.toString()
+    const currentUserId = (user._id || user.id || "").toString()
+    const isCallAgent = call.agentId && currentUserId && (call.agentId.toString() === currentUserId)
     if (!isTenantAdmin && !isCallAgent) {
       return res.status(403).json({
         success: false,
@@ -990,7 +991,8 @@ const uploadMobileRecording = async (req, res) => {
       }
     }
 
-    // 7. Streaming Storage to Disk while calculating SHA-256
+    // 7. Persistent Streaming Storage to MongoDB GridFS with SHA-256 verification
+    const recordingStorage = require("../services/recordingStorage")
     const extMap = {
       "audio/m4a": "m4a",
       "audio/x-m4a": "m4a",
@@ -1005,80 +1007,29 @@ const uploadMobileRecording = async (req, res) => {
       "application/octet-stream": "m4a"
     }
     const ext = extMap[mimeType] || "m4a"
-    const safeTenantId = (call.tenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
-    const uploadDir = path.join(__dirname, "../uploads/recordings", safeTenantId)
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true })
-    }
+    const safeFilename = `${call.clientCallId || call._id}_${Date.now()}.${ext}`
 
-    const fileName = `${call.clientCallId || call._id}_${Date.now()}.${ext}`
-    const filePath = path.join(uploadDir, fileName)
-
-    const fileStream = fs.createWriteStream(filePath)
-    const hash = crypto.createHash("sha256")
-    let bytesWritten = 0
-
-    await new Promise((resolve, reject) => {
-      req.on("data", (chunk) => {
-        bytesWritten += chunk.length
-        if (bytesWritten > MAX_FILE_SIZE) {
-          req.pause()
-          fileStream.destroy()
-          fs.unlink(filePath, () => {})
-          reject(new Error("FILE_TOO_LARGE"))
-          return
-        }
-        hash.update(chunk)
-      })
-
-      req.on("error", (err) => {
-        fileStream.destroy()
-        fs.unlink(filePath, () => {})
-        reject(err)
-      })
-
-      fileStream.on("error", (err) => {
-        fs.unlink(filePath, () => {})
-        reject(err)
-      })
-
-      fileStream.on("finish", () => {
-        resolve()
-      })
-
-      req.pipe(fileStream)
+    const result = await recordingStorage.streamUpload({
+      callId: call._id.toString(),
+      tenantId: call.tenantId,
+      user,
+      readStream: req,
+      mimeType,
+      filename: safeFilename,
+      contentLength,
+      expectedSha256: clientProvidedSha,
+      retentionDays: 30,
     })
 
-    const computedSha256 = hash.digest("hex").toLowerCase()
-
-    // 8. Verify SHA-256 Checksum against X-Content-SHA256 if provided
-    if (clientProvidedSha && clientProvidedSha !== computedSha256) {
-      fs.unlink(filePath, () => {})
-      return res.status(400).json({
-        success: false,
-        error: `Checksum verification failed: expected ${clientProvidedSha}, computed ${computedSha256}`,
-      })
-    }
-
-    // 9. Update Call in Database
-    const relativeUrl = `/uploads/recordings/${safeTenantId}/${fileName}`
-    call.hasRecording = true
-    call.metadata = call.metadata || {}
-    call.metadata.recordingUrl = relativeUrl
-    call.metadata.recordingSha256 = computedSha256
-    call.metadata.recordingSizeBytes = bytesWritten
-    call.metadata.recordingMimeType = mimeType
-    call.metadata.recordingUploadedAt = Date.now()
-    call.markModified("metadata")
-    await call.save()
-
-    return res.status(200).json({
+    return res.status(result.isDuplicate ? 200 : 201).json({
       success: true,
-      message: "Recording uploaded successfully",
+      message: result.message || "Recording uploaded successfully",
       callId: call.clientCallId || call._id.toString(),
-      recordingUrl: relativeUrl,
-      checksum: computedSha256,
-      sizeBytes: bytesWritten,
+      recordingUrl: `/api/calls/${call._id}/recording`,
+      checksum: result.sha256,
+      sizeBytes: result.sizeBytes,
+      status: result.status,
+      alreadyUploaded: Boolean(result.isDuplicate),
     })
   } catch (error) {
     if (error.message === "FILE_TOO_LARGE") {
@@ -1216,7 +1167,7 @@ const streamAudioFile = (req, res, filePath, mimeType) => {
     const parts = range.replace(/bytes=/, "").split("-")
     const start = parseInt(parts[0], 10)
     const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
-    if (start >= fileSize || end >= fileSize) {
+    if (isNaN(start) || start >= fileSize || (parts[1] && end >= fileSize) || start > end) {
       res.status(416).set("Content-Range", `bytes */${fileSize}`)
       return res.end()
     }
@@ -1228,6 +1179,8 @@ const streamAudioFile = (req, res, filePath, mimeType) => {
       "Accept-Ranges": "bytes",
       "Content-Length": chunkSize,
       "Content-Type": mime,
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate",
     })
     fileStream.pipe(res)
   } else {
@@ -1235,6 +1188,8 @@ const streamAudioFile = (req, res, filePath, mimeType) => {
       "Content-Length": fileSize,
       "Content-Type": mime,
       "Accept-Ranges": "bytes",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate",
     })
     fs.createReadStream(filePath).pipe(res)
   }
@@ -1262,14 +1217,16 @@ const streamCallRecording = async (req, res) => {
       })
     }
 
+    const recordingStorage = require("../services/recordingStorage")
     const trimmedCallId = callId.trim()
+    const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
     const callQuery = {
       $or: [
         { clientCallId: trimmedCallId },
-        ...(mongoose.Types.ObjectId.isValid(trimmedCallId) ? [{ _id: trimmedCallId }] : [])
+        ...(isObjectId ? [{ _id: trimmedCallId }] : [])
       ]
     }
-    const call = await Call.findOne(callQuery)
+    const call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
     if (!call) {
       return res.status(404).json({
         success: false,
@@ -1277,57 +1234,22 @@ const streamCallRecording = async (req, res) => {
       })
     }
 
-    // 1. Tenant boundary enforcement
-    if (user.role !== "super_admin" && call.tenantId !== user.tenantId) {
-      return res.status(403).json({
-        success: false,
-        error: "Access denied. Cross-tenant recording access is prohibited.",
-      })
-    }
-
-    // 2. Agent assignment / admin authorization check
-    const isTenantAdmin = user.role === "account_admin" || user.role === "super_admin"
-    const isCallAgent = call.agentId && call.agentId.toString() === user.id.toString()
-    if (!isTenantAdmin && !isCallAgent) {
-      const lead = call.leadId ? await Lead.findById(call.leadId).lean() : null
-      const isLeadAgent = lead && (
-        (lead.assignedStaffId && lead.assignedStaffId.toString() === user.id.toString()) ||
-        (lead.assignedTo && lead.assignedTo.toLowerCase() === user.name.toLowerCase())
-      )
-      if (!isLeadAgent) {
-        return res.status(403).json({
-          success: false,
-          error: "Access denied. Recording playback is restricted to assigned agents or administrators.",
-        })
-      }
-    }
-
-    if (!call.hasRecording || !call.metadata?.recordingUrl) {
-      return res.status(404).json({
-        success: false,
-        error: "No recording available for this call",
-      })
-    }
-
-    // Resolve file from storage
-    const safeTenantId = (call.tenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
-    const fileName = path.basename(call.metadata.recordingUrl)
-    const filePath = path.join(__dirname, "../uploads/recordings", safeTenantId, fileName)
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({
-        success: false,
-        error: "Recording file not found on server",
-      })
-    }
-
-    return streamAudioFile(req, res, filePath, call.metadata?.recordingMimeType)
+    const tenantId = user.role === "super_admin" ? call.tenantId : user.tenantId
+    return await recordingStorage.streamPlayback({
+      callId: trimmedCallId,
+      tenantId,
+      user,
+      rangeHeader: req.headers.range,
+      res,
+    })
   } catch (error) {
     console.error("Error in streamCallRecording:", error.message)
-    return res.status(500).json({
-      success: false,
-      error: "Internal server error while streaming recording",
-    })
+    if (!res.headersSent) {
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        error: error.message || "Internal server error while streaming recording",
+      })
+    }
   }
 }
 
@@ -1381,8 +1303,9 @@ const streamRecordingByPath = async (req, res) => {
       }
     }
 
-    const filePath = path.join(__dirname, "../uploads/recordings", safeTenantId, safeFileName)
-    if (!fs.existsSync(filePath)) {
+    const baseUploadDir = path.resolve(__dirname, "../uploads/recordings")
+    const filePath = path.resolve(baseUploadDir, safeTenantId, safeFileName)
+    if (!filePath.startsWith(baseUploadDir) || !fs.existsSync(filePath)) {
       return res.status(404).json({
         success: false,
         error: "Recording file not found",
