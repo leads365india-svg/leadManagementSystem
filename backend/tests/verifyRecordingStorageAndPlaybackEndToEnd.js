@@ -379,6 +379,121 @@ async function runTests() {
     assert(streamRes.statusCode === 206, "streamCallRecording delegated to streamPlayback and returned 206")
     assert(streamRes.headers["content-range"].startsWith("bytes 0-500/"), "streamCallRecording sent valid Content-Range header")
 
+    console.log("\nTest Case 11: Non-existent call ID returns 404 with code CALL_NOT_FOUND")
+    const nonExistentRes = createMockResponse()
+    await recordingStorage.streamPlayback({
+      callId: new mongoose.Types.ObjectId().toString(),
+      tenantId: testTenantA,
+      user: userA,
+      rangeHeader: null,
+      res: nonExistentRes,
+    })
+    assert(nonExistentRes.statusCode === 404, "Non-existent call returned HTTP 404")
+    assert(nonExistentRes.body?.code === "CALL_NOT_FOUND", "Returned code CALL_NOT_FOUND")
+
+    console.log("\nTest Case 12: Legacy recording with missing ephemeral file returns 404 with code LEGACY_FILE_EXPIRED")
+    const missingLegacyCall = await Call.create({
+      tenantId: testTenantA,
+      agentId: agentAId,
+      leadId: leadA._id,
+      clientCallId: `missing_ephemeral_uuid_${timestamp}`,
+      number: "+919876543210",
+      direction: "outbound",
+      duration: 15,
+      status: "completed",
+      hasRecording: true,
+      metadata: {
+        recordingUrl: `/uploads/recordings/${testTenantA}/deleted_or_lost_file_${timestamp}.m4a`,
+        recordingMimeType: "audio/m4a",
+      },
+      recording: {
+        fileId: null,
+        status: "ready",
+      },
+    })
+    const missingLegacyRes = createMockResponse()
+    await recordingStorage.streamPlayback({
+      callId: missingLegacyCall._id.toString(),
+      tenantId: testTenantA,
+      user: userA,
+      rangeHeader: null,
+      res: missingLegacyRes,
+    })
+    assert(missingLegacyRes.statusCode === 404, "Missing legacy file returned HTTP 404")
+    assert(missingLegacyRes.body?.code === "LEGACY_FILE_EXPIRED", "Returned code LEGACY_FILE_EXPIRED")
+    assert(missingLegacyRes.body?.error.includes("legacy storage expired"), "Informative error message on expired ephemeral storage")
+    await Call.deleteOne({ _id: missingLegacyCall._id })
+
+    console.log("\nTest Case 13: Stored status with missing GridFS chunks returns 404 with code GRIDFS_FILE_MISSING")
+    const missingGridFSCall = await Call.create({
+      tenantId: testTenantA,
+      agentId: agentAId,
+      leadId: leadA._id,
+      clientCallId: `missing_gridfs_uuid_${timestamp}`,
+      number: "+919876543210",
+      direction: "outbound",
+      duration: 20,
+      status: "completed",
+      hasRecording: true,
+      recording: {
+        fileId: new mongoose.Types.ObjectId(),
+        status: "stored",
+      },
+    })
+    const missingGridFSRes = createMockResponse()
+    await recordingStorage.streamPlayback({
+      callId: missingGridFSCall._id.toString(),
+      tenantId: testTenantA,
+      user: userA,
+      rangeHeader: null,
+      res: missingGridFSRes,
+    })
+    assert(missingGridFSRes.statusCode === 404, "Missing GridFS file returned HTTP 404")
+    assert(missingGridFSRes.body?.code === "GRIDFS_FILE_MISSING", "Returned code GRIDFS_FILE_MISSING")
+    await Call.deleteOne({ _id: missingGridFSCall._id })
+
+    console.log("\nTest Case 14: checkLegacyRecordingAvailability diagnostics without database mutation")
+    const availCheck = await recordingStorage.checkLegacyRecordingAvailability({
+      callId: legacyCall._id.toString(),
+      tenantId: testTenantA,
+    })
+    assert(availCheck.available === true, "checkLegacyRecordingAvailability detects existing legacy file")
+    assert(availCheck.sizeBytes === audioData.sizeBytes, "Detected file size matches")
+
+    const missingAvailCheck = await recordingStorage.checkLegacyRecordingAvailability({
+      callId: new mongoose.Types.ObjectId().toString(),
+      tenantId: testTenantA,
+    })
+    assert(missingAvailCheck.available === false, "checkLegacyRecordingAvailability returns available=false for missing call")
+    assert(missingAvailCheck.code === "CALL_NOT_FOUND", "Returned CALL_NOT_FOUND")
+
+    console.log("\nTest Case 15: migrateLegacyFileToGridFS requires explicit authorization & validates presence")
+    let unauthError = null
+    try {
+      await recordingStorage.migrateLegacyFileToGridFS({
+        callId: legacyCall._id.toString(),
+        tenantId: testTenantA,
+        user: userA,
+        authorized: false,
+      })
+    } catch (e) {
+      unauthError = e
+    }
+    assert(unauthError !== null && unauthError.statusCode === 403, "Refuses migration without explicit authorized=true")
+
+    let missingFileMigrationError = null
+    try {
+      await recordingStorage.migrateLegacyFileToGridFS({
+        callId: new mongoose.Types.ObjectId().toString(),
+        tenantId: testTenantA,
+        user: userA,
+        authorized: true,
+      })
+    } catch (e) {
+      missingFileMigrationError = e
+    }
+    assert(missingFileMigrationError !== null && missingFileMigrationError.statusCode === 404, "Refuses migration when legacy file is missing")
+
     // Allow streaming pipe to finish flushing before deleting files
     await new Promise((r) => setTimeout(r, 250))
   } finally {

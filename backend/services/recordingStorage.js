@@ -350,19 +350,29 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
   const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
 
   // 1. Fetch Call with tenant isolation (support clientCallId UUID or _id)
+  const isSuperAdmin = user && user.role === "super_admin"
   const callQuery = {
-    tenantId,
     $or: [
       { clientCallId: trimmedCallId },
       ...(isObjectId ? [{ _id: trimmedCallId }] : [])
     ]
   }
+  if (!isSuperAdmin) {
+    callQuery.tenantId = tenantId
+  }
+
   const call = await Call.findOne(callQuery)
     .setOptions({ skipTenantFilter: true })
 
   if (!call) {
-    return res.status(404).json({ success: false, error: "Call record not found" })
+    return res.status(404).json({
+      success: false,
+      error: "Call record not found",
+      code: "CALL_NOT_FOUND",
+    })
   }
+
+  const effectiveTenantId = isSuperAdmin ? (call.tenantId || tenantId) : tenantId
 
   // 2. RBAC & ownership check
   const isPrivileged = user && (user.role === "account_admin" || user.role === "super_admin")
@@ -372,7 +382,11 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     const { checkDirectObjectAccess } = require("../utils/rbacScope")
     const access = await checkDirectObjectAccess(user, call, "calls", "view")
     if (!access.allowed) {
-      return res.status(403).json({ success: false, error: "Forbidden: You do not have permission to access this recording" })
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden: You do not have permission to access this recording",
+        code: "FORBIDDEN_RECORDING_ACCESS",
+      })
     }
   }
 
@@ -381,16 +395,17 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     return res.status(410).json({
       success: false,
       error: "Recording has expired and was purged per retention policy",
+      code: "RECORDING_PURGED",
       status: "expired",
     })
   }
 
   // 4. Server-Side DNR Enforcement during playback
   if (call.leadId) {
-    const lead = await Lead.findOne({ _id: call.leadId, tenantId }).setOptions({ skipTenantFilter: true }).lean()
+    const lead = await Lead.findOne({ _id: call.leadId, tenantId: effectiveTenantId }).setOptions({ skipTenantFilter: true }).lean()
     const privacyService = require("./privacyService")
     const privacyCheck = await privacyService.evaluateRecordingEligibility({
-      tenantId,
+      tenantId: effectiveTenantId,
       lead,
       phoneNumber: call.number,
     })
@@ -409,7 +424,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
   if (call.recording?.fileId && call.recording.status === "stored") {
     try {
       bucket = getBucket()
-      file = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": tenantId }).next()
+      file = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": effectiveTenantId }).next()
     } catch (bucketErr) {
       console.warn("[RecordingStorage Playback] GridFS lookup error:", bucketErr.message)
     }
@@ -422,7 +437,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     // Audit playback action
     if (audit && typeof audit.log === "function") {
       audit.log({
-        tenantId,
+        tenantId: effectiveTenantId,
         action: "recording.listen",
         category: "recordings",
         entity: "Call",
@@ -478,7 +493,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
   if (rawPath) {
     const path = require("path")
     const fs = require("fs")
-    const safeTenantId = (tenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
+    const safeTenantId = (effectiveTenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
     const fileName = path.basename(rawPath)
     const baseUploadDir = path.resolve(__dirname, "../uploads/recordings")
     const resolvedPath = path.resolve(baseUploadDir, safeTenantId, fileName)
@@ -500,9 +515,31 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     }
   }
 
+  // 7. Precise diagnostic return when audio bytes are unavailable
+  if (call.recording?.fileId && call.recording.status === "stored") {
+    return res.status(404).json({
+      success: false,
+      error: "Recording audio file not found in persistent storage",
+      code: "GRIDFS_FILE_MISSING",
+      status: "stored",
+      reason: "storage_file_missing",
+    })
+  }
+
+  if (call.hasRecording || call.recording?.status === "ready" || rawPath) {
+    return res.status(404).json({
+      success: false,
+      error: "Audio recording is no longer available (legacy storage expired)",
+      code: "LEGACY_FILE_EXPIRED",
+      status: call.recording?.status || "ready",
+      reason: "legacy_ephemeral_storage_expired",
+    })
+  }
+
   return res.status(404).json({
     success: false,
     error: "No audio recording available for this call",
+    code: "NO_RECORDING_ATTACHED",
     status: call.recording?.status || "none",
   })
 }
@@ -595,6 +632,108 @@ async function purgeExpiredRecordings({ tenantId = null, retentionDays = DEFAULT
   }
 }
 
+/**
+ * Verifies whether a legacy file is still present on local disk.
+ * Returns diagnostic metadata without performing any database write or fabricating files.
+ *
+ * @param {Object} options
+ * @param {string} options.callId - Target call ID
+ * @param {string} options.tenantId - Tenant identifier
+ */
+async function checkLegacyRecordingAvailability({ callId, tenantId }) {
+  if (!callId) {
+    return { available: false, reason: "Call ID is required" }
+  }
+  const trimmedCallId = (callId || "").toString().trim()
+  const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
+  const call = await Call.findOne({
+    tenantId,
+    $or: [
+      { clientCallId: trimmedCallId },
+      ...(isObjectId ? [{ _id: trimmedCallId }] : [])
+    ]
+  }).setOptions({ skipTenantFilter: true })
+
+  if (!call) {
+    return { available: false, reason: "Call record not found", code: "CALL_NOT_FOUND" }
+  }
+
+  const rawPath = call.metadata?.recordingUrl || call.recordingUrl
+  if (!rawPath) {
+    return { available: false, reason: "No legacy recording path recorded", code: "NO_RECORDING_ATTACHED" }
+  }
+
+  const path = require("path")
+  const fs = require("fs")
+  const safeTenantId = (tenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
+  const fileName = path.basename(rawPath)
+  const baseUploadDir = path.resolve(__dirname, "../uploads/recordings")
+  const resolvedPath = path.resolve(baseUploadDir, safeTenantId, fileName)
+
+  if (!resolvedPath.startsWith(baseUploadDir) || !fs.existsSync(resolvedPath)) {
+    return {
+      available: false,
+      reason: "Legacy recording file does not exist on disk (ephemeral storage expired)",
+      code: "LEGACY_FILE_EXPIRED",
+      callId: call._id.toString(),
+      fileName,
+    }
+  }
+
+  const stats = fs.statSync(resolvedPath)
+  return {
+    available: true,
+    sizeBytes: stats.size,
+    callId: call._id.toString(),
+    fileName,
+    filePath: resolvedPath,
+  }
+}
+
+/**
+ * Safely migrates an existing legacy recording file from local disk to GridFS.
+ * Requires explicit authorized=true confirmation; will NOT fabricate or execute if file is missing.
+ *
+ * @param {Object} options
+ * @param {string} options.callId - Target call ID
+ * @param {string} options.tenantId - Tenant identifier
+ * @param {Object} options.user - Actor performing migration
+ * @param {boolean} [options.authorized=false] - Explicit admin authorization
+ */
+async function migrateLegacyFileToGridFS({ callId, tenantId, user, authorized = false }) {
+  if (!authorized) {
+    const authErr = new Error("Explicit authorization required to migrate legacy recording to GridFS")
+    authErr.statusCode = 403
+    throw authErr
+  }
+
+  const availability = await checkLegacyRecordingAvailability({ callId, tenantId })
+  if (!availability.available) {
+    const missingErr = new Error(`Cannot migrate legacy recording: ${availability.reason}`)
+    missingErr.statusCode = 404
+    missingErr.code = availability.code || "LEGACY_FILE_EXPIRED"
+    throw missingErr
+  }
+
+  const fs = require("fs")
+  const readStream = fs.createReadStream(availability.filePath)
+  const result = await streamUpload({
+    callId: availability.callId,
+    tenantId,
+    user,
+    stream: readStream,
+    filename: availability.fileName,
+    mimeType: "audio/m4a",
+  })
+
+  return {
+    migrated: true,
+    callId: availability.callId,
+    fileId: result.fileId,
+    sizeBytes: result.sizeBytes,
+  }
+}
+
 module.exports = {
   getBucket,
   ensureGridFSIndexes,
@@ -602,6 +741,8 @@ module.exports = {
   streamUpload,
   streamPlayback,
   purgeExpiredRecordings,
+  checkLegacyRecordingAvailability,
+  migrateLegacyFileToGridFS,
   ALLOWED_MIME_TYPES,
   DEFAULT_RETENTION_DAYS,
   MAX_UPLOAD_BYTES,

@@ -1231,6 +1231,7 @@ const streamCallRecording = async (req, res) => {
       return res.status(404).json({
         success: false,
         error: "Call record not found",
+        code: "CALL_NOT_FOUND",
       })
     }
 
@@ -1308,7 +1309,8 @@ const streamRecordingByPath = async (req, res) => {
     if (!filePath.startsWith(baseUploadDir) || !fs.existsSync(filePath)) {
       return res.status(404).json({
         success: false,
-        error: "Recording file not found",
+        error: "Audio recording is no longer available (legacy storage expired)",
+        code: "LEGACY_FILE_EXPIRED",
       })
     }
 
