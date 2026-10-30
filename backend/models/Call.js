@@ -70,6 +70,47 @@ const recordingSubSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    provider: {
+      type: String,
+      enum: ["imagekit", "gridfs", "local"],
+      default: "gridfs",
+      index: true,
+    },
+    imagekitFileId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitUrl: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitMp3FileId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitMp3Url: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitPath: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    migrationStatus: {
+      type: String,
+      enum: ["pending", "in_progress", "completed", "failed", "retry_required", "not_applicable"],
+      default: "not_applicable",
+      index: true,
+    },
+    migratedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: false },
 )

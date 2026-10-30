@@ -7,6 +7,7 @@ const Call = require("../models/Call")
 const Lead = require("../models/Lead")
 const audit = require("./auditService")
 const audioConverter = require("./audioConverter")
+const mediaStorage = require("./mediaStorage.service")
 
 /**
  * Recording Storage Service - Roadmap Phase 16 & MP3 Conversion Pipeline
@@ -258,6 +259,59 @@ async function processAndConvertGridFSRecording({
       call.recording.codec = "mp3"
     }
 
+
+    // 3b. Upload to ImageKit if configured
+    if (mediaStorage.isImageKitConfigured()) {
+      try {
+        const origExt = probe.format || "bin"
+        const origResult = await mediaStorage.uploadFile({
+          file: fs.createReadStream(tempInputPath),
+          fileName: `call_${call._id}_orig.${origExt}`,
+          tenantId,
+          category: "recordings",
+          mimeType: cleanMime,
+          tags: ["recording", "original", String(call._id)],
+          customMetadata: {
+            callId: String(call._id),
+            tenantId,
+            duration: String(duration),
+            codec: probe.codec || "unknown",
+          },
+        })
+
+        call.recording.imagekitFileId = origResult.fileId
+        call.recording.imagekitUrl = origResult.url
+        call.recording.imagekitPath = origResult.filePath
+
+        if (probe.isMp3) {
+          call.recording.imagekitMp3FileId = origResult.fileId
+          call.recording.imagekitMp3Url = origResult.url
+          call.recording.provider = "imagekit"
+        } else if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+          const mp3Result = await mediaStorage.uploadFile({
+            file: fs.createReadStream(tempOutputPath),
+            fileName: `call_${call._id}.mp3`,
+            tenantId,
+            category: "recordings",
+            mimeType: "audio/mpeg",
+            tags: ["recording", "mp3", String(call._id)],
+            customMetadata: {
+              callId: String(call._id),
+              tenantId,
+              duration: String(call.recording.duration),
+              isConverted: "true",
+            },
+          })
+
+          call.recording.imagekitMp3FileId = mp3Result.fileId
+          call.recording.imagekitMp3Url = mp3Result.url
+          call.recording.provider = "imagekit"
+        }
+      } catch (ikErr) {
+        console.warn(`[RecordingStorage] ImageKit cloud upload notice for call ${call._id}:`, ikErr.message)
+      }
+    }
+
     // 4. Update compatible metadata for frontend
     call.metadata = call.metadata || {}
     call.metadata.recordingUrl = `/api/calls/${call._id}/recording`
@@ -302,7 +356,8 @@ async function streamUpload({
   callId,
   tenantId,
   user,
-  readStream,
+  readStream: inputReadStream,
+  stream: inputStream,
   mimeType = "audio/mp4",
   filename = null,
   contentLength = 0,
@@ -311,6 +366,7 @@ async function streamUpload({
   allowUnmatchedReview = false,
 }) {
   // Validate eligibility before reading any audio stream
+  const readStream = inputReadStream || inputStream
   const { call } = await validateUploadEligibility({ callId, tenantId, user, allowUnmatchedReview })
 
   // Clean and validate mimeType
@@ -507,6 +563,81 @@ async function streamUpload({
  * Handles secure streaming playback from GridFS with HTTP Range support.
  * Serves converted MP3 (audio/mpeg) by default for guaranteed cross-browser compatibility.
  */
+/**
+ * Streams audio from a remote URL (such as ImageKit CDN) with HTTP Range support for seeking.
+ */
+function streamFromRemoteUrl({ url, rangeHeader, res, mimeType, expectedSize, auditDetails }) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url)
+    const clientModule = parsedUrl.protocol === "https:" ? require("https") : require("http")
+
+    const headers = {}
+    if (rangeHeader) {
+      headers["Range"] = rangeHeader
+    }
+
+    const request = clientModule.get(url, { headers }, (remoteRes) => {
+      // Follow 3xx redirect if any
+      if (remoteRes.statusCode >= 300 && remoteRes.statusCode < 400 && remoteRes.headers.location) {
+        return streamFromRemoteUrl({
+          url: remoteRes.headers.location,
+          rangeHeader,
+          res,
+          mimeType,
+          expectedSize,
+          auditDetails,
+        }).then(resolve).catch(reject)
+      }
+
+      if (remoteRes.statusCode >= 400) {
+        return reject(new Error(`Remote storage returned HTTP status ${remoteRes.statusCode}`))
+      }
+
+      const statusCode = remoteRes.statusCode || 200
+      const responseHeaders = {
+        "Content-Type": remoteRes.headers["content-type"] || mimeType || "audio/mpeg",
+        "Accept-Ranges": "bytes",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+      }
+
+      if (remoteRes.headers["content-length"]) {
+        responseHeaders["Content-Length"] = remoteRes.headers["content-length"]
+      } else if (expectedSize && statusCode === 200) {
+        responseHeaders["Content-Length"] = expectedSize
+      }
+
+      if (remoteRes.headers["content-range"]) {
+        responseHeaders["Content-Range"] = remoteRes.headers["content-range"]
+      }
+
+      // Audit playback action
+      if (audit && typeof audit.log === "function" && auditDetails) {
+        audit.log({
+          tenantId: auditDetails.tenantId,
+          action: "recording.listen",
+          category: "recordings",
+          entity: "Call",
+          entityId: auditDetails.callId,
+          actor: auditDetails.user || { _id: "system", name: "Authenticated User", role: "agent" },
+          target: { type: "Call", id: auditDetails.callId },
+          details: {
+            storageProvider: "imagekit",
+            range: rangeHeader || "all",
+          },
+        }).catch(() => {})
+      }
+
+      res.writeHead(statusCode, responseHeaders)
+      remoteRes.pipe(res)
+      remoteRes.on("end", resolve)
+      remoteRes.on("error", reject)
+    })
+
+    request.on("error", reject)
+  })
+}
+
 async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query = {} }) {
   if (!callId) {
     return res.status(400).json({ success: false, error: "Call ID parameter is required" })
@@ -588,8 +719,52 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
   let fileToStream = null
   let mimeType = "audio/mpeg"
 
-  // 5. Select appropriate file (MP3 vs original source)
+  // 5a. Check if ImageKit storage is available for this call
   const wantsOriginal = query && query.format === "original"
+  const wantsSignedUrl = query && (query.signedUrl === "true" || query.redirect === "true")
+
+  const imagekitTargetUrl = wantsOriginal
+    ? (call.recording?.imagekitUrl || call.recording?.imagekitMp3Url)
+    : (call.recording?.imagekitMp3Url || call.recording?.imagekitUrl)
+
+  if (imagekitTargetUrl && mediaStorage.isImageKitConfigured()) {
+    if (wantsSignedUrl) {
+      const signedUrl = mediaStorage.generatePrivateFileUrl({
+        url: imagekitTargetUrl,
+        expireSeconds: 300,
+      })
+      if (query.redirect === "true") {
+        return res.redirect(302, signedUrl)
+      }
+      return res.status(200).json({
+        success: true,
+        url: signedUrl,
+        duration: call.recording?.duration || 0,
+        format: "mp3",
+      })
+    }
+
+    try {
+      const signedStreamUrl = mediaStorage.generatePrivateFileUrl({
+        url: imagekitTargetUrl,
+        expireSeconds: 300,
+      })
+      await streamFromRemoteUrl({
+        url: signedStreamUrl,
+        rangeHeader,
+        res,
+        mimeType: wantsOriginal ? (call.recording?.format || "audio/mp4") : "audio/mpeg",
+        expectedSize: wantsOriginal ? call.recording?.sizeBytes : (call.recording?.mp3SizeBytes || call.recording?.sizeBytes),
+        auditDetails: { tenantId: effectiveTenantId, callId: call._id, user },
+      })
+      return
+    } catch (ikStreamErr) {
+      console.warn(`[RecordingStorage Playback] ImageKit stream notice for call ${call._id}: ${ikStreamErr.message}. Falling back to GridFS.`)
+    }
+  }
+
+
+  // 5b. GridFS file selection (MP3 vs original source)
 
   if (wantsOriginal && call.recording?.fileId) {
     // Client explicitly asked for original unconverted format (e.g. download)

@@ -838,6 +838,61 @@ class ApiClient {
   async getIngestionStats() {
     return this.request("/calls/ingestion/stats")
   }
+
+  // ==============================================================================
+  // Cloud Media Storage (ImageKit) Integration
+  // ==============================================================================
+
+  async uploadMediaFile(file, options = {}) {
+    const formData = new FormData()
+    formData.append("file", file)
+    if (options.category) formData.append("category", options.category)
+    if (options.relatedEntityType) formData.append("relatedEntityType", options.relatedEntityType)
+    if (options.relatedEntityId) formData.append("relatedEntityId", options.relatedEntityId)
+    if (options.isPrivate !== undefined) formData.append("isPrivate", String(options.isPrivate))
+
+    const headers = {}
+    if (typeof window !== "undefined") {
+      try {
+        const storedToken = localStorage.getItem("leadflow_token")
+        if (storedToken) {
+          headers["Authorization"] = `Bearer ${storedToken}`
+        }
+      } catch (_) {}
+    }
+
+    const res = await fetch(`${API_BASE_URL}/media/upload`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: formData,
+    })
+
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error || `Media upload failed with status ${res.status}`)
+    }
+    return data
+  }
+
+  async getMediaDetails(mediaId) {
+    return this.request(`/media/${mediaId}`)
+  }
+
+  async getMediaSignedUrl(mediaId) {
+    return this.request(`/media/${mediaId}/signed-url`)
+  }
+
+  async deleteMedia(mediaId) {
+    return this.request(`/media/${mediaId}`, {
+      method: "DELETE",
+    })
+  }
+
+  async getLeadMedia(leadId) {
+    return this.request(`/media/lead/${leadId}`)
+  }
+
 }
 
 export const apiClient = new ApiClient()
