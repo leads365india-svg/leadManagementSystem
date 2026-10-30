@@ -384,24 +384,37 @@ export default function LeadsClient() {
     }
   }
 
-  // Quick lead status change directly from table row or modal
+  // Quick lead status change directly from table row or modal (Optimistic 0ms UI feedback)
   const handleQuickStatusChange = async (leadId, newStatus, currentStatus) => {
     if (newStatus === currentStatus) return
+
+    // Optimistic local state update (0ms UI latency)
+    setLeadsData((prev) => {
+      if (!prev || !Array.isArray(prev.leads)) return prev
+      return {
+        ...prev,
+        leads: prev.leads.map((l) =>
+          (l._id === leadId || l.id === leadId) ? { ...l, status: newStatus } : l
+        ),
+      }
+    })
+
     try {
       setUpdatingStatusId(leadId)
       const res = await apiClient.updateLeadStatus(leadId, newStatus)
       if (res.success) {
         toast.success(`Lead moved to "${newStatus}"`)
-        fetchLeads()
         fetchLeadStats()
         if (activeLeadDetails && (activeLeadDetails._id === leadId || activeLeadDetails.id === leadId)) {
           setActiveLeadDetails((prev) => ({ ...prev, status: newStatus }))
         }
       } else {
         toast.error(res.error || "Failed to update status")
+        fetchLeads()
       }
     } catch (err) {
       toast.error(err.message || "Failed to update status")
+      fetchLeads()
     } finally {
       setUpdatingStatusId(null)
     }
@@ -489,13 +502,32 @@ export default function LeadsClient() {
       return
     }
 
-    // Toggle off if currently playing this lead's recording
+    // Toggle off if currently playing this lead's recording (0ms instant toggle)
     if (
       activePlayingCall &&
       (activePlayingCall.leadId === leadIdStr ||
         (lead.phone && (activePlayingCall.leadPhone === lead.phone || activePlayingCall.number === lead.phone)))
     ) {
       setActivePlayingCall(null)
+      return
+    }
+
+    // Millisecond-fast instant playback: If lead already has latestCallId from API, open player immediately in 0ms!
+    if (lead.latestCallId) {
+      setActivePlayingCall({
+        _id: lead.latestCallId,
+        id: lead.latestCallId,
+        callId: lead.latestCallId,
+        leadId: leadIdStr,
+        leadPhone: lead.phone,
+        leadName: lead.name,
+        agentName: lead.assignedTo || "Agent",
+        recording: {
+          duration: lead.latestRecordingDuration || 0,
+          status: "stored",
+        },
+      })
+      toast.success(`Playing recording for ${lead.name || "lead"}`)
       return
     }
 
@@ -1160,7 +1192,8 @@ export default function LeadsClient() {
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          {(() => {
+                          {/* Play Recording Button - Dynamic: Only rendered if lead actually has recordings */}
+                          {Boolean(lead.hasRecording) && (() => {
                             const isPlayingThisLead =
                               activePlayingCall &&
                               (activePlayingCall.leadId === leadIdStr ||

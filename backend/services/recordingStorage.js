@@ -364,6 +364,7 @@ async function streamUpload({
   expectedSha256 = null,
   retentionDays = DEFAULT_RETENTION_DAYS,
   allowUnmatchedReview = false,
+  allowOverwrite = false,
 }) {
   // Validate eligibility before reading any audio stream
   const readStream = inputReadStream || inputStream
@@ -383,21 +384,23 @@ async function streamUpload({
     throw err
   }
 
-  // Idempotency: If this call already has a stored recording, return existing without duplication
-  if (call.recording && call.recording.status === "stored" && call.recording.fileId) {
+  // Idempotency: If this call already has a stored recording, return existing without duplication (unless allowOverwrite is requested)
+  if (!allowOverwrite && call.recording && call.recording.status === "stored" && call.recording.fileId) {
     const bucket = getBucket()
     const existingFile = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": tenantId }).next()
     if (existingFile) {
-      return {
-        success: true,
-        message: "Recording already uploaded (idempotent submission)",
-        fileId: existingFile._id,
-        sizeBytes: call.recording.mp3SizeBytes || existingFile.length,
-        sha256: call.recording.mp3Sha256 || existingFile.metadata?.sha256 || call.recording.sha256,
-        status: "stored",
-        duration: call.recording.duration || 0,
-        expiresAt: existingFile.metadata?.expiresAt || call.recording.expiresAt,
-        isDuplicate: true,
+      if (!expectedSha256 || expectedSha256.toLowerCase() === (call.recording.sha256 || "").toLowerCase()) {
+        return {
+          success: true,
+          message: "Recording already uploaded (idempotent submission)",
+          fileId: existingFile._id,
+          sizeBytes: call.recording.mp3SizeBytes || existingFile.length,
+          sha256: call.recording.mp3Sha256 || existingFile.metadata?.sha256 || call.recording.sha256,
+          status: "stored",
+          duration: call.recording.duration || 0,
+          expiresAt: existingFile.metadata?.expiresAt || call.recording.expiresAt,
+          isDuplicate: true,
+        }
       }
     }
   }
@@ -477,6 +480,9 @@ async function streamUpload({
           { $set: { "metadata.sha256": computedSha256, "metadata.bytes": bytesWritten } }
         )
 
+        const previousFileId = call.recording?.fileId
+        const previousMp3FileId = call.recording?.mp3FileId
+
         // Run MP3 conversion and duration extraction
         let conversionResult = null
         try {
@@ -490,6 +496,14 @@ async function streamUpload({
             computedSha256,
             expiresAt,
           })
+
+          // Safely clean up previous storage chunks if overwriting
+          if (previousFileId && previousFileId.toString() !== uploadStream.id.toString()) {
+            await bucket.delete(previousFileId).catch(() => {})
+          }
+          if (previousMp3FileId && previousMp3FileId.toString() !== uploadStream.id.toString() && (!conversionResult || previousMp3FileId.toString() !== conversionResult.mp3FileId?.toString())) {
+            await bucket.delete(previousMp3FileId).catch(() => {})
+          }
         } catch (convErr) {
           console.warn("[RecordingStorage] Post-upload conversion warning:", convErr.message)
           // Fallback: Ensure basic stored status and metadata are set even if conversion failed
