@@ -35,6 +35,41 @@ const recordingSubSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    mp3FileId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    mp3SizeBytes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    mp3Sha256: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    conversionStatus: {
+      type: String,
+      enum: ["not_needed", "pending", "processing", "completed", "failed"],
+      default: "not_needed",
+      index: true,
+    },
+    duration: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    format: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    codec: {
+      type: String,
+      default: "",
+      trim: true,
+    },
   },
   { _id: false },
 )

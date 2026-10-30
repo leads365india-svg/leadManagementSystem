@@ -512,19 +512,23 @@ export default function LeadsClient() {
 
       // 2. Identify the latest call with an audio recording (sorted newest first)
       const getCallTime = (c) => {
-        const t = c.createdAt || c.startedAt || c.recording?.createdAt || c.timestamp
+        const t = c.startTimeMs || c.startedAt || c.createdAt || c.recording?.createdAt || c.metadata?.recordingUploadedAt || c.timestamp
         return t ? new Date(t).getTime() : 0
       }
       const sortedCalls = [...calls].sort((a, b) => getCallTime(b) - getCallTime(a))
 
-      const playableCall = sortedCalls.find(
-        (c) =>
-          c.recording?.status === "stored" ||
-          c.recording?.status === "ready" ||
-          Boolean(c.recording?.fileId) ||
-          Boolean(c.metadata?.recordingUrl) ||
-          Boolean(c.hasRecording)
-      )
+      const isPlayable = (c) => {
+        if (!c) return false
+        if (c.recording?.status === "skipped_dnr" || c.recording?.status === "expired" || c.recording?.status === "failed") {
+          return false
+        }
+        const hasGridFsFile = Boolean(c.recording?.mp3FileId || c.recording?.fileId)
+        const hasValidStatus = c.recording?.status === "stored" || c.recording?.status === "ready"
+        const hasLegacyUrl = Boolean(c.metadata?.recordingUrl && (c.metadata?.recordingSizeBytes > 0 || c.recording?.sizeBytes > 0))
+        return (hasGridFsFile && (c.recording?.sizeBytes > 0 || c.recording?.mp3SizeBytes > 0 || hasValidStatus)) || (hasValidStatus && hasLegacyUrl)
+      }
+
+      const playableCall = sortedCalls.find(isPlayable)
 
       if (!playableCall) {
         // Provide informative feedback if recordings were skipped or expired
