@@ -90,9 +90,11 @@ async function runTests() {
     })
 
     // Setup test leads
+    const testTimestamp = Date.now()
     leadA = await Lead.create({
       tenantId: testTenantA,
       name: "Rohan Lead",
+      email: `rohan_${testTimestamp}@example.com`,
       phone: "+919876543210",
       status: "Engaged",
       ownerId: agentAId,
@@ -101,6 +103,7 @@ async function runTests() {
     leadDnr = await Lead.create({
       tenantId: testTenantA,
       name: "DNR Customer",
+      email: `dnr_${testTimestamp}@example.com`,
       phone: "+919876500000",
       status: "Engaged",
       ownerId: agentAId,
@@ -112,6 +115,7 @@ async function runTests() {
       tenantId: testTenantA,
       agentId: agentAId,
       leadId: leadA._id,
+      clientCallId: `call_a_${testTimestamp}`,
       number: "+919876543210",
       direction: "outbound",
       duration: 120,
@@ -122,6 +126,7 @@ async function runTests() {
       tenantId: testTenantA,
       agentId: agentAId,
       leadId: null, // Personal call, not linked to CRM lead
+      clientCallId: `call_personal_${testTimestamp}`,
       number: "+919999911111",
       direction: "outbound",
       duration: 45,
@@ -131,6 +136,7 @@ async function runTests() {
     callTenantB = await Call.create({
       tenantId: testTenantB,
       agentId: agentBId,
+      clientCallId: `call_b_${testTimestamp}`,
       number: "+919111122222",
       direction: "inbound",
       duration: 30,
@@ -252,6 +258,7 @@ async function runTests() {
       tenantId: testTenantA,
       agentId: agentAId,
       leadId: leadDnr._id,
+      clientCallId: `call_dnr_${testTimestamp}`,
       number: "+919876500000",
       direction: "outbound",
       duration: 60,
@@ -292,6 +299,7 @@ async function runTests() {
         tenantId: testTenantA,
         agentId: agentAId,
         leadId: leadA._id,
+        clientCallId: `call_corrupt_${testTimestamp}`,
         number: "+919876543210",
         direction: "outbound",
         duration: 20,
@@ -407,6 +415,7 @@ async function runTests() {
       tenantId: testTenantA,
       agentId: agentAId,
       leadId: leadA._id,
+      clientCallId: `call_expired_${testTimestamp}`,
       number: "+919876543210",
       direction: "outbound",
       duration: 95,

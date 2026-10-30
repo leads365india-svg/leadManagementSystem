@@ -55,8 +55,10 @@ function computeRetentionDisplay(recording) {
 
   if (daysUntilExpiry !== null) {
     return { badge: `Retained ${daysUntilExpiry}d remaining`, type: "expiry" }
-  } else if (recording?.status === "stored" || recording?.status === "ready") {
+  } else if (recording?.status === "stored") {
     return { badge: "Retained (Policy: 30d)", type: "policy" }
+  } else if (recording?.status === "ready") {
+    return { badge: "Legacy Recording", type: "legacy" }
   }
   return { badge: null, type: "none" }
 }
@@ -88,7 +90,10 @@ async function simulatePlayerAudioFetch({
 
     if (!response.ok) {
       let errorMsg = "Unable to stream audio recording."
-      if (response.status === 401) {
+      const errData = await response.json().catch(() => null)
+      if (errData && errData.code && errData.error) {
+        errorMsg = errData.error
+      } else if (response.status === 401) {
         errorMsg = "Authentication required. Please log in again."
       } else if (response.status === 403) {
         errorMsg = "Playback restricted by compliance policy or permissions."
@@ -96,11 +101,8 @@ async function simulatePlayerAudioFetch({
         errorMsg = "Recording audio not found on server."
       } else if (response.status === 410) {
         errorMsg = "Recording has expired per retention policy."
-      } else {
-        const errData = await response.json().catch(() => ({}))
-        if (errData && errData.error) {
-          errorMsg = errData.error
-        }
+      } else if (errData && errData.error) {
+        errorMsg = errData.error
       }
       throw new Error(errorMsg)
     }
@@ -278,16 +280,27 @@ async function runAll() {
     assert.strictEqual(result.error, "Recording audio file is empty (0 bytes).")
   })
 
-  test("8. Retention Display: When expiresAt is null, does NOT fabricate '30d remaining'", () => {
+  test("8. Retention Display: When expiresAt is null and status is stored, does NOT fabricate '30d remaining'", () => {
     const recordingWithoutExpires = {
-      fileId: null,
-      status: "ready",
+      fileId: "6ae307246b0465c7d8785b3e",
+      status: "stored",
       expiresAt: null,
     }
 
     const display = computeRetentionDisplay(recordingWithoutExpires)
     assert.notStrictEqual(display.badge, "Retained 30d remaining", "Must NOT show 30d remaining when expiresAt is null")
     assert.strictEqual(display.badge, "Retained (Policy: 30d)", "Shows genuine policy label")
+  })
+
+  test("8b. Retention Display: When recording is legacy 'ready', displays 'Legacy Recording' rather than 30d retention", () => {
+    const legacyRecording = {
+      fileId: null,
+      status: "ready",
+      expiresAt: null,
+    }
+
+    const display = computeRetentionDisplay(legacyRecording)
+    assert.strictEqual(display.badge, "Legacy Recording", "Displays Legacy Recording label")
   })
 
   test("9. Retention Display: When genuine expiresAt exists, displays exact remaining days", () => {
@@ -537,6 +550,73 @@ async function runAll() {
 
     assert.strictEqual(error, "No recording identifier provided.")
     assert.strictEqual(fetchCalled, false)
+  })
+
+  await testAsync("19. HTTP 404 with structured code LEGACY_FILE_EXPIRED surfaces exact diagnostic to player", async () => {
+    const mockFetch = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: async () => ({
+        success: false,
+        error: "Audio recording is no longer available (legacy storage expired)",
+        code: "LEGACY_FILE_EXPIRED",
+        reason: "legacy_ephemeral_storage_expired",
+      }),
+    })
+
+    const result = await simulatePlayerAudioFetch({
+      callId: "6ae307246b0465c7d8785b3e",
+      storedToken: "agent_token",
+      mockFetchResponse: mockFetch,
+    })
+
+    assert.strictEqual(result.blobUrl, null)
+    assert.strictEqual(result.error, "Audio recording is no longer available (legacy storage expired)")
+  })
+
+  await testAsync("20. HTTP 404 with structured code CALL_NOT_FOUND surfaces exact diagnostic to player", async () => {
+    const mockFetch = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: async () => ({
+        success: false,
+        error: "Call record not found",
+        code: "CALL_NOT_FOUND",
+      }),
+    })
+
+    const result = await simulatePlayerAudioFetch({
+      callId: "nonexistent_call_id",
+      storedToken: "agent_token",
+      mockFetchResponse: mockFetch,
+    })
+
+    assert.strictEqual(result.blobUrl, null)
+    assert.strictEqual(result.error, "Call record not found")
+  })
+
+  await testAsync("21. HTTP 404 with structured code GRIDFS_FILE_MISSING surfaces exact storage diagnostic", async () => {
+    const mockFetch = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: async () => ({
+        success: false,
+        error: "Recording audio file not found in persistent storage",
+        code: "GRIDFS_FILE_MISSING",
+      }),
+    })
+
+    const result = await simulatePlayerAudioFetch({
+      callId: "call_stored_missing_chunks",
+      storedToken: "agent_token",
+      mockFetchResponse: mockFetch,
+    })
+
+    assert.strictEqual(result.blobUrl, null)
+    assert.strictEqual(result.error, "Recording audio file not found in persistent storage")
   })
 
   console.log("\n" + "=".repeat(80))

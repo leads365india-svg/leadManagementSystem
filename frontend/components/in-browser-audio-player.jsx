@@ -124,7 +124,10 @@ export default function InBrowserAudioPlayer({
 
         if (!response.ok) {
           let errorMsg = "Unable to stream audio recording."
-          if (response.status === 401) {
+          const errData = await response.json().catch(() => null)
+          if (errData && errData.code && errData.error) {
+            errorMsg = errData.error
+          } else if (response.status === 401) {
             errorMsg = "Authentication required. Please log in again."
           } else if (response.status === 403) {
             errorMsg = "Playback restricted by compliance policy or permissions."
@@ -134,11 +137,8 @@ export default function InBrowserAudioPlayer({
             errorMsg = "Recording has expired per retention policy."
           } else if (response.status === 422) {
             errorMsg = "Recording audio file is corrupt or in an unconvertible format."
-          } else {
-            const errData = await response.json().catch(() => ({}))
-            if (errData && errData.error) {
-              errorMsg = errData.error
-            }
+          } else if (errData && errData.error) {
+            errorMsg = errData.error
           }
           throw new Error(errorMsg)
         }
@@ -334,10 +334,15 @@ export default function InBrowserAudioPlayer({
                   <span>•</span>
                   <span className="text-amber-400">Retained {daysUntilExpiry}d remaining</span>
                 </>
-              ) : recording?.status === "stored" || recording?.status === "ready" ? (
+              ) : recording?.status === "stored" ? (
                 <>
                   <span>•</span>
                   <span className="text-emerald-400">Retained (Policy: 30d)</span>
+                </>
+              ) : recording?.status === "ready" ? (
+                <>
+                  <span>•</span>
+                  <span className="text-slate-400">Legacy Recording</span>
                 </>
               ) : null}
             </div>
