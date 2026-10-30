@@ -54,6 +54,7 @@ const ALLOWED_ACTIVITY_TYPES = [
   "lead.followup_completed",
   "lead.source_updated",
   "call.logged",
+  "call.associated",
   // Short aliases for convenience
   "created",
   "status_changed",
@@ -64,6 +65,7 @@ const ALLOWED_ACTIVITY_TYPES = [
   "followup_completed",
   "source_updated",
   "call_logged",
+  "call_associated",
 ]
 
 const activitySchema = new mongoose.Schema(

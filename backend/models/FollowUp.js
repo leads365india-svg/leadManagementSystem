@@ -79,6 +79,16 @@ const followUpSchema = new mongoose.Schema(
       type: String,
       default: "User",
     },
+    sourceCallId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    idempotencyKey: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
@@ -97,11 +107,60 @@ const followUpSchema = new mongoose.Schema(
   },
 )
 
+// Normalize empty identifiers to null before persistence
+followUpSchema.pre("validate", function () {
+  if (typeof this.sourceCallId === "string" && !this.sourceCallId.trim()) {
+    this.sourceCallId = null
+  }
+  if (typeof this.idempotencyKey === "string" && !this.idempotencyKey.trim()) {
+    this.idempotencyKey = null
+  }
+})
+
 // Compound indexes for performant tenant-scoped timeline queries
 followUpSchema.index({ tenantId: 1, scheduledAt: 1 })
 followUpSchema.index({ tenantId: 1, status: 1, scheduledAt: 1 })
 followUpSchema.index({ tenantId: 1, leadId: 1 })
+followUpSchema.index(
+  { tenantId: 1, sourceCallId: 1 },
+  { unique: true, partialFilterExpression: { sourceCallId: { $type: "string", $gt: "" } } }
+)
+followUpSchema.index(
+  { tenantId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string", $gt: "" } } }
+)
+followUpSchema.index({ tenantId: 1, leadId: 1, scheduledAt: 1, status: 1 })
 
 followUpSchema.plugin(tenantIsolationPlugin)
 
-module.exports = mongoose.model("FollowUp", followUpSchema)
+const FollowUp = mongoose.models.FollowUp || mongoose.model("FollowUp", followUpSchema)
+
+/**
+ * Migration helper to ensure hardened unique partial indexes are created safely.
+ * Note: Controlled migrations are executed via backend/scripts/migrateUniqueIndexes.js.
+ */
+async function ensureUniqueIndexes() {
+  try {
+    if (FollowUp.collection && FollowUp.db.readyState === 1) {
+      const indexes = await FollowUp.collection.indexes()
+      for (const idx of indexes) {
+        if ((idx.name === "tenantId_1_sourceCallId_1" || idx.name === "tenantId_1_idempotencyKey_1") && (!idx.unique || !idx.partialFilterExpression?.sourceCallId?.$gt || !idx.partialFilterExpression?.idempotencyKey?.$gt)) {
+          await FollowUp.collection.dropIndex(idx.name).catch(() => {})
+        }
+      }
+      await FollowUp.collection.createIndex(
+        { tenantId: 1, sourceCallId: 1 },
+        { unique: true, partialFilterExpression: { sourceCallId: { $type: "string", $gt: "" } } }
+      )
+      await FollowUp.collection.createIndex(
+        { tenantId: 1, idempotencyKey: 1 },
+        { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string", $gt: "" } } }
+      )
+    }
+  } catch (err) {
+    // Non-fatal
+  }
+}
+
+FollowUp.ensureUniqueIndexes = ensureUniqueIndexes
+module.exports = FollowUp

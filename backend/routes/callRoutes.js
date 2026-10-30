@@ -12,6 +12,7 @@ const {
   uploadCallRecording,
   playCallRecording,
   purgeRecordings,
+  associateCallWithLead,
 } = require("../controllers/callController")
 const { authenticate, requireAccountAdmin } = require("../middleware/authMiddleware")
 const { authenticateRecordingUpload } = require("../middleware/recordingAuthMiddleware")
@@ -64,6 +65,7 @@ router.get("/ingestion/stats", authenticate, getIngestionStats)
 router.get("/", authenticate, getCallLogs)
 router.get("/:id", authenticate, getCallById)
 router.patch("/:id", authenticate, updateCallLog)
+router.post("/:id/associate-lead", authenticate, associateCallWithLead)
 
 // Phase 16: Call Recording Upload & Streaming Playback Endpoints
 router.put("/:id/recording", recordingUploadLimiter, authenticateRecordingUpload, uploadCallRecording)

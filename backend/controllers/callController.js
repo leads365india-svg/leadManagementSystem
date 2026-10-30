@@ -54,8 +54,11 @@ const createCallLog = async (req, res) => {
       agentId = req.body.agentId
     }
 
+    const clientCallId = req.body.clientCallId || req.body.client_call_id || null
+
     const result = await callService.logCall({
       tenantId,
+      clientCallId,
       agentId,
       leadId,
       deviceId,
@@ -466,6 +469,42 @@ const purgeRecordings = async (req, res) => {
   }
 }
 
+/**
+ * POST /api/calls/:id/associate-lead
+ * Explicitly associates a call to a CRM Lead (useful for manual disambiguation).
+ */
+const associateCallWithLead = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { leadId } = req.body
+
+    if (!id || !leadId) {
+      return res.status(400).json({ success: false, error: "Both call id and leadId are required" })
+    }
+
+    const tenantId = req.user.tenantId
+    const result = await callService.associateCallToLead({
+      callId: id,
+      leadId,
+      tenantId,
+      user: req.user,
+    })
+
+    return res.status(200).json({
+      success: true,
+      data: result.call,
+      lead: result.lead,
+      message: "Call successfully associated with lead",
+    })
+  } catch (err) {
+    console.error("[CallController AssociateLead Error]:", err)
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      error: err.message || "Failed to associate call with lead",
+    })
+  }
+}
+
 module.exports = {
   createCallLog,
   getCallLogs,
@@ -478,4 +517,5 @@ module.exports = {
   uploadCallRecording,
   playCallRecording,
   purgeRecordings,
+  associateCallWithLead,
 }

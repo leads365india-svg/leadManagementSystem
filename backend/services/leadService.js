@@ -192,9 +192,23 @@ async function createOrMergeLead({
 
       await existingLead.save()
 
+      // Automatically reconcile historical calls matching this merged lead
+      let mergedReconciledCalls = null
+      try {
+        const callService = require("./callService")
+        mergedReconciledCalls = await callService.reconcileHistoricalCallsForLead({
+          lead: existingLead,
+          tenantId: cleanTenantId,
+          user: actor,
+        })
+      } catch (reconcileErr) {
+        console.warn("[LeadService] Call reconciliation notice on lead merge:", reconcileErr.message)
+      }
+
       return {
         action: "merged",
         lead: existingLead,
+        reconciledCalls: mergedReconciledCalls,
       }
     }
   }
@@ -316,6 +330,19 @@ async function createOrMergeLead({
 
   const savedLead = await newLead.save()
 
+  // Automatically reconcile historical unassigned calls matching this new lead
+  let reconciledCalls = null
+  try {
+    const callService = require("./callService")
+    reconciledCalls = await callService.reconcileHistoricalCallsForLead({
+      lead: savedLead,
+      tenantId: cleanTenantId,
+      user: actor,
+    })
+  } catch (reconcileErr) {
+    console.warn("[LeadService] Call reconciliation notice on lead creation:", reconcileErr.message)
+  }
+
   // Phase 10: Record lead.created activity event
   try {
     const { activity } = require("./activityService")
@@ -360,6 +387,7 @@ async function createOrMergeLead({
   return {
     action: "created",
     lead: savedLead,
+    reconciledCalls,
   }
 }
 

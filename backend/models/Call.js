@@ -152,8 +152,6 @@ const callSchema = new mongoose.Schema(
     clientCallId: {
       type: String,
       default: null,
-      index: true,
-      sparse: true,
       trim: true,
     },
     direction: {
@@ -323,6 +321,11 @@ function syncCallFields(doc) {
   if (doc.recording && (doc.recording.status === "stored" || doc.recording.status === "ready")) {
     doc.hasRecording = true
   }
+
+  // Normalize empty clientCallId to null before persistence
+  if (typeof doc.clientCallId === "string" && !doc.clientCallId.trim()) {
+    doc.clientCallId = null
+  }
 }
 
 callSchema.pre("validate", function () {
@@ -341,10 +344,38 @@ callSchema.index({ tenantId: 1, leadId: 1, startedAt: -1 })
 callSchema.index({ tenantId: 1, agentId: 1, startedAt: -1 })
 callSchema.index({ tenantId: 1, "recording.status": 1 })
 callSchema.index({ tenantId: 1, phoneNormalized: 1, startedAt: -1 })
+callSchema.index(
+  { tenantId: 1, clientCallId: 1 },
+  { unique: true, partialFilterExpression: { clientCallId: { $type: "string", $gt: "" } } }
+)
 
 // Enforce ambient multi-tenant isolation
 callSchema.plugin(tenantIsolationPlugin, { tenantField: "tenantId" })
 
 const Call = mongoose.models.Call || mongoose.model("Call", callSchema)
 
+/**
+ * Migration helper to ensure hardened unique partial index is created safely.
+ * Note: Controlled migrations are executed via backend/scripts/migrateUniqueIndexes.js.
+ */
+async function ensureUniqueIndexes() {
+  try {
+    if (Call.collection && Call.db.readyState === 1) {
+      const indexes = await Call.collection.indexes()
+      for (const idx of indexes) {
+        if (idx.name === "tenantId_1_clientCallId_1" && (!idx.unique || !idx.partialFilterExpression?.clientCallId?.$gt)) {
+          await Call.collection.dropIndex(idx.name).catch(() => {})
+        }
+      }
+      await Call.collection.createIndex(
+        { tenantId: 1, clientCallId: 1 },
+        { unique: true, partialFilterExpression: { clientCallId: { $type: "string", $gt: "" } } }
+      )
+    }
+  } catch (err) {
+    // Non-fatal
+  }
+}
+
+Call.ensureUniqueIndexes = ensureUniqueIndexes
 module.exports = Call

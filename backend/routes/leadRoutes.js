@@ -11,6 +11,7 @@ const {
   assignSingleLead,
   bulkAssignLeads,
   getUnassignedPoolStats,
+  reconcileLeadCalls,
 } = require("../controllers/leadController")
 const { authenticate, checkPermission } = require("../middleware/authMiddleware")
 
@@ -40,6 +41,9 @@ router.get("/:id", checkPermission("leads.view"), getLeadById)
 
 // GET /api/leads/:id/calls - View calls and recordings for lead
 router.get("/:id/calls", checkPermission("leads.view"), getLeadCalls)
+
+// POST /api/leads/:id/reconcile-calls - Manually trigger historical call reconciliation
+router.post("/:id/reconcile-calls", checkPermission("leads.edit"), reconcileLeadCalls)
 
 // POST /api/leads - Create new lead
 router.post("/", checkPermission("leads.create"), createLead)

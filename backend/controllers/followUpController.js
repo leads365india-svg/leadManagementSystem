@@ -21,7 +21,7 @@ const formatFollowUp = (f) => {
   const isOverdue = f.status === "pending" && new Date(f.scheduledAt) < now
   const isToday =
     f.status === "pending" &&
-    new Date(f.scheduledAt) >= startOfToday &&
+    new Date(f.scheduledAt) >= now &&
     new Date(f.scheduledAt) <= endOfToday
 
   const leadObj = f.leadId && typeof f.leadId === "object" ? f.leadId : null
@@ -291,12 +291,12 @@ const getFollowUpStats = async (req, res) => {
 
     const [total, upcoming, overdue, today, completed] = await Promise.all([
       FollowUp.countDocuments(baseQuery),
-      FollowUp.countDocuments({ ...baseQuery, status: "pending", scheduledAt: { $gte: now } }),
+      FollowUp.countDocuments({ ...baseQuery, status: "pending", scheduledAt: { $gt: endOfToday } }),
       FollowUp.countDocuments({ ...baseQuery, status: "pending", scheduledAt: { $lt: now } }),
       FollowUp.countDocuments({
         ...baseQuery,
         status: "pending",
-        scheduledAt: { $gte: startOfToday, $lte: endOfToday },
+        scheduledAt: { $gte: now, $lte: endOfToday },
       }),
       FollowUp.countDocuments({ ...baseQuery, status: "completed" }),
     ])
@@ -419,9 +419,9 @@ const createFollowUp = async (req, res) => {
     }
 
     // Determine target tenant
-    let assignedTenant = effectiveTenantId
+    let assignedTenant = effectiveTenantId || req.user.tenantId
     if (isSuperAdmin) {
-      assignedTenant = bodyTenantId || effectiveTenantId || "default-tenant"
+      assignedTenant = bodyTenantId || effectiveTenantId || req.user.tenantId || "default-tenant"
     } else if (bodyTenantId && bodyTenantId !== effectiveTenantId) {
       res.status(403).json({
         success: false,
@@ -451,6 +451,10 @@ const createFollowUp = async (req, res) => {
         error: "Linked lead not found or does not belong to your account.",
       })
       return
+    }
+
+    if (lead.tenantId) {
+      assignedTenant = lead.tenantId
     }
 
     const leadAccess = await checkDirectObjectAccess(req.user, lead, "leads", "view")
@@ -504,6 +508,73 @@ const createFollowUp = async (req, res) => {
     const defaultAssignedTo = (assignedTo || lead.assignedTo || req.user.name || "Unassigned").trim()
     const defaultAssignedStaffId = req.body.assignedStaffId || (req.user?.role === "agent" ? req.user.id : "unassigned")
 
+    // Deduplication & Idempotency check:
+    // Only call-generated follow-ups (with sourceCallId or explicit idempotencyKey) are deduplicated.
+    // Never deduplicate independent manual reminders using scheduled time alone.
+    let existingFollowUp = null
+    const sourceCallIdTrimmed = typeof req.body.sourceCallId === "string" && req.body.sourceCallId.trim()
+      ? req.body.sourceCallId.trim()
+      : null
+    const idempotencyKeyTrimmed = typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey.trim()
+      ? req.body.idempotencyKey.trim()
+      : null
+
+    if (sourceCallIdTrimmed) {
+      existingFollowUp = await FollowUp.findOne({
+        tenantId: assignedTenant,
+        sourceCallId: sourceCallIdTrimmed,
+      })
+    }
+
+    if (!existingFollowUp && idempotencyKeyTrimmed) {
+      existingFollowUp = await FollowUp.findOne({
+        tenantId: assignedTenant,
+        idempotencyKey: idempotencyKeyTrimmed,
+      })
+    }
+
+    if (existingFollowUp) {
+      // If already completed, preserve completed status and return existing record
+      if (existingFollowUp.status === "completed") {
+        const populated = await FollowUp.findById(existingFollowUp._id)
+          .populate("leadId", "name email phone status metadata source assignedTo")
+          .lean()
+        return res.status(200).json({
+          success: true,
+          data: formatFollowUp(populated),
+          message: "Follow-up was already completed (idempotent)",
+          isDuplicate: true,
+        })
+      }
+
+      // Update/reuse existing pending record instead of inserting another
+      if (title && title.trim()) {
+        existingFollowUp.title = title.trim()
+      }
+      if (typeof notes === "string" && notes.trim() && !existingFollowUp.notes.includes(notes.trim())) {
+        existingFollowUp.notes = existingFollowUp.notes ? `${existingFollowUp.notes}\n${notes.trim()}` : notes.trim()
+      }
+      if (priority) {
+        existingFollowUp.priority = normalizedPriority
+      }
+      if (sourceCallIdTrimmed && !existingFollowUp.sourceCallId) {
+        existingFollowUp.sourceCallId = sourceCallIdTrimmed
+      }
+      existingFollowUp.scheduledAt = scheduledDate
+      await existingFollowUp.save()
+
+      const populated = await FollowUp.findById(existingFollowUp._id)
+        .populate("leadId", "name email phone status metadata source assignedTo")
+        .lean()
+
+      return res.status(200).json({
+        success: true,
+        data: formatFollowUp(populated),
+        message: "Existing follow-up reused and updated (idempotent)",
+        isDuplicate: true,
+      })
+    }
+
     const followUp = new FollowUp({
       leadId: lead._id,
       tenantId: assignedTenant,
@@ -516,9 +587,37 @@ const createFollowUp = async (req, res) => {
       assignedTo: defaultAssignedTo,
       assignedStaffId: defaultAssignedStaffId,
       createdBy: req.user.name || req.user.email || "User",
+      sourceCallId: sourceCallIdTrimmed || null,
+      idempotencyKey: idempotencyKeyTrimmed || null,
     })
 
-    const saved = await followUp.save()
+    let saved
+    try {
+      saved = await followUp.save()
+    } catch (saveErr) {
+      // Concurrency race protection: another request created the follow-up with same unique key
+      if (saveErr.code === 11000 && (sourceCallIdTrimmed || idempotencyKeyTrimmed)) {
+        const raceExisting = await FollowUp.findOne({
+          tenantId: assignedTenant,
+          $or: [
+            ...(sourceCallIdTrimmed ? [{ sourceCallId: sourceCallIdTrimmed }] : []),
+            ...(idempotencyKeyTrimmed ? [{ idempotencyKey: idempotencyKeyTrimmed }] : []),
+          ],
+        })
+        if (raceExisting) {
+          const populated = await FollowUp.findById(raceExisting._id)
+            .populate("leadId", "name email phone status metadata source assignedTo")
+            .lean()
+          return res.status(200).json({
+            success: true,
+            data: formatFollowUp(populated),
+            message: "Existing follow-up returned (concurrency safe)",
+            isDuplicate: true,
+          })
+        }
+      }
+      throw saveErr
+    }
 
     // Update lead metadata tracking
     try {
