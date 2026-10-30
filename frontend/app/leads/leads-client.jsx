@@ -138,7 +138,6 @@ export default function LeadsClient() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
-  const [selectedIds, setSelectedIds] = useState(new Set())
   const [copiedId, setCopiedId] = useState(null)
   const [isFilterOpen, setIsFilterOpen] = useState(false)
 
@@ -321,7 +320,6 @@ export default function LeadsClient() {
       toDate: "",
       limit: 10,
     })
-    setSelectedIds(new Set())
     router.push("/leads")
     toast.success("Filters cleared")
   }
@@ -479,27 +477,8 @@ export default function LeadsClient() {
     }
   }
 
-  // Checkbox Selection
+  // Leads data list
   const allLeadsList = leadsData?.leads || []
-  const allSelected = allLeadsList.length > 0 && selectedIds.size === allLeadsList.length
-
-  const handleSelectAll = () => {
-    if (allSelected) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(allLeadsList.map((l) => l._id || l.id)))
-    }
-  }
-
-  const handleToggleSelect = (id) => {
-    const next = new Set(selectedIds)
-    if (next.has(id)) {
-      next.delete(id)
-    } else {
-      next.add(id)
-    }
-    setSelectedIds(next)
-  }
 
   // Handle Play Recording for Lead table row
   const handlePlayRecording = async (lead) => {
@@ -531,15 +510,25 @@ export default function LeadsClient() {
         return
       }
 
-      // 2. Identify the latest call with an audio recording
-      const playableCall = calls.find(
-        (c) =>
-          c.recording?.status === "stored" ||
-          c.recording?.status === "ready" ||
-          Boolean(c.recording?.fileId) ||
-          Boolean(c.metadata?.recordingUrl) ||
-          Boolean(c.hasRecording)
-      )
+      // 2. Identify the latest call with an audio recording (sorted newest first)
+      const getCallTime = (c) => {
+        const t = c.startTimeMs || c.startedAt || c.createdAt || c.recording?.createdAt || c.metadata?.recordingUploadedAt || c.timestamp
+        return t ? new Date(t).getTime() : 0
+      }
+      const sortedCalls = [...calls].sort((a, b) => getCallTime(b) - getCallTime(a))
+
+      const isPlayable = (c) => {
+        if (!c) return false
+        if (c.recording?.status === "skipped_dnr" || c.recording?.status === "expired" || c.recording?.status === "failed") {
+          return false
+        }
+        const hasGridFsFile = Boolean(c.recording?.mp3FileId || c.recording?.fileId)
+        const hasValidStatus = c.recording?.status === "stored" || c.recording?.status === "ready"
+        const hasLegacyUrl = Boolean(c.metadata?.recordingUrl && (c.metadata?.recordingSizeBytes > 0 || c.recording?.sizeBytes > 0))
+        return (hasGridFsFile && (c.recording?.sizeBytes > 0 || c.recording?.mp3SizeBytes > 0 || hasValidStatus)) || (hasValidStatus && hasLegacyUrl)
+      }
+
+      const playableCall = sortedCalls.find(isPlayable)
 
       if (!playableCall) {
         // Provide informative feedback if recordings were skipped or expired
@@ -612,7 +601,7 @@ export default function LeadsClient() {
 
   return (
     <>
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-5 space-y-5 animate-in fade-in duration-200">
+      <div className="w-full max-w-full min-w-0 overflow-x-hidden px-4 sm:px-6 lg:px-8 py-5 space-y-5 animate-in fade-in duration-200">
       {/* =========================================================================
           PAGE HEADER & PRIMARY ACTIONS
       ========================================================================= */}
@@ -650,13 +639,13 @@ export default function LeadsClient() {
             className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Add Lead</span>
+            <span>Add Lead</span>
           </Link>
         </div>
       </div>
 
       {/* =========================================================================
-          STATUS QUICK NAVIGATION TAB BAR (Real Counts from MongoDB Atlas)
+          STATUS QUICK NAVIGATION TAB BAR (Clean White & Light-Blue Palette)
       ========================================================================= */}
       <div className="flex items-center space-x-1 overflow-x-auto pb-1 scrollbar-none border-b border-slate-200">
         {statusTabs.map((tab) => {
@@ -666,13 +655,18 @@ export default function LeadsClient() {
               key={tab.key}
               type="button"
               onClick={() => handleStatusTabClick(tab.key)}
-              className={`inline-flex items-center space-x-2 px-3.5 py-2 text-xs font-medium rounded-t-lg transition-all cursor-pointer whitespace-nowrap border-b-2 ${
+              className={`inline-flex items-center px-3.5 py-2 text-xs font-medium rounded-t-lg transition-colors cursor-pointer whitespace-nowrap border-b-2 focus:outline-none focus:ring-1 focus:ring-blue-400 ${
                 isActive
-                  ? "border-indigo-600 text-indigo-600 bg-indigo-50/50 font-bold"
-                  : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                  ? "bg-blue-50/80 text-blue-700 border-blue-600 font-semibold"
+                  : "bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border-transparent"
               }`}
             >
               <span>{tab.label}</span>
+              {tab.key === "New" && (
+                <span className="ml-1.5 px-1.5 py-0.5 text-[11px] font-bold rounded-full bg-blue-100 text-blue-700 border border-blue-200/80 leading-none">
+                  {tab.count}
+                </span>
+              )}
             </button>
           )
         })}
@@ -894,35 +888,13 @@ export default function LeadsClient() {
       </div>
 
       {/* =========================================================================
-          BATCH ACTIONS BAR (Displays when items are checked)
-      ========================================================================= */}
-      {selectedIds.size > 0 && (
-        <div className="bg-indigo-50 border border-indigo-200 px-4 py-2.5 rounded-xl flex items-center justify-between text-xs text-indigo-900 shadow-2xs animate-in fade-in">
-          <div className="flex items-center space-x-2">
-            <span className="font-bold">{selectedIds.size}</span>
-            <span>{selectedIds.size === 1 ? "lead" : "leads"} selected</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={() => setSelectedIds(new Set())}
-              className="px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100/70 rounded transition-colors cursor-pointer"
-            >
-              Deselect All
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
           LEADS DATA TABLE
       ========================================================================= */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden max-w-full">
         {/* Table Summary Bar */}
         <div className="px-4 py-3 bg-slate-50/60 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
-          <div className="text-slate-600 font-medium">
-            Showing <strong className="text-slate-900 font-bold">{totalLeads === 0 ? "0" : `${startRecord}–${endRecord}`}</strong> of{" "}
-            <strong className="text-slate-900 font-bold">{totalLeads}</strong> leads
+          <div className="text-slate-700 font-semibold text-xs">
+            All Leads: <span className="font-bold text-slate-900">{totalLeads}</span>
           </div>
 
           <div className="flex items-center space-x-2">
@@ -955,20 +927,10 @@ export default function LeadsClient() {
         </div>
 
         {/* Table Content */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+        <div className="overflow-x-auto w-full">
+          <table className="w-full text-left border-collapse text-xs min-w-[760px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
-                <th className="py-3 px-4 w-10 text-center">
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={handleSelectAll}
-                    disabled={allLeadsList.length === 0}
-                    aria-label="Select all leads on current page"
-                    className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer disabled:opacity-40"
-                  />
-                </th>
                 <th className="py-3 px-4 cursor-pointer hover:text-slate-900" onClick={() => handleSort("name")}>
                   <div className="flex items-center space-x-1">
                     <span>Name</span>
@@ -993,7 +955,7 @@ export default function LeadsClient() {
               {loading ? (
                 /* Loading State Rows */
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-500">
+                  <td colSpan={7} className="py-16 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center space-y-3">
                       <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
                       <p className="text-xs font-medium text-slate-600">Loading leads database from Atlas...</p>
@@ -1003,7 +965,7 @@ export default function LeadsClient() {
               ) : error ? (
                 /* Error State Row */
                 <tr>
-                  <td colSpan={8} className="py-12 text-center">
+                  <td colSpan={7} className="py-12 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2 text-rose-600">
                       <AlertCircle className="w-8 h-8" />
                       <p className="font-semibold text-xs">{error}</p>
@@ -1020,7 +982,7 @@ export default function LeadsClient() {
               ) : allLeadsList.length === 0 ? (
                 /* Empty State */
                 <tr>
-                  <td colSpan={8} className="py-16 sm:py-20 text-center">
+                  <td colSpan={7} className="py-16 sm:py-20 text-center">
                     <div className="max-w-md mx-auto px-4 flex flex-col items-center justify-center animate-in fade-in duration-200">
                       <div className="w-16 h-16 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 mb-4 shadow-2xs">
                         <Users className="w-8 h-8 stroke-[1.8]" />
@@ -1053,7 +1015,7 @@ export default function LeadsClient() {
                           className="inline-flex items-center space-x-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
                         >
                           <Plus className="w-4 h-4" />
-                          <span>+ Add Your First Lead</span>
+                          <span>Add Your First Lead</span>
                         </Link>
                       </div>
                     </div>
@@ -1069,25 +1031,12 @@ export default function LeadsClient() {
                     dotColor: "bg-slate-400",
                     badgeClasses: "bg-slate-50 text-slate-700 border-slate-200",
                   }
-                  const isChecked = selectedIds.has(leadIdStr)
 
                   return (
                     <tr
                       key={leadIdStr}
-                      className={`hover:bg-slate-50/80 transition-colors ${
-                        isChecked ? "bg-indigo-50/30" : ""
-                      }`}
+                      className="hover:bg-slate-50/80 transition-colors"
                     >
-                      {/* 1. Checkbox */}
-                      <td className="py-3 px-4 text-center">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => handleToggleSelect(leadIdStr)}
-                          className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
-                          aria-label={`Select lead ${lead.name}`}
-                        />
-                      </td>
 
 
 

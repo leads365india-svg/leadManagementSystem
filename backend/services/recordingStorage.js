@@ -1,17 +1,24 @@
 const mongoose = require("mongoose")
 const crypto = require("crypto")
+const fs = require("fs")
+const path = require("path")
+const os = require("os")
 const Call = require("../models/Call")
 const Lead = require("../models/Lead")
 const audit = require("./auditService")
+const audioConverter = require("./audioConverter")
+const mediaStorage = require("./mediaStorage.service")
 
 /**
- * Recording Storage Service - Roadmap Phase 16: Complete GridFS Recording Storage
+ * Recording Storage Service - Roadmap Phase 16 & MP3 Conversion Pipeline
  * 
  * Provides:
- * 1. Streamed GridFS upload for CRM lead calls only (no in-memory buffering).
- * 2. Strict tenant, agent ownership, and Do-Not-Record (DNR) checks.
- * 3. Range-request HTTP streaming (seeking support) with RBAC authorization.
- * 4. 30-day automated purge removing both GridFS files and chunks while preserving Call history.
+ * 1. Streamed GridFS upload for CRM lead calls with original file preservation.
+ * 2. Automated server-side conversion of unsupported formats (M4A, AMR, 3GP, WAV, AAC) to MP3 (128 kbps, 44.1 kHz).
+ * 3. Accurate duration extraction via FFmpeg/probe.
+ * 4. Strict tenant isolation, agent ownership, and Do-Not-Record (DNR) checks.
+ * 5. Range-request HTTP streaming (seeking support) with 206 Partial Content and audio/mpeg MIME.
+ * 6. Automated purge removing both original and converted GridFS files and chunks.
  */
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -26,6 +33,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "audio/x-wav",
   "audio/3gpp",
   "audio/3gp",
+  "application/octet-stream",
 ])
 
 const DEFAULT_RETENTION_DAYS = parseInt(process.env.RECORDING_RETENTION_DAYS, 10) || 30
@@ -143,25 +151,213 @@ async function validateUploadEligibility({ callId, tenantId, user, allowUnmatche
 }
 
 /**
+ * Downloads audio file from GridFS to a temp file, validates it, and converts it to MP3 if necessary.
+ */
+async function processAndConvertGridFSRecording({
+  call,
+  bucket,
+  originalFileId,
+  tenantId,
+  cleanMime,
+  bytesWritten,
+  computedSha256,
+  expiresAt,
+}) {
+  const tempInputPath = path.join(os.tmpdir(), `orig_${call._id}_${Date.now()}.bin`)
+  let tempOutputPath = null
+
+  try {
+    // 1. Download original file from GridFS to temp file
+    const downloadStream = bucket.openDownloadStream(originalFileId)
+    const writeStream = fs.createWriteStream(tempInputPath)
+
+    await new Promise((resolve, reject) => {
+      downloadStream.pipe(writeStream)
+      writeStream.on("finish", resolve)
+      writeStream.on("error", reject)
+      downloadStream.on("error", reject)
+    })
+
+    // 2. Probe audio with FFmpeg
+    const probe = await audioConverter.probeAudio(tempInputPath)
+
+    if (!probe.isValid) {
+      call.recording = call.recording || {}
+      call.recording.fileId = originalFileId
+      call.recording.sizeBytes = bytesWritten
+      call.recording.sha256 = computedSha256
+      call.recording.status = "stored"
+      call.recording.expiresAt = expiresAt
+      call.recording.conversionStatus = "failed"
+      call.recording.codec = probe.codec || "unknown"
+      call.recording.format = probe.format || "unknown"
+      call.recording.duration = 0
+      call.markModified("recording")
+      await call.save()
+      return { conversionStatus: "failed", duration: 0 }
+    }
+
+    const duration = probe.duration || 0
+    call.recording = call.recording || {}
+    call.recording.fileId = originalFileId
+    call.recording.sizeBytes = bytesWritten
+    call.recording.sha256 = computedSha256
+    call.recording.status = "stored"
+    call.recording.expiresAt = expiresAt
+    call.recording.duration = duration
+    call.recording.codec = probe.codec
+    call.recording.format = probe.format
+
+    if (duration > 0) {
+      call.duration = Math.round(duration)
+    }
+
+    // 3. Determine if transcoding to MP3 is required
+    if (probe.isMp3) {
+      // Input is already a browser-compatible MP3 file
+      call.recording.mp3FileId = originalFileId
+      call.recording.mp3SizeBytes = bytesWritten
+      call.recording.mp3Sha256 = computedSha256
+      call.recording.conversionStatus = "not_needed"
+      call.recording.format = "mp3"
+      call.recording.codec = "mp3"
+    } else {
+      // Transcode unsupported format (M4A, AMR, 3GP, WAV, AAC) to MP3 (128 kbps, 44.1 kHz)
+      const convResult = await audioConverter.convertToMp3(tempInputPath)
+      tempOutputPath = convResult.outputPath
+
+      const mp3Filename = `call_${call._id}_${Date.now()}.mp3`
+      const mp3UploadStream = bucket.openUploadStream(mp3Filename, {
+        contentType: "audio/mpeg",
+        metadata: {
+          tenantId,
+          callId: call._id,
+          leadId: call.leadId,
+          agentId: call.agentId,
+          mimeType: "audio/mpeg",
+          isConverted: true,
+          originalFileId,
+          duration: convResult.duration,
+          expiresAt,
+        },
+      })
+
+      const mp3ReadStream = fs.createReadStream(tempOutputPath)
+      await new Promise((resolve, reject) => {
+        mp3ReadStream.pipe(mp3UploadStream)
+        mp3UploadStream.on("finish", resolve)
+        mp3UploadStream.on("error", reject)
+        mp3ReadStream.on("error", reject)
+      })
+
+      call.recording.mp3FileId = mp3UploadStream.id
+      call.recording.mp3SizeBytes = convResult.sizeBytes
+      call.recording.mp3Sha256 = convResult.sha256
+      call.recording.conversionStatus = "completed"
+      call.recording.duration = convResult.duration || duration
+      call.recording.format = "mp3"
+      call.recording.codec = "mp3"
+    }
+
+
+    // 3b. Upload to ImageKit if configured
+    if (mediaStorage.isImageKitConfigured()) {
+      try {
+        const origExt = probe.format || "bin"
+        const origResult = await mediaStorage.uploadFile({
+          file: fs.createReadStream(tempInputPath),
+          fileName: `call_${call._id}_orig.${origExt}`,
+          tenantId,
+          category: "recordings",
+          mimeType: cleanMime,
+          tags: ["recording", "original", String(call._id)],
+          customMetadata: {
+            callId: String(call._id),
+            tenantId,
+            duration: String(duration),
+            codec: probe.codec || "unknown",
+          },
+        })
+
+        call.recording.imagekitFileId = origResult.fileId
+        call.recording.imagekitUrl = origResult.url
+        call.recording.imagekitPath = origResult.filePath
+
+        if (probe.isMp3) {
+          call.recording.imagekitMp3FileId = origResult.fileId
+          call.recording.imagekitMp3Url = origResult.url
+          call.recording.provider = "imagekit"
+        } else if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+          const mp3Result = await mediaStorage.uploadFile({
+            file: fs.createReadStream(tempOutputPath),
+            fileName: `call_${call._id}.mp3`,
+            tenantId,
+            category: "recordings",
+            mimeType: "audio/mpeg",
+            tags: ["recording", "mp3", String(call._id)],
+            customMetadata: {
+              callId: String(call._id),
+              tenantId,
+              duration: String(call.recording.duration),
+              isConverted: "true",
+            },
+          })
+
+          call.recording.imagekitMp3FileId = mp3Result.fileId
+          call.recording.imagekitMp3Url = mp3Result.url
+          call.recording.provider = "imagekit"
+        }
+      } catch (ikErr) {
+        console.warn(`[RecordingStorage] ImageKit cloud upload notice for call ${call._id}:`, ikErr.message)
+      }
+    }
+
+    // 4. Update compatible metadata for frontend
+    call.metadata = call.metadata || {}
+    call.metadata.recordingUrl = `/api/calls/${call._id}/recording`
+    call.metadata.recordingMp3Url = `/api/calls/${call._id}/recording?format=mp3`
+    call.metadata.recordingMimeType = "audio/mpeg"
+    call.metadata.recordingSha256 = call.recording.mp3Sha256 || computedSha256
+    call.metadata.recordingSizeBytes = call.recording.mp3SizeBytes || bytesWritten
+    call.metadata.recordingUploadedAt = Date.now()
+    call.metadata.duration = call.recording.duration
+    call.hasRecording = true
+
+    call.markModified("metadata")
+    call.markModified("recording")
+    await call.save()
+
+    return {
+      conversionStatus: call.recording.conversionStatus,
+      duration: call.recording.duration,
+      mp3FileId: call.recording.mp3FileId,
+      sizeBytes: call.recording.mp3SizeBytes || bytesWritten,
+    }
+  } finally {
+    // Safe cleanup of all temporary files
+    if (fs.existsSync(tempInputPath)) {
+      try {
+        fs.unlinkSync(tempInputPath)
+      } catch (_) {}
+    }
+    if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+      try {
+        fs.unlinkSync(tempOutputPath)
+      } catch (_) {}
+    }
+  }
+}
+
+/**
  * Streams audio upload directly into GridFS without in-memory buffering.
- * 
- * @param {Object} options
- * @param {string} options.callId
- * @param {string} options.tenantId
- * @param {Object} options.user
- * @param {ReadableStream} options.readStream
- * @param {string} options.mimeType
- * @param {string} [options.filename]
- * @param {number} [options.contentLength]
- * @param {string} [options.expectedSha256]
- * @param {number} [options.retentionDays]
- * @param {boolean} [options.allowUnmatchedReview]
+ * Automatically runs server-side MP3 conversion and duration extraction.
  */
 async function streamUpload({
   callId,
   tenantId,
   user,
-  readStream,
+  readStream: inputReadStream,
+  stream: inputStream,
   mimeType = "audio/mp4",
   filename = null,
   contentLength = 0,
@@ -170,7 +366,8 @@ async function streamUpload({
   allowUnmatchedReview = false,
 }) {
   // Validate eligibility before reading any audio stream
-  const { call, lead } = await validateUploadEligibility({ callId, tenantId, user, allowUnmatchedReview })
+  const readStream = inputReadStream || inputStream
+  const { call } = await validateUploadEligibility({ callId, tenantId, user, allowUnmatchedReview })
 
   // Clean and validate mimeType
   const cleanMime = (mimeType || "audio/mp4").split(";")[0].trim().toLowerCase()
@@ -195,9 +392,10 @@ async function streamUpload({
         success: true,
         message: "Recording already uploaded (idempotent submission)",
         fileId: existingFile._id,
-        sizeBytes: existingFile.length,
-        sha256: existingFile.metadata?.sha256 || call.recording.sha256,
+        sizeBytes: call.recording.mp3SizeBytes || existingFile.length,
+        sha256: call.recording.mp3Sha256 || existingFile.metadata?.sha256 || call.recording.sha256,
         status: "stored",
+        duration: call.recording.duration || 0,
         expiresAt: existingFile.metadata?.expiresAt || call.recording.expiresAt,
         isDuplicate: true,
       }
@@ -210,7 +408,7 @@ async function streamUpload({
   const safeFilename = filename || `call_${call._id}_${Date.now()}.m4a`
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000)
 
-  // Open upload stream to GridFS
+  // Open upload stream to GridFS for original audio
   const uploadStream = bucket.openUploadStream(safeFilename, {
     contentType: cleanMime,
     metadata: {
@@ -272,31 +470,48 @@ async function streamUpload({
           return cleanupAndReject(err)
         }
 
-        // Update file metadata with computed SHA-256
+        // Update original file metadata in recordings.files
         const db = mongoose.connection.db
         await db.collection("recordings.files").updateOne(
           { _id: uploadStream.id },
           { $set: { "metadata.sha256": computedSha256, "metadata.bytes": bytesWritten } }
         )
 
-        // Update Call document with canonical recording reference and compatible metadata
-        call.hasRecording = true
-        call.recording = {
-          fileId: uploadStream.id,
-          sizeBytes: bytesWritten,
-          sha256: computedSha256,
-          status: "stored",
-          expiresAt,
+        // Run MP3 conversion and duration extraction
+        let conversionResult = null
+        try {
+          conversionResult = await processAndConvertGridFSRecording({
+            call,
+            bucket,
+            originalFileId: uploadStream.id,
+            tenantId,
+            cleanMime,
+            bytesWritten,
+            computedSha256,
+            expiresAt,
+          })
+        } catch (convErr) {
+          console.warn("[RecordingStorage] Post-upload conversion warning:", convErr.message)
+          // Fallback: Ensure basic stored status and metadata are set even if conversion failed
+          call.hasRecording = true
+          call.recording = {
+            fileId: uploadStream.id,
+            sizeBytes: bytesWritten,
+            sha256: computedSha256,
+            status: "stored",
+            expiresAt,
+            conversionStatus: "failed",
+          }
+          call.metadata = call.metadata || {}
+          call.metadata.recordingUrl = `/api/calls/${call._id}/recording`
+          call.metadata.recordingSha256 = computedSha256
+          call.metadata.recordingSizeBytes = bytesWritten
+          call.metadata.recordingMimeType = cleanMime
+          call.metadata.recordingUploadedAt = Date.now()
+          call.markModified("metadata")
+          call.markModified("recording")
+          await call.save().catch(() => {})
         }
-        call.metadata = call.metadata || {}
-        call.metadata.recordingUrl = `/api/calls/${call._id}/recording`
-        call.metadata.recordingSha256 = computedSha256
-        call.metadata.recordingSizeBytes = bytesWritten
-        call.metadata.recordingMimeType = cleanMime
-        call.metadata.recordingUploadedAt = Date.now()
-        call.markModified("metadata")
-        call.markModified("recording")
-        await call.save()
 
         // Audit log recording upload
         if (audit && typeof audit.log === "function") {
@@ -306,13 +521,16 @@ async function streamUpload({
             category: "recordings",
             entity: "Call",
             entityId: call._id,
-            summary: `Uploaded call recording (${bytesWritten} bytes)`,
+            summary: `Uploaded call recording (${bytesWritten} bytes, duration: ${call.recording?.duration || 0}s)`,
             actor: user || { _id: call.agentId, name: "Mobile Agent", role: "agent" },
             target: { type: "Call", id: call._id },
             details: {
               fileId: uploadStream.id,
+              mp3FileId: call.recording?.mp3FileId,
               bytes: bytesWritten,
               sha256: computedSha256,
+              duration: call.recording?.duration || 0,
+              conversionStatus: call.recording?.conversionStatus,
               leadId: call.leadId,
               expiresAt,
             },
@@ -323,9 +541,12 @@ async function streamUpload({
           success: true,
           message: "Recording uploaded and stored successfully",
           fileId: uploadStream.id,
-          sizeBytes: bytesWritten,
-          sha256: computedSha256,
+          mp3FileId: call.recording?.mp3FileId || uploadStream.id,
+          sizeBytes: call.recording?.mp3SizeBytes || bytesWritten,
+          sha256: call.recording?.mp3Sha256 || computedSha256,
+          duration: call.recording?.duration || 0,
           status: "stored",
+          conversionStatus: call.recording?.conversionStatus || "completed",
           expiresAt,
           isDuplicate: false,
         })
@@ -340,8 +561,84 @@ async function streamUpload({
 
 /**
  * Handles secure streaming playback from GridFS with HTTP Range support.
+ * Serves converted MP3 (audio/mpeg) by default for guaranteed cross-browser compatibility.
  */
-async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
+/**
+ * Streams audio from a remote URL (such as ImageKit CDN) with HTTP Range support for seeking.
+ */
+function streamFromRemoteUrl({ url, rangeHeader, res, mimeType, expectedSize, auditDetails }) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url)
+    const clientModule = parsedUrl.protocol === "https:" ? require("https") : require("http")
+
+    const headers = {}
+    if (rangeHeader) {
+      headers["Range"] = rangeHeader
+    }
+
+    const request = clientModule.get(url, { headers }, (remoteRes) => {
+      // Follow 3xx redirect if any
+      if (remoteRes.statusCode >= 300 && remoteRes.statusCode < 400 && remoteRes.headers.location) {
+        return streamFromRemoteUrl({
+          url: remoteRes.headers.location,
+          rangeHeader,
+          res,
+          mimeType,
+          expectedSize,
+          auditDetails,
+        }).then(resolve).catch(reject)
+      }
+
+      if (remoteRes.statusCode >= 400) {
+        return reject(new Error(`Remote storage returned HTTP status ${remoteRes.statusCode}`))
+      }
+
+      const statusCode = remoteRes.statusCode || 200
+      const responseHeaders = {
+        "Content-Type": remoteRes.headers["content-type"] || mimeType || "audio/mpeg",
+        "Accept-Ranges": "bytes",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+      }
+
+      if (remoteRes.headers["content-length"]) {
+        responseHeaders["Content-Length"] = remoteRes.headers["content-length"]
+      } else if (expectedSize && statusCode === 200) {
+        responseHeaders["Content-Length"] = expectedSize
+      }
+
+      if (remoteRes.headers["content-range"]) {
+        responseHeaders["Content-Range"] = remoteRes.headers["content-range"]
+      }
+
+      // Audit playback action
+      if (audit && typeof audit.log === "function" && auditDetails) {
+        audit.log({
+          tenantId: auditDetails.tenantId,
+          action: "recording.listen",
+          category: "recordings",
+          entity: "Call",
+          entityId: auditDetails.callId,
+          actor: auditDetails.user || { _id: "system", name: "Authenticated User", role: "agent" },
+          target: { type: "Call", id: auditDetails.callId },
+          details: {
+            storageProvider: "imagekit",
+            range: rangeHeader || "all",
+          },
+        }).catch(() => {})
+      }
+
+      res.writeHead(statusCode, responseHeaders)
+      remoteRes.pipe(res)
+      remoteRes.on("end", resolve)
+      remoteRes.on("error", reject)
+    })
+
+    request.on("error", reject)
+  })
+}
+
+async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query = {} }) {
   if (!callId) {
     return res.status(400).json({ success: false, error: "Call ID parameter is required" })
   }
@@ -418,21 +715,128 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     }
   }
 
-  // 5. GridFS Primary Storage Playback
-  let file = null
-  let bucket = null
-  if (call.recording?.fileId && call.recording.status === "stored") {
+  const bucket = getBucket()
+  let fileToStream = null
+  let mimeType = "audio/mpeg"
+
+  // 5a. Check if ImageKit storage is available for this call
+  const wantsOriginal = query && query.format === "original"
+  const wantsSignedUrl = query && (query.signedUrl === "true" || query.redirect === "true")
+
+  const imagekitTargetUrl = wantsOriginal
+    ? (call.recording?.imagekitUrl || call.recording?.imagekitMp3Url)
+    : (call.recording?.imagekitMp3Url || call.recording?.imagekitUrl)
+
+  if (imagekitTargetUrl && mediaStorage.isImageKitConfigured()) {
+    if (wantsSignedUrl) {
+      const signedUrl = mediaStorage.generatePrivateFileUrl({
+        url: imagekitTargetUrl,
+        expireSeconds: 300,
+      })
+      if (query.redirect === "true") {
+        return res.redirect(302, signedUrl)
+      }
+      return res.status(200).json({
+        success: true,
+        url: signedUrl,
+        duration: call.recording?.duration || 0,
+        format: "mp3",
+      })
+    }
+
     try {
-      bucket = getBucket()
-      file = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": effectiveTenantId }).next()
-    } catch (bucketErr) {
-      console.warn("[RecordingStorage Playback] GridFS lookup error:", bucketErr.message)
+      const signedStreamUrl = mediaStorage.generatePrivateFileUrl({
+        url: imagekitTargetUrl,
+        expireSeconds: 300,
+      })
+      await streamFromRemoteUrl({
+        url: signedStreamUrl,
+        rangeHeader,
+        res,
+        mimeType: wantsOriginal ? (call.recording?.format || "audio/mp4") : "audio/mpeg",
+        expectedSize: wantsOriginal ? call.recording?.sizeBytes : (call.recording?.mp3SizeBytes || call.recording?.sizeBytes),
+        auditDetails: { tenantId: effectiveTenantId, callId: call._id, user },
+      })
+      return
+    } catch (ikStreamErr) {
+      console.warn(`[RecordingStorage Playback] ImageKit stream notice for call ${call._id}: ${ikStreamErr.message}. Falling back to GridFS.`)
     }
   }
 
-  if (file && file.length > 0) {
-    const totalLength = file.length
-    const mimeType = file.contentType || file.metadata?.mimeType || "audio/m4a"
+
+  // 5b. GridFS file selection (MP3 vs original source)
+
+  if (wantsOriginal && call.recording?.fileId) {
+    // Client explicitly asked for original unconverted format (e.g. download)
+    try {
+      fileToStream = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": effectiveTenantId }).next()
+      if (fileToStream) {
+        mimeType = fileToStream.contentType || fileToStream.metadata?.mimeType || "audio/m4a"
+      }
+    } catch (_) {}
+  } else if (call.recording?.mp3FileId) {
+    // Converted MP3 is available
+    try {
+      fileToStream = await bucket.find({ _id: call.recording.mp3FileId, "metadata.tenantId": effectiveTenantId }).next()
+      mimeType = "audio/mpeg"
+    } catch (_) {}
+  }
+
+  // If MP3 file not found or not yet converted, check original file in GridFS
+  if (!fileToStream && call.recording?.fileId) {
+    try {
+      const origFile = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": effectiveTenantId }).next()
+      if (origFile && origFile.length > 0) {
+        const isAlreadyMp3 = origFile.contentType === "audio/mpeg" || origFile.contentType === "audio/mp3"
+        if (isAlreadyMp3) {
+          fileToStream = origFile
+          mimeType = "audio/mpeg"
+          call.recording.mp3FileId = origFile._id
+          call.recording.conversionStatus = "not_needed"
+          await call.save().catch(() => {})
+        } else {
+          // Perform on-the-fly conversion with de-duplication
+          let convertedMp3 = null
+          try {
+            await audioConverter.runDeduplicatedConversion(`convert_${call._id}`, async () => {
+              await processAndConvertGridFSRecording({
+                call,
+                bucket,
+                originalFileId: origFile._id,
+                tenantId: effectiveTenantId,
+                cleanMime: origFile.contentType || "audio/mp4",
+                bytesWritten: origFile.length,
+                computedSha256: origFile.metadata?.sha256 || call.recording.sha256,
+                expiresAt: origFile.metadata?.expiresAt || call.recording.expiresAt,
+              })
+            })
+            // Re-fetch converted MP3
+            if (call.recording?.mp3FileId) {
+              convertedMp3 = await bucket.find({ _id: call.recording.mp3FileId, "metadata.tenantId": effectiveTenantId }).next()
+            }
+          } catch (convErr) {
+            console.warn(`[RecordingStorage] On-the-fly conversion notice for call ${call._id}:`, convErr.message)
+          }
+
+          if (convertedMp3) {
+            fileToStream = convertedMp3
+            mimeType = "audio/mpeg"
+          } else {
+            // Fall back to original file if conversion was not completed (e.g. test dummy payloads)
+            fileToStream = origFile
+            mimeType = origFile.contentType || origFile.metadata?.mimeType || "audio/mp4"
+          }
+        }
+      }
+    } catch (lookupErr) {
+      console.warn("[RecordingStorage Playback] GridFS lookup error:", lookupErr.message)
+    }
+  }
+
+  // 6. Serve from GridFS
+  if (fileToStream && fileToStream.length > 0) {
+    const totalLength = fileToStream.length
+    const streamMime = mimeType || fileToStream.contentType || "audio/mpeg"
 
     // Audit playback action
     if (audit && typeof audit.log === "function") {
@@ -442,10 +846,10 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
         category: "recordings",
         entity: "Call",
         entityId: call._id,
-        summary: `Streamed playback for Call ${call._id}`,
+        summary: `Streamed playback for Call ${call._id} (${streamMime})`,
         actor: user,
         target: { type: "Call", id: call._id },
-        details: { fileId: file._id, duration: call.duration },
+        details: { fileId: fileToStream._id, duration: call.duration },
       }).catch(() => {})
     }
 
@@ -464,12 +868,12 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
         "Content-Range": `bytes ${start}-${end}/${totalLength}`,
         "Accept-Ranges": "bytes",
         "Content-Length": chunksize,
-        "Content-Type": mimeType,
+        "Content-Type": streamMime,
         "Cross-Origin-Resource-Policy": "cross-origin",
         "Cache-Control": "private, no-cache, no-store, must-revalidate",
       })
 
-      const downloadStream = bucket.openDownloadStream(file._id, {
+      const downloadStream = bucket.openDownloadStream(fileToStream._id, {
         start,
         end: end + 1,
       })
@@ -477,28 +881,25 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
     } else {
       res.writeHead(200, {
         "Content-Length": totalLength,
-        "Content-Type": mimeType,
+        "Content-Type": streamMime,
         "Accept-Ranges": "bytes",
         "Cross-Origin-Resource-Policy": "cross-origin",
         "Cache-Control": "private, no-cache, no-store, must-revalidate",
       })
 
-      const downloadStream = bucket.openDownloadStream(file._id)
+      const downloadStream = bucket.openDownloadStream(fileToStream._id)
       return downloadStream.pipe(res)
     }
   }
 
-  // 6. Backward Compatibility: Fallback to local filesystem if legacy file exists
+  // 7. Backward Compatibility: Fallback to local filesystem if legacy file exists
   const rawPath = call.metadata?.recordingUrl || call.recordingUrl
   if (rawPath) {
-    const path = require("path")
-    const fs = require("fs")
     const safeTenantId = (effectiveTenantId || "default").replace(/[^a-zA-Z0-9_-]/g, "")
     const fileName = path.basename(rawPath)
     const baseUploadDir = path.resolve(__dirname, "../uploads/recordings")
     const resolvedPath = path.resolve(baseUploadDir, safeTenantId, fileName)
 
-    // Security: Strict path traversal prevention ensuring path stays within uploads directory
     if (resolvedPath.startsWith(baseUploadDir) && fs.existsSync(resolvedPath)) {
       const stats = fs.statSync(resolvedPath)
       if (stats.size > 0) {
@@ -508,7 +909,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
             { headers: { range: rangeHeader } },
             res,
             resolvedPath,
-            call.metadata?.recordingMimeType
+            call.metadata?.recordingMimeType || "audio/mpeg"
           )
         }
       }
@@ -546,19 +947,13 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res }) {
 
 /**
  * Purges recordings older than retentionDays (default 30 days).
- * Completely deletes both GridFS file documents AND their binary chunks,
- * while preserving the Call log, notes, and timeline.
- * 
- * @param {Object} options
- * @param {string} [options.tenantId] - Optional specific tenant or null for all
- * @param {number} [options.retentionDays] - Retention window in days
+ * Completely deletes both original and converted GridFS files and chunks.
  */
 async function purgeExpiredRecordings({ tenantId = null, retentionDays = DEFAULT_RETENTION_DAYS } = {}) {
   const bucket = getBucket()
   const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
   const now = new Date()
 
-  // Find eligible expired calls
   const callQuery = {
     "recording.status": "stored",
     $or: [
@@ -580,55 +975,47 @@ async function purgeExpiredRecordings({ tenantId = null, retentionDays = DEFAULT
 
   for (const call of expiredCalls) {
     const fileId = call.recording?.fileId
+    const mp3FileId = call.recording?.mp3FileId
+
     if (fileId) {
       try {
-        // bucket.delete deletes the file document in recordings.files AND all binary chunks in recordings.chunks
         await bucket.delete(fileId)
         purgedFileIds.push(fileId.toString())
-      } catch (delErr) {
-        // If file already deleted or missing from GridFS, proceed safely
-        console.warn(`[Purge] GridFS delete notice for ${fileId}:`, delErr.message)
+      } catch (err) {
+        console.warn(`[Purge] Could not delete original GridFS file ${fileId}:`, err.message)
       }
     }
 
-    // Preserve call record, update recording status to expired
-    call.recording.status = "expired"
-    call.recording.fileId = null
+    if (mp3FileId && mp3FileId.toString() !== fileId?.toString()) {
+      try {
+        await bucket.delete(mp3FileId)
+        purgedFileIds.push(mp3FileId.toString())
+      } catch (err) {
+        console.warn(`[Purge] Could not delete converted MP3 GridFS file ${mp3FileId}:`, err.message)
+      }
+    }
+
+    call.hasRecording = false
+    call.recording = {
+      fileId: null,
+      mp3FileId: null,
+      sizeBytes: 0,
+      mp3SizeBytes: 0,
+      sha256: "",
+      mp3Sha256: "",
+      status: "expired",
+      conversionStatus: "not_needed",
+      expiresAt: null,
+    }
     await call.save()
     purgedCount++
-  }
-
-  // Also sweep any orphaned recordings.files in GridFS whose expiresAt has passed
-  try {
-    const db = mongoose.connection.db
-    if (db) {
-      const fileQuery = {
-        $or: [
-          { "metadata.expiresAt": { $lte: now } },
-          { uploadDate: { $lte: cutoffDate } },
-        ],
-      }
-      if (tenantId && tenantId !== "__all__" && tenantId !== "__system__") {
-        fileQuery["metadata.tenantId"] = tenantId
-      }
-
-      const orphanedFiles = await db.collection("recordings.files").find(fileQuery).project({ _id: 1 }).toArray()
-      for (const orphan of orphanedFiles) {
-        try {
-          await bucket.delete(orphan._id)
-          purgedCount++
-        } catch (_) {}
-      }
-    }
-  } catch (orphanErr) {
-    console.warn("[Purge] Orphaned file sweep notice:", orphanErr.message)
   }
 
   return {
     purgedCount,
     purgedFileIds,
-    cutoffDate,
     retentionDays,
+    cutoffDate,
   }
 }
 
@@ -738,6 +1125,7 @@ module.exports = {
   getBucket,
   ensureGridFSIndexes,
   validateUploadEligibility,
+  processAndConvertGridFSRecording,
   streamUpload,
   streamPlayback,
   purgeExpiredRecordings,

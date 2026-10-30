@@ -1452,6 +1452,7 @@ const streamCallRecording = async (req, res) => {
       user,
       rangeHeader: req.headers.range,
       res,
+      query: req.query,
     })
   } catch (error) {
     console.error("Error in streamCallRecording:", error.message)

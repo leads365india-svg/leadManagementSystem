@@ -427,6 +427,7 @@ const playCallRecording = async (req, res) => {
       user,
       rangeHeader,
       res,
+      query: req.query,
     })
   } catch (err) {
     console.error("[CallController Playback Error]:", err.message)

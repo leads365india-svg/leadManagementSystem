@@ -21,7 +21,7 @@ import {
  * Format seconds into mm:ss display
  */
 function formatTime(seconds) {
-  if (isNaN(seconds) || seconds < 0) return "0:00"
+  if (isNaN(seconds) || seconds < 0 || !isFinite(seconds)) return "0:00"
   const mins = Math.floor(seconds / 60)
   const secs = Math.floor(seconds % 60)
   return `${mins}:${secs < 10 ? "0" : ""}${secs}`
@@ -30,6 +30,7 @@ function formatTime(seconds) {
 /**
  * InBrowserAudioPlayer
  * Roadmap Phase 19: Embedded authenticated GridFS audio streaming playback with seeking.
+ * Supports converted MP3 streaming, HTTP Range requests, seeking, volume, speed, and manual download.
  */
 export default function InBrowserAudioPlayer({
   callId,
@@ -43,15 +44,25 @@ export default function InBrowserAudioPlayer({
   const audioRef = useRef(null)
   const blobUrlRef = useRef(null)
   const abortControllerRef = useRef(null)
+
+  const initialDuration = recording?.duration || recording?.durationSeconds || 0
   const [blobUrl, setBlobUrl] = useState(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(0)
+  const [duration, setDuration] = useState(initialDuration)
   const [playbackRate, setPlaybackRate] = useState(1)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  // Keep duration synced if recording prop updates
+  useEffect(() => {
+    const known = recording?.duration || recording?.durationSeconds || 0
+    if (known > 0) {
+      setDuration(known)
+    }
+  }, [callId, recording?.duration, recording?.durationSeconds])
 
   // 1. Authenticated audio fetch into local managed Blob URL
   useEffect(() => {
@@ -59,7 +70,13 @@ export default function InBrowserAudioPlayer({
     setError(null)
     setIsPlaying(false)
     setCurrentTime(0)
-    setDuration(0)
+
+    const initialKnown = recording?.duration || recording?.durationSeconds || 0
+    if (initialKnown > 0) {
+      setDuration(initialKnown)
+    } else {
+      setDuration(0)
+    }
 
     // Abort previous in-flight request if user switches calls
     if (abortControllerRef.current) {
@@ -81,7 +98,8 @@ export default function InBrowserAudioPlayer({
       return
     }
 
-    const audioStreamUrl = `${API_BASE_URL}/calls/${callId}/recording`
+    // Fetch converted MP3 by default
+    const audioStreamUrl = `${API_BASE_URL}/calls/${callId}/recording?format=mp3`
 
     const fetchAudio = async () => {
       try {
@@ -117,6 +135,8 @@ export default function InBrowserAudioPlayer({
             errorMsg = "Recording audio not found on server."
           } else if (response.status === 410) {
             errorMsg = "Recording has expired per retention policy."
+          } else if (response.status === 422) {
+            errorMsg = "Recording audio file is corrupt or in an unconvertible format."
           } else if (errData && errData.error) {
             errorMsg = errData.error
           }
@@ -126,7 +146,7 @@ export default function InBrowserAudioPlayer({
         const contentType = response.headers.get("content-type") || ""
         if (contentType.includes("application/json")) {
           const errData = await response.json().catch(() => ({}))
-          throw new Error(errData.error || "Server returned an error instead of audio data.")
+          throw new Error(errData.error || "Server returned an error response instead of audio data.")
         }
 
         const blob = await response.blob()
@@ -134,7 +154,9 @@ export default function InBrowserAudioPlayer({
           throw new Error("Recording audio file is empty (0 bytes).")
         }
 
-        const objectUrl = URL.createObjectURL(blob)
+        // Guarantee audio/mpeg type on blob
+        const audioBlob = blob.type ? blob : new Blob([blob], { type: "audio/mpeg" })
+        const objectUrl = URL.createObjectURL(audioBlob)
         blobUrlRef.current = objectUrl
         setBlobUrl(objectUrl)
       } catch (err) {
@@ -162,7 +184,13 @@ export default function InBrowserAudioPlayer({
     if (!audio || !blobUrl) return
 
     const handleLoadedMetadata = () => {
-      setDuration(audio.duration || 0)
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration)
+      }
+      setIsLoading(false)
+    }
+
+    const handleCanPlay = () => {
       setIsLoading(false)
     }
 
@@ -179,16 +207,18 @@ export default function InBrowserAudioPlayer({
       setIsLoading(false)
       setIsPlaying(false)
       console.warn("[AudioPlayback Decode Error]:", e)
-      setError("Audio decode error. The audio format may not be supported by your browser.")
+      setError("Audio decode error. The audio recording could not be processed by your browser.")
     }
 
     audio.addEventListener("loadedmetadata", handleLoadedMetadata)
+    audio.addEventListener("canplay", handleCanPlay)
     audio.addEventListener("timeupdate", handleTimeUpdate)
     audio.addEventListener("ended", handleEnded)
     audio.addEventListener("error", handleError)
 
     return () => {
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata)
+      audio.removeEventListener("canplay", handleCanPlay)
       audio.removeEventListener("timeupdate", handleTimeUpdate)
       audio.removeEventListener("ended", handleEnded)
       audio.removeEventListener("error", handleError)
@@ -204,13 +234,23 @@ export default function InBrowserAudioPlayer({
       audio.pause()
       setIsPlaying(false)
     } else {
-      audio.play().then(() => {
-        setIsPlaying(true)
-        setError(null)
-      }).catch((err) => {
-        console.error("Playback start error:", err)
-        setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+      // Pause any other playing audio on the page to prevent duplicate playback
+      document.querySelectorAll("audio").forEach((el) => {
+        if (el !== audio) {
+          el.pause()
+        }
       })
+
+      audio
+        .play()
+        .then(() => {
+          setIsPlaying(true)
+          setError(null)
+        })
+        .catch((err) => {
+          console.error("Playback start error:", err)
+          setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+        })
     }
   }
 
@@ -243,6 +283,16 @@ export default function InBrowserAudioPlayer({
       audioRef.current.muted = !isMuted
       setIsMuted(!isMuted)
     }
+  }
+
+  const handleManualDownload = () => {
+    if (!blobUrl) return
+    const a = document.createElement("a")
+    a.href = blobUrl
+    a.download = `recording_${callId}.mp3`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   // Calculate genuine days until expiration when expiresAt is populated
@@ -299,15 +349,28 @@ export default function InBrowserAudioPlayer({
           </div>
         </div>
 
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
+        <div className="flex items-center space-x-1">
+          {blobUrl && (
+            <button
+              type="button"
+              onClick={handleManualDownload}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              title="Download MP3 recording"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              title="Close player"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Error state */}
@@ -332,7 +395,7 @@ export default function InBrowserAudioPlayer({
         />
         <div className="flex justify-between text-[10px] font-mono text-slate-400">
           <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
+          <span>{isLoading && duration === 0 ? "--:--" : formatTime(duration)}</span>
         </div>
       </div>
 
@@ -353,7 +416,7 @@ export default function InBrowserAudioPlayer({
             type="button"
             onClick={togglePlay}
             disabled={isLoading && !error}
-            className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition shadow-sm flex items-center justify-center disabled:opacity-50"
+            className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition shadow-sm flex items-center justify-center disabled:opacity-50 cursor-pointer"
             title={isPlaying ? "Pause" : "Play Recording"}
           >
             {isLoading && !error ? (

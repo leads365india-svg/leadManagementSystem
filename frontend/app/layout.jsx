@@ -19,10 +19,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased`}>
+      <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased max-w-full overflow-x-hidden`}>
         <AuthProvider>
           <Header />
-          <main className="flex-1 w-full">
+          <main className="flex-1 w-full max-w-full min-w-0">
             <AuthGuard>{children}</AuthGuard>
           </main>
           <Footer />

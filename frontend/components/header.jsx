@@ -491,10 +491,10 @@ export default function Header() {
   return (
     <header
       ref={navRef}
-      className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-colors"
+      className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-colors w-full max-w-full overflow-hidden"
     >
       <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6">
-        <div className="flex items-center justify-between h-16 gap-2 sm:gap-4 lg:gap-6">
+        <div className="flex items-center justify-between h-16 gap-2 sm:gap-4 lg:gap-6 min-w-0">
           
           {/* =========================================================================
               LEFT SECTION: Brand Logo + Spacious, Left-positioned Search Bar
@@ -529,7 +529,7 @@ export default function Header() {
             {/* Spacious Search Bar — Positioned to the left, generous responsive width */}
             <form
               onSubmit={handleGlobalSearch}
-              className="relative w-36 sm:w-48 md:w-52 lg:w-64 xl:w-80 shrink transition-all duration-200"
+              className="relative w-32 sm:w-44 md:w-48 lg:w-64 xl:w-80 min-w-[100px] shrink transition-all duration-200"
             >
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none transition-colors" />
               <input

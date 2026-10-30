@@ -35,6 +35,82 @@ const recordingSubSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    mp3FileId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    mp3SizeBytes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    mp3Sha256: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    conversionStatus: {
+      type: String,
+      enum: ["not_needed", "pending", "processing", "completed", "failed"],
+      default: "not_needed",
+      index: true,
+    },
+    duration: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    format: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    codec: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    provider: {
+      type: String,
+      enum: ["imagekit", "gridfs", "local"],
+      default: "gridfs",
+      index: true,
+    },
+    imagekitFileId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitUrl: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitMp3FileId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitMp3Url: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    imagekitPath: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    migrationStatus: {
+      type: String,
+      enum: ["pending", "in_progress", "completed", "failed", "retry_required", "not_applicable"],
+      default: "not_applicable",
+      index: true,
+    },
+    migratedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: false },
 )
