@@ -107,6 +107,7 @@ async function findLeadByPhoneNumber(rawPhone, tenantIdOrAgentId = null, maybeAg
 async function logCall(params = {}) {
   let {
     tenantId,
+    clientCallId = null,
     agentId,
     leadId = null,
     deviceId = null,
@@ -145,6 +146,9 @@ async function logCall(params = {}) {
   const callStartedAt = startedAt ? new Date(startedAt) : new Date()
   const durationSec = Math.max(0, parseInt(duration, 10) || 0)
   const callEndedAt = endedAt ? new Date(endedAt) : new Date(callStartedAt.getTime() + durationSec * 1000)
+  const trimmedClientCallId = clientCallId && typeof clientCallId === "string" && clientCallId.trim()
+    ? clientCallId.trim()
+    : null
 
   // 1. Resolve Lead linkage
   let matchedLead = null
@@ -163,9 +167,92 @@ async function logCall(params = {}) {
     agentUser = await User.findOne({ _id: agentId, tenantId }).setOptions({ skipTenantFilter: true })
   }
 
-  // 3. Create Call record
+  // 3. Canonical Upsert: Check if call already exists by clientCallId
+  if (trimmedClientCallId) {
+    const existingCall = await Call.findOne({
+      tenantId,
+      clientCallId: trimmedClientCallId,
+    }).setOptions({ skipTenantFilter: true })
+
+    if (existingCall) {
+      let updated = false
+      if (disposition && disposition !== "connected" && existingCall.disposition !== disposition) {
+        existingCall.disposition = disposition
+        existingCall.callOutcome = disposition
+        updated = true
+      }
+      if (durationSec > 0 && (!existingCall.duration || existingCall.duration === 0)) {
+        existingCall.duration = durationSec
+        existingCall.durationSeconds = durationSec
+        updated = true
+      }
+      if (notes && notes.trim() && existingCall.notes !== notes.trim()) {
+        existingCall.notes = notes.trim()
+        updated = true
+      }
+      if (recording && recording.fileId) {
+        existingCall.recording = { ...existingCall.recording, ...recording }
+        existingCall.hasRecording = true
+        updated = true
+      }
+      if (updated) {
+        await existingCall.save()
+      }
+      return {
+        success: true,
+        data: existingCall,
+        call: existingCall,
+        lead: matchedLead,
+        isExisting: true,
+      }
+    }
+  }
+
+  // 3b. Fallback candidate match if no clientCallId provided: require unambiguous single match
+  if (!trimmedClientCallId && phoneNormalized) {
+    const minTime = new Date(callStartedAt.getTime() - 5000)
+    const maxTime = new Date(callStartedAt.getTime() + 5000)
+    const dirNorm = direction === "inbound" ? ["inbound", "INCOMING"] : ["outbound", "OUTGOING"]
+    const candidateCalls = await Call.find({
+      tenantId,
+      agentId,
+      phoneNormalized,
+      direction: { $in: dirNorm },
+      startedAt: { $gte: minTime, $lte: maxTime },
+    }).setOptions({ skipTenantFilter: true })
+
+    if (candidateCalls.length === 1) {
+      const matchedCandidate = candidateCalls[0]
+      if (disposition && disposition !== "connected") {
+        matchedCandidate.disposition = disposition
+        matchedCandidate.callOutcome = disposition
+      }
+      if (durationSec > 0) {
+        matchedCandidate.duration = durationSec
+        matchedCandidate.durationSeconds = durationSec
+      }
+      if (notes && notes.trim()) {
+        matchedCandidate.notes = notes.trim()
+      }
+      if (recording && recording.fileId) {
+        matchedCandidate.recording = { ...matchedCandidate.recording, ...recording }
+        matchedCandidate.hasRecording = true
+      }
+      await matchedCandidate.save()
+      return {
+        success: true,
+        data: matchedCandidate,
+        call: matchedCandidate,
+        lead: matchedLead,
+        isExisting: true,
+      }
+    }
+  }
+
+  // 4. Create Call record
   const call = new Call({
     tenantId,
+    clientCallId: trimmedClientCallId,
     leadId: matchedLead ? matchedLead._id : null,
     agentId,
     deviceId: deviceId && mongoose.Types.ObjectId.isValid(deviceId) ? deviceId : null,
@@ -188,9 +275,29 @@ async function logCall(params = {}) {
     },
   })
 
-  const savedCall = await call.save()
+  let savedCall
+  try {
+    savedCall = await call.save()
+  } catch (saveErr) {
+    if (saveErr.code === 11000 && trimmedClientCallId) {
+      const raceExisting = await Call.findOne({
+        tenantId,
+        clientCallId: trimmedClientCallId,
+      }).setOptions({ skipTenantFilter: true })
+      if (raceExisting) {
+        return {
+          success: true,
+          data: raceExisting,
+          call: raceExisting,
+          lead: matchedLead,
+          isExisting: true,
+        }
+      }
+    }
+    throw saveErr
+  }
 
-  // 4. If linked to lead: update lastContactedAt & record Activity timeline entry
+  // 5. If linked to lead: update lastContactedAt & record Activity timeline entry
   if (matchedLead) {
     matchedLead.lastContactedAt = callStartedAt
     await matchedLead.save()
@@ -633,6 +740,303 @@ async function listDevices(query = {}, explicitTenantId = null) {
   }
 }
 
+/**
+ * Automatically reconciles unassigned historical calls matching a newly created or updated CRM lead.
+ * 
+ * Safety & Matching Rules:
+ * - Scoped strictly to the specified tenantId (cross-tenant calls are NEVER shared).
+ * - Multi-lead disambiguation: If multiple active leads share the same phone number within the tenant,
+ *   automatic association is halted to avoid misassociation; manual association via associateCallToLead is required.
+ * - Non-overwrite: Calls already associated with a different active lead are NEVER reassigned.
+ * - Idempotent: If a call is already associated with this lead, it is safely retained without duplicate records or activity logs.
+ * - Preserves original call metadata, direction, timestamps, duration, and GridFS recording links.
+ * 
+ * @param {Object} params
+ * @param {Object} params.lead - The newly created or updated Lead document
+ * @param {string} [params.tenantId] - Effective tenant ID
+ * @param {Object} [params.user] - Actor performing lead creation/reconciliation
+ * @returns {Promise<{ success: boolean, associatedCount: number, callIds: string[], ambiguous?: boolean, message?: string }>}
+ */
+async function reconcileHistoricalCallsForLead({ lead, tenantId = null, user = null }) {
+  if (!lead) {
+    throw new Error("Lead document is required for call reconciliation")
+  }
+
+  const effectiveTenantId = tenantId || lead.tenantId
+  if (!effectiveTenantId) {
+    throw new Error("tenantId is required for call reconciliation")
+  }
+
+  const rawPhone = lead.phone || lead.rawPhone || ""
+  let phoneNormalized = lead.phoneNormalized || ""
+  if (!phoneNormalized && rawPhone) {
+    try {
+      phoneNormalized = normalizePhoneE164(rawPhone, "+91")
+    } catch (_) {
+      phoneNormalized = rawPhone
+    }
+  }
+
+  if (!phoneNormalized && !rawPhone) {
+    return {
+      success: true,
+      associatedCount: 0,
+      callIds: [],
+      message: "Lead has no phone number to reconcile",
+    }
+  }
+
+  // 1. Multi-lead Disambiguation Check:
+  // If multiple active (non-deleted) leads share this phone number in the same tenant,
+  // do NOT guess. Mark as ambiguous and require manual association.
+  const disambiguationConditions = []
+  if (phoneNormalized) disambiguationConditions.push({ phoneNormalized })
+  if (rawPhone) disambiguationConditions.push({ phone: rawPhone.trim() })
+
+  const matchingLeadsCount = await Lead.countDocuments({
+    tenantId: effectiveTenantId,
+    $or: disambiguationConditions,
+    deletedAt: null,
+  }).setOptions({ skipTenantFilter: true })
+
+  if (matchingLeadsCount > 1) {
+    return {
+      success: true,
+      associatedCount: 0,
+      callIds: [],
+      ambiguous: true,
+      message: `Multiple leads (${matchingLeadsCount}) share phone ${rawPhone}. Automatic reconciliation halted for safety; manual call association required.`,
+    }
+  }
+
+  // 2. Query unassigned calls for this phone number within the tenant
+  const phoneMatchConditions = []
+  if (phoneNormalized) {
+    phoneMatchConditions.push({ phoneNormalized })
+  }
+  if (rawPhone) {
+    const cleanRaw = rawPhone.trim()
+    phoneMatchConditions.push({ number: cleanRaw })
+    phoneMatchConditions.push({ phoneNumber: cleanRaw })
+  }
+
+  const unassignedCalls = await Call.find({
+    tenantId: effectiveTenantId,
+    $or: [
+      { leadId: null },
+      { leadId: { $exists: false } },
+      { isUnlinked: true },
+      { leadId: lead._id }, // allow idempotent re-evaluation
+    ],
+    $and: [
+      { $or: phoneMatchConditions },
+    ],
+  }).setOptions({ skipTenantFilter: true })
+
+  if (!unassignedCalls || unassignedCalls.length === 0) {
+    return {
+      success: true,
+      associatedCount: 0,
+      callIds: [],
+      message: "No unassigned historical calls found matching lead phone",
+    }
+  }
+
+  const reconciledCallIds = []
+  let latestCallTime = lead.lastContactedAt ? new Date(lead.lastContactedAt).getTime() : 0
+
+  for (const call of unassignedCalls) {
+    // Safety check: Never reassign a call already linked to another lead
+    if (call.leadId && call.leadId.toString() !== lead._id.toString()) {
+      continue
+    }
+
+    const wasAlreadyLinked = call.leadId && call.leadId.toString() === lead._id.toString() && !call.isUnlinked
+
+    call.leadId = lead._id
+    call.isUnlinked = false
+    if (!call.agentId && lead.ownerId) {
+      call.agentId = lead.ownerId
+    }
+    call.metadata = call.metadata || {}
+    call.metadata.reconciledAt = Date.now()
+    call.metadata.reconciledWithLeadId = lead._id.toString()
+    call.metadata.reconciledVia = "automatic_lead_creation_backfill"
+    call.markModified("metadata")
+    await call.save()
+
+    reconciledCallIds.push(call._id.toString())
+
+    const callTimeMs = call.startedAt ? new Date(call.startedAt).getTime() : (call.startTimeMs || 0)
+    if (callTimeMs > latestCallTime) {
+      latestCallTime = callTimeMs
+    }
+
+    // Record timeline activity only if newly linked (avoid duplicate activity entries)
+    if (!wasAlreadyLinked) {
+      try {
+        const actorInfo = user
+          ? { id: user._id || user.id, name: user.name || "System", role: user.role || "user" }
+          : { role: "system", name: "Historical Call Reconciler" }
+
+        await activity.record({
+          tenantId: effectiveTenantId,
+          leadId: lead._id,
+          type: "call.associated",
+          actor: actorInfo,
+          payload: {
+            callId: call._id.toString(),
+            clientCallId: call.clientCallId,
+            direction: call.direction || call.callDirection,
+            duration: call.duration || call.durationSeconds || 0,
+            durationFormatted: formatDuration(call.duration || call.durationSeconds || 0),
+            disposition: call.disposition || call.callOutcome,
+            hasRecording: Boolean(call.hasRecording || (call.recording && call.recording.status === "stored")),
+            recordingStatus: call.recording?.status || (call.hasRecording ? "stored" : "none"),
+            startedAt: call.startedAt,
+            reconciledAt: new Date(),
+          },
+        })
+      } catch (actErr) {
+        console.warn("[CallService] Non-blocking activity recording failure on call association:", actErr.message)
+      }
+    }
+  }
+
+  // Update lead's lastContactedAt and metadata.lastCallAt if historical calls were found
+  if (latestCallTime > 0) {
+    try {
+      const leadDoc = await Lead.findOne({ _id: lead._id, tenantId: effectiveTenantId }).setOptions({ skipTenantFilter: true })
+      if (leadDoc) {
+        const currentLastContact = leadDoc.lastContactedAt ? new Date(leadDoc.lastContactedAt).getTime() : 0
+        if (latestCallTime > currentLastContact) {
+          leadDoc.lastContactedAt = new Date(latestCallTime)
+          leadDoc.metadata = leadDoc.metadata || {}
+          leadDoc.metadata.lastCallAt = new Date(latestCallTime)
+          leadDoc.markModified("metadata")
+          await leadDoc.save()
+        }
+      }
+    } catch (leadSaveErr) {
+      console.warn("[CallService] Non-blocking lead timestamp update failure:", leadSaveErr.message)
+    }
+  }
+
+  return {
+    success: true,
+    associatedCount: reconciledCallIds.length,
+    callIds: reconciledCallIds,
+    message: `Successfully reconciled ${reconciledCallIds.length} historical call(s) with lead`,
+  }
+}
+
+/**
+ * Manually and explicitly associates a specific Call to a CRM Lead.
+ * Used for safe disambiguation when multiple leads share the same phone number.
+ */
+async function associateCallToLead({ callId, leadId, tenantId = null, user = null }) {
+  if (!callId || !leadId) {
+    throw new Error("Both callId and leadId are required to associate call")
+  }
+
+  const trimmedCallId = String(callId).trim()
+  const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
+  const callQuery = {
+    $or: [
+      { clientCallId: trimmedCallId },
+      ...(isObjectId ? [{ _id: trimmedCallId }] : [])
+    ]
+  }
+  if (tenantId) {
+    callQuery.tenantId = tenantId
+  }
+
+  const call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
+  if (!call) {
+    const err = new Error("Call not found in this tenant partition")
+    err.statusCode = 404
+    throw err
+  }
+
+  const effectiveTenantId = tenantId || call.tenantId
+  const lead = await Lead.findOne({ _id: leadId, tenantId: effectiveTenantId }).setOptions({ skipTenantFilter: true })
+  if (!lead) {
+    const err = new Error("Target lead not found in this tenant partition")
+    err.statusCode = 404
+    throw err
+  }
+
+  // Safety check: if call is already associated with another lead, only allow admin to reassign
+  if (call.leadId && call.leadId.toString() !== lead._id.toString()) {
+    const isPrivileged = user && (user.role === "account_admin" || user.role === "super_admin")
+    if (!isPrivileged) {
+      const err = new Error("Call is already associated with another lead. Only an administrator can reassign it.")
+      err.statusCode = 403
+      throw err
+    }
+  }
+
+  call.leadId = lead._id
+  call.isUnlinked = false
+  call.metadata = call.metadata || {}
+  call.metadata.manuallyAssociatedAt = Date.now()
+  call.metadata.associatedBy = user ? (user._id || user.id) : "manual"
+  call.markModified("metadata")
+  await call.save()
+
+  // Update lead last contact timestamp if call is more recent
+  const callTimeMs = call.startedAt ? new Date(call.startedAt).getTime() : (call.startTimeMs || 0)
+  if (callTimeMs > 0) {
+    const currentLastContact = lead.lastContactedAt ? new Date(lead.lastContactedAt).getTime() : 0
+    if (callTimeMs > currentLastContact) {
+      lead.lastContactedAt = new Date(callTimeMs)
+      lead.metadata = lead.metadata || {}
+      lead.metadata.lastCallAt = new Date(callTimeMs)
+      lead.markModified("metadata")
+      await lead.save()
+    }
+  }
+
+  // Activity log
+  try {
+    const actorInfo = user
+      ? { id: user._id || user.id, name: user.name || "User", role: user.role || "user" }
+      : { role: "system", name: "User" }
+
+    await activity.record({
+      tenantId: effectiveTenantId,
+      leadId: lead._id,
+      type: "call.associated",
+      actor: actorInfo,
+      payload: {
+        callId: call._id.toString(),
+        clientCallId: call.clientCallId,
+        direction: call.direction || call.callDirection,
+        duration: call.duration || call.durationSeconds || 0,
+        durationFormatted: formatDuration(call.duration || call.durationSeconds || 0),
+        disposition: call.disposition || call.callOutcome,
+        hasRecording: Boolean(call.hasRecording || (call.recording && call.recording.status === "stored")),
+        recordingStatus: call.recording?.status || (call.hasRecording ? "stored" : "none"),
+        startedAt: call.startedAt,
+        manual: true,
+      },
+    })
+  } catch (actErr) {
+    console.warn("[CallService] Non-blocking activity recording failure on manual call association:", actErr.message)
+  }
+
+  return {
+    success: true,
+    message: "Call successfully associated with lead",
+    call,
+    lead: {
+      id: lead._id.toString(),
+      name: lead.name,
+      phone: lead.phone,
+    },
+  }
+}
+
 module.exports = {
   findLeadByPhoneNumber,
   logCall,
@@ -643,4 +1047,6 @@ module.exports = {
   updateDeviceStatus,
   listDevices,
   formatDuration,
+  reconcileHistoricalCallsForLead,
+  associateCallToLead,
 }

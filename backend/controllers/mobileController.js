@@ -142,6 +142,7 @@ const reportMobileCall = async (req, res) => {
         error: "Authentication required to report calls.",
       })
     }
+    let targetTenantId = user.tenantId || "default"
 
     const {
       client_call_id,
@@ -164,12 +165,12 @@ const reportMobileCall = async (req, res) => {
       })
     }
 
-    const isUnlinkedInbound = (!lead_id || lead_id === "unlinked") && (call_direction === "INCOMING" || !call_direction)
+    const isUnlinkedCall = (!lead_id || lead_id === "unlinked")
 
-    if (!isUnlinkedInbound && (!lead_id || !mongoose.Types.ObjectId.isValid(lead_id))) {
+    if (!isUnlinkedCall && (!lead_id || !mongoose.Types.ObjectId.isValid(lead_id))) {
       return res.status(400).json({
         success: false,
-        error: "Valid lead_id is required for outgoing or linked calls",
+        error: "Valid lead_id is required for linked calls",
       })
     }
 
@@ -187,19 +188,9 @@ const reportMobileCall = async (req, res) => {
       })
     }
 
-    // 2. Idempotency Check: if clientCallId already processed, return existing record
-    const existingCall = await Call.findOne({ clientCallId: client_call_id.trim() })
-    if (existingCall) {
-      return res.status(200).json({
-        success: true,
-        call_id: existingCall._id.toString(),
-        message: "Call report already received (idempotent)",
-      })
-    }
-
-    // 3. Lead Verification & Ownership Enforcement (or Unlinked Inbound DNR check)
+    // 3. Lead Verification & Ownership Enforcement (or Unlinked Call DNR check)
     let lead = null
-    if (!isUnlinkedInbound) {
+    if (!isUnlinkedCall) {
       lead = await Lead.findById(lead_id)
       if (!lead) {
         return res.status(404).json({
@@ -216,11 +207,12 @@ const reportMobileCall = async (req, res) => {
         })
       }
 
-      // Agent assignment verification
       const isTenantAdmin = user.role === "account_admin" || user.role === "super_admin"
+      const userIdStr = (user.id || user._id)?.toString()
       const isAssignedAgent =
-        (lead.assignedStaffId && lead.assignedStaffId === user.id) ||
-        (lead.assignedTo && lead.assignedTo.toLowerCase() === user.name.toLowerCase())
+        (lead.assignedStaffId && userIdStr && lead.assignedStaffId.toString() === userIdStr) ||
+        (lead.assignedTo && userIdStr && lead.assignedTo.toString() === userIdStr) ||
+        (lead.assignedTo && user.name && typeof lead.assignedTo === "string" && lead.assignedTo.toLowerCase() === user.name.toLowerCase())
 
       if (!isTenantAdmin && !isAssignedAgent) {
         return res.status(403).json({
@@ -251,71 +243,244 @@ const reportMobileCall = async (req, res) => {
       }
     }
 
-    const targetTenantId = (lead ? lead.tenantId : user.tenantId) || "default"
+    targetTenantId = (lead ? lead.tenantId : user.tenantId) || "default"
+    const trimmedClientCallId = client_call_id.trim()
+
+    // Helper: Idempotently create or update follow-up for a call event
+    const syncFollowUpForCall = async (targetLead) => {
+      if (!targetLead || !next_followup_at || typeof next_followup_at !== "number") return
+
+      targetLead.metadata = targetLead.metadata || {}
+      targetLead.metadata.nextFollowUpAt = next_followup_at
+
+      try {
+        const scheduledDate = new Date(next_followup_at)
+        const callIdempKey = `call_fu_${targetLead._id}_${trimmedClientCallId}`
+
+        // 1. Check if any follow-up already exists for this exact sourceCallId or idempotencyKey
+        let existingFollowUp = await FollowUp.findOne({
+          tenantId: targetLead.tenantId,
+          sourceCallId: trimmedClientCallId,
+        })
+
+        if (!existingFollowUp) {
+          existingFollowUp = await FollowUp.findOne({
+            tenantId: targetLead.tenantId,
+            idempotencyKey: callIdempKey,
+          })
+        }
+
+        if (existingFollowUp) {
+          // If already completed or cancelled, do not recreate or reset to pending
+          if (existingFollowUp.status === "completed") {
+            return
+          }
+          if (existingFollowUp.status === "pending") {
+            existingFollowUp.sourceCallId = trimmedClientCallId
+            existingFollowUp.idempotencyKey = callIdempKey
+            existingFollowUp.title = `Call Follow-up: ${call_outcome || "Follow-up"}`
+            existingFollowUp.scheduledAt = scheduledDate
+            if (notes && notes.trim()) {
+              existingFollowUp.notes = notes.trim()
+            }
+            existingFollowUp.assignedTo = user.name || existingFollowUp.assignedTo || "Agent"
+            existingFollowUp.assignedStaffId = user.id || existingFollowUp.assignedStaffId || "unassigned"
+            await existingFollowUp.save()
+          }
+        } else {
+          try {
+            await FollowUp.create({
+              leadId: targetLead._id,
+              tenantId: targetLead.tenantId,
+              sourceCallId: trimmedClientCallId,
+              idempotencyKey: callIdempKey,
+              title: `Call Follow-up: ${call_outcome || "Follow-up"}`,
+              type: "call",
+              scheduledAt: scheduledDate,
+              status: "pending",
+              priority: "medium",
+              notes: notes ? notes.trim() : "Scheduled from mobile call summary",
+              assignedTo: user.name || "Agent",
+              assignedStaffId: user.id,
+              createdBy: user.name || "Mobile Agent",
+            })
+          } catch (createErr) {
+            if (createErr.code === 11000) {
+              // Concurrency race: existing reminder created simultaneously
+              const raceMatch = await FollowUp.findOne({
+                tenantId: targetLead.tenantId,
+                $or: [{ sourceCallId: trimmedClientCallId }, { idempotencyKey: callIdempKey }],
+              })
+              if (raceMatch && raceMatch.status === "pending") {
+                raceMatch.title = `Call Follow-up: ${call_outcome || "Follow-up"}`
+                raceMatch.scheduledAt = scheduledDate
+                await raceMatch.save()
+              }
+            } else {
+              throw createErr
+            }
+          }
+        }
+      } catch (followUpErr) {
+        console.warn("Could not create/update follow-up task:", followUpErr.message)
+      }
+    }
+
+    // Helper: Update lead CRM state on call report
+    const syncLeadState = async (targetLead) => {
+      if (!targetLead) return
+      const validCrmStatuses = ["New", "Engaged", "Proposal Sent", "Closed-Won", "Closed-Lost"]
+      if (call_outcome && validCrmStatuses.includes(call_outcome)) {
+        targetLead.status = call_outcome
+      }
+      targetLead.metadata = targetLead.metadata || {}
+      targetLead.metadata.lastCallOutcome = call_outcome || "Connected"
+      targetLead.metadata.lastCallAt = new Date(start_time_ms)
+      if (notes && notes.trim()) {
+        targetLead.metadata.lastCallNotes = notes.trim()
+      }
+      await syncFollowUpForCall(targetLead)
+      targetLead.markModified("metadata")
+      await targetLead.save()
+    }
+
+    // 2. Idempotency Check: if clientCallId already processed, update existing record (upsert)
+    const existingCall = await Call.findOne({ clientCallId: trimmedClientCallId })
+    if (existingCall) {
+      let isUpdated = false
+      if (call_outcome && call_outcome !== "Connected" && existingCall.callOutcome !== call_outcome) {
+        existingCall.callOutcome = call_outcome
+        existingCall.disposition = call_outcome
+        isUpdated = true
+      }
+      if (notes && notes.trim() && existingCall.notes !== notes.trim()) {
+        existingCall.notes = notes.trim()
+        isUpdated = true
+      }
+      if (next_followup_at && typeof next_followup_at === "number" && existingCall.nextFollowUpAt !== next_followup_at) {
+        existingCall.nextFollowUpAt = next_followup_at
+        isUpdated = true
+      }
+      if (duration_seconds && (!existingCall.durationSeconds || existingCall.durationSeconds === 0)) {
+        existingCall.durationSeconds = duration_seconds
+        existingCall.duration = duration_seconds
+        isUpdated = true
+      }
+      if (sim_id && !existingCall.simId) {
+        existingCall.simId = sim_id.trim()
+        isUpdated = true
+      }
+      if (lead && (!existingCall.leadId || existingCall.isUnlinked)) {
+        existingCall.leadId = lead._id
+        existingCall.isUnlinked = false
+        isUpdated = true
+      }
+      if (isUpdated) {
+        await existingCall.save()
+      }
+
+      if (lead) {
+        await syncLeadState(lead)
+      }
+
+      return res.status(200).json({
+        success: true,
+        call_id: existingCall._id.toString(),
+        message: isUpdated ? "Call report updated successfully (idempotent upsert)" : "Call report already received (idempotent)",
+        call: existingCall,
+      })
+    }
+
+    // 2b. Fallback candidate match for existing call without clientCallId or matching signature
+    const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
+    const normPhone = normalizePhoneE164(phone_number.trim(), "+91") || phone_number.trim()
+    const minTime = start_time_ms - 5000
+    const maxTime = start_time_ms + 5000
+    const isIncoming = (call_direction === "INCOMING" || call_direction === "inbound")
+    const directionValues = isIncoming ? ["INCOMING", "inbound"] : ["OUTGOING", "outbound"]
+
+    const candidateQuery = {
+      tenantId: targetTenantId,
+      agentId: user.id,
+      clientCallId: null,
+      $or: [
+        { phoneNormalized: normPhone },
+        { phoneNumber: phone_number.trim() },
+        { number: phone_number.trim() },
+      ],
+      startTimeMs: { $gte: minTime, $lte: maxTime },
+      callDirection: { $in: directionValues },
+    }
+
+    const candidateCalls = await Call.find(candidateQuery).setOptions({ skipTenantFilter: true })
+    if (candidateCalls.length === 1) {
+      const matchedCall = candidateCalls[0]
+      const isUnassigned = !matchedCall.clientCallId
+      const isSameClient = matchedCall.clientCallId === trimmedClientCallId
+
+      if (isUnassigned || isSameClient) {
+        // Unambiguous single match: merge/link to this canonical call record
+        matchedCall.clientCallId = trimmedClientCallId
+        if (call_outcome && call_outcome !== "Connected") {
+          matchedCall.callOutcome = call_outcome
+          matchedCall.disposition = call_outcome
+        }
+        if (notes && notes.trim()) {
+          matchedCall.notes = notes.trim()
+        }
+        if (next_followup_at) {
+          matchedCall.nextFollowUpAt = next_followup_at
+        }
+        if (duration_seconds && (!matchedCall.durationSeconds || matchedCall.durationSeconds === 0)) {
+          matchedCall.durationSeconds = duration_seconds
+          matchedCall.duration = duration_seconds
+        }
+        if (lead && (!matchedCall.leadId || matchedCall.isUnlinked)) {
+          matchedCall.leadId = lead._id
+          matchedCall.isUnlinked = false
+        }
+        await matchedCall.save()
+
+        if (lead) {
+          await syncLeadState(lead)
+        }
+
+        return res.status(200).json({
+          success: true,
+          call_id: matchedCall._id.toString(),
+          message: "Matched existing call record by candidate signature (idempotent merge)",
+          call: matchedCall,
+        })
+      }
+    }
 
     // 4. Create and Persist Call Record
     const newCall = await Call.create({
-      clientCallId: client_call_id.trim(),
+      clientCallId: trimmedClientCallId,
       leadId: lead ? lead._id : null,
       isUnlinked: !lead,
       tenantId: targetTenantId,
       agentId: user.id,
       agentName: user.name || "Agent",
       phoneNumber: phone_number.trim(),
-      callDirection: call_direction || (isUnlinkedInbound ? "INCOMING" : "OUTGOING"),
+      callDirection: call_direction || (isUnlinkedCall ? "INCOMING" : "OUTGOING"),
       startTimeMs: start_time_ms,
       durationSeconds: duration_seconds || 0,
       callOutcome: call_outcome || "Connected",
-      notes: notes ? notes.trim() : (isUnlinkedInbound ? "Unlinked Incoming Call (Website Call attribution unverified)" : ""),
+      notes: notes ? notes.trim() : (isUnlinkedCall ? "Unlinked Call (Website Call attribution unverified)" : ""),
       nextFollowUpAt: next_followup_at || null,
       simId: sim_id ? sim_id.trim() : null,
       metadata: {
         reportedVia: "android_app",
         reportedAt: Date.now(),
         isUnlinked: !lead,
-        attribution: isUnlinkedInbound ? "unverified" : "lead",
+        attribution: isUnlinkedCall ? "unverified" : "lead",
       },
     })
 
     // 5. Update CRM Lead State & Create FollowUp if applicable
     if (lead) {
-      const validCrmStatuses = ["New", "Engaged", "Proposal Sent", "Closed-Won", "Closed-Lost"]
-      if (call_outcome && validCrmStatuses.includes(call_outcome)) {
-        lead.status = call_outcome
-      }
-
-      lead.metadata = lead.metadata || {}
-      lead.metadata.lastCallOutcome = call_outcome || "Connected"
-      lead.metadata.lastCallAt = new Date(start_time_ms)
-      if (notes && notes.trim()) {
-        lead.metadata.lastCallNotes = notes.trim()
-      }
-
-      if (next_followup_at && typeof next_followup_at === "number") {
-        lead.metadata.nextFollowUpAt = next_followup_at
-
-        // Automatically create a scheduled CRM FollowUp
-        try {
-          await FollowUp.create({
-            leadId: lead._id,
-            tenantId: lead.tenantId,
-            title: `Call Follow-up: ${call_outcome || "Follow-up"}`,
-            type: "call",
-            scheduledAt: new Date(next_followup_at),
-            status: "pending",
-            priority: "medium",
-            notes: notes ? notes.trim() : "Scheduled from mobile call summary",
-            assignedTo: user.name || "Agent",
-            assignedStaffId: user.id,
-            createdBy: user.name || "Mobile Agent",
-          })
-        } catch (followUpErr) {
-          console.warn("Could not create follow-up task:", followUpErr.message)
-        }
-      }
-
-      lead.markModified("metadata")
-      await lead.save()
+      await syncLeadState(lead)
     }
 
     return res.status(201).json({
@@ -325,13 +490,17 @@ const reportMobileCall = async (req, res) => {
     })
   } catch (error) {
     // Handle unique constraint collision in race conditions
-    if (error.code === 11000 && error.keyPattern?.clientCallId) {
-      const existing = await Call.findOne({ clientCallId: req.body.client_call_id })
+    if (error.code === 11000) {
+      const existing = await Call.findOne({
+        tenantId: req.user?.tenantId || "default",
+        clientCallId: req.body.client_call_id?.trim(),
+      }).setOptions({ skipTenantFilter: true })
       if (existing) {
         return res.status(200).json({
           success: true,
           call_id: existing._id.toString(),
           message: "Call report already received (idempotent)",
+          call: existing,
         })
       }
     }
@@ -373,9 +542,18 @@ const getMobileCalls = async (req, res) => {
       .limit(50)
       .lean()
 
+    const formattedCalls = calls.map((c) => ({
+      ...c,
+      id: c._id.toString(),
+      clientCallId: c.clientCallId || c._id.toString(),
+      callOutcome: c.callOutcome || c.disposition || "Connected",
+      outcome: c.callOutcome || c.disposition || "Connected",
+      hasRecording: Boolean(c.hasRecording || (c.recording && (c.recording.status === "ready" || c.recording.status === "stored"))),
+    }))
+
     return res.status(200).json({
       success: true,
-      data: calls,
+      data: formattedCalls,
     })
   } catch (error) {
     console.error("Error in getMobileCalls:", error.message)
@@ -879,13 +1057,44 @@ const uploadMobileRecording = async (req, res) => {
 
     // 1. Locate Call Record by clientCallId or _id
     const trimmedCallId = callId.trim()
+    const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
     const callQuery = {
       $or: [
         { clientCallId: trimmedCallId },
-        ...(mongoose.Types.ObjectId.isValid(trimmedCallId) ? [{ _id: trimmedCallId }] : [])
+        ...(isObjectId ? [{ _id: trimmedCallId }] : [])
       ]
     }
-    const call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
+    let call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
+
+    // Fallback reconciliation: If not found by ID, attempt candidate matching from headers
+    if (!call && user?.tenantId) {
+      const explicitPhone = req.headers["x-phone-number"] || null
+      const clientFileName = req.headers["x-file-name"] || ""
+      const phoneCandidate = explicitPhone || (clientFileName.match(/\d{10,12}/)?.[0] || null)
+
+      if (phoneCandidate) {
+        const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
+        const normPhone = normalizePhoneE164(phoneCandidate, "+91") || phoneCandidate
+        const candidateCalls = await Call.find({
+          tenantId: user.tenantId,
+          agentId: user.id || user._id,
+          $or: [
+            { phoneNormalized: normPhone },
+            { phoneNumber: phoneCandidate },
+            { number: phoneCandidate },
+          ],
+        }).sort({ startTimeMs: -1 }).limit(2).setOptions({ skipTenantFilter: true })
+
+        if (candidateCalls.length === 1) {
+          call = candidateCalls[0]
+          if (!call.clientCallId) {
+            call.clientCallId = trimmedCallId
+            await call.save()
+          }
+        }
+      }
+    }
+
     if (!call) {
       return res.status(404).json({
         success: false,
@@ -1019,6 +1228,7 @@ const uploadMobileRecording = async (req, res) => {
       contentLength,
       expectedSha256: clientProvidedSha,
       retentionDays: 30,
+      allowUnmatchedReview: Boolean(!call.leadId || call.isUnlinked),
     })
 
     return res.status(result.isDuplicate ? 200 : 201).json({
@@ -1291,9 +1501,11 @@ const streamRecordingByPath = async (req, res) => {
       const isCallAgent = call.agentId && call.agentId.toString() === user.id.toString()
       if (!isTenantAdmin && !isCallAgent) {
         const lead = call.leadId ? await Lead.findById(call.leadId).lean() : null
+        const userIdStr = (user.id || user._id)?.toString()
         const isLeadAgent = lead && (
-          (lead.assignedStaffId && lead.assignedStaffId.toString() === user.id.toString()) ||
-          (lead.assignedTo && lead.assignedTo.toLowerCase() === user.name.toLowerCase())
+          (lead.assignedStaffId && userIdStr && lead.assignedStaffId.toString() === userIdStr) ||
+          (lead.assignedTo && userIdStr && lead.assignedTo.toString() === userIdStr) ||
+          (lead.assignedTo && user.name && typeof lead.assignedTo === "string" && lead.assignedTo.toLowerCase() === user.name.toLowerCase())
         )
         if (!isLeadAgent) {
           return res.status(403).json({

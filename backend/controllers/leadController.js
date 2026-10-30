@@ -315,7 +315,10 @@ const createLead = async (req, res) => {
     res.status(201).json({
       success: true,
       data: result.lead,
-      message: "Lead created successfully",
+      reconciledCalls: result.reconciledCalls || null,
+      message: result.reconciledCalls?.associatedCount
+        ? `Lead created successfully and associated with ${result.reconciledCalls.associatedCount} historical call(s)`
+        : "Lead created successfully",
     })
   } catch (error) {
     console.error("Error creating lead:", error)
@@ -1245,6 +1248,58 @@ const getLeadActivities = async (req, res) => {
   }
 }
 
+/**
+ * POST /api/leads/:id/reconcile-calls
+ * Manually trigger historical call and recording reconciliation for a specific CRM lead.
+ */
+const reconcileLeadCalls = async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: "Valid lead id is required" })
+    }
+
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+    if (!req.user || (!effectiveTenantId && !isSuperAdmin)) {
+      return res.status(401).json({ success: false, error: "Authentication required to reconcile calls." })
+    }
+
+    const query = { _id: id }
+    if (!isSuperAdmin && effectiveTenantId) {
+      query.tenantId = effectiveTenantId
+    }
+
+    const lead = await Lead.findOne(query)
+    if (!lead) {
+      return res.status(404).json({ success: false, error: "Lead not found" })
+    }
+
+    const access = await checkDirectObjectAccess(req.user, lead, "leads", "edit")
+    if (!access.allowed) {
+      return res.status(403).json({ success: false, error: access.reason || "Access denied. Outside assigned scope." })
+    }
+
+    const callService = require("../services/callService")
+    const result = await callService.reconcileHistoricalCallsForLead({
+      lead,
+      tenantId: lead.tenantId,
+      user: req.user,
+    })
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: result.message || `Reconciled ${result.associatedCount || 0} historical call(s)`,
+    })
+  } catch (error) {
+    console.error("Error in reconcileLeadCalls:", error)
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error during call reconciliation",
+    })
+  }
+}
+
 module.exports = {
   getLeads,
   createLead,
@@ -1257,5 +1312,7 @@ module.exports = {
   assignSingleLead,
   bulkAssignLeads,
   getUnassignedPoolStats,
+  reconcileLeadCalls,
 }
+
 
