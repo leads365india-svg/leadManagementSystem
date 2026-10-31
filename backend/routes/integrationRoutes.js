@@ -19,6 +19,8 @@ const {
   listEvents,
   replayIntegrationEvent,
   syncLegacyIntegrations,
+  getIntegrationSnippets,
+  testIntegrationById,
 } = require("../controllers/integrationController")
 const {
   handleMetaWebhookHandshake,
@@ -118,6 +120,8 @@ router.post("/generic/test", authenticate, requireAccountAdmin, sendGenericTestL
 router.get("/", authenticate, listIntegrations)
 router.post("/", authenticate, requireAccountAdmin, createIntegration)
 router.get("/:id", authenticate, getIntegrationById)
+router.get("/:id/snippets", authenticate, getIntegrationSnippets)
+router.post("/:id/test", authenticate, requireAccountAdmin, testIntegrationById)
 router.put("/:id", authenticate, requireAccountAdmin, updateIntegration)
 router.post("/:id/rotate-key", authenticate, requireAccountAdmin, rotateIntegrationKey)
 router.delete("/:id", authenticate, requireAccountAdmin, deleteIntegration)

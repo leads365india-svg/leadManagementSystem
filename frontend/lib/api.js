@@ -308,9 +308,10 @@ class ApiClient {
     })
   }
 
-  async sendLeadFeedTest() {
+  async sendLeadFeedTest(options = {}) {
     return this.request("/integrations/settings/website/test", {
       method: "POST",
+      body: JSON.stringify(options),
     })
   }
 
@@ -335,6 +336,17 @@ class ApiClient {
 
   async getIntegrationById(id) {
     return this.request(`/integrations/${id}`)
+  }
+
+  async getIntegrationSnippets(id) {
+    return this.request(`/integrations/${id}/snippets`)
+  }
+
+  async testIntegration(id, payload = {}, options = {}) {
+    return this.request(`/integrations/${id}/test`, {
+      method: "POST",
+      body: JSON.stringify({ payload, ...options }),
+    })
   }
 
   async updateIntegration(id, payload) {

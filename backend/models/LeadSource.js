@@ -255,6 +255,9 @@ async function normalizeSource(tenantId, rawSource) {
   ) {
     return "Google Ads"
   }
+  if (slugified.includes("wordpress") || slugified.startsWith("wp_")) {
+    return "WordPress"
+  }
   if (slugified.includes("website") || slugified.includes("landing") || slugified.includes("web_form")) {
     return "Website"
   }

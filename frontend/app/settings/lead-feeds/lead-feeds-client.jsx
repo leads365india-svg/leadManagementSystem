@@ -44,6 +44,11 @@ import {
   Activity,
   LayoutGrid,
   ArrowUpRight,
+  Plus,
+  Trash2,
+  Terminal,
+  PlayCircle,
+  Edit3,
 } from "lucide-react"
 
 const DEFAULT_BLOCKED_DOMAINS = [
@@ -113,6 +118,45 @@ export default function LeadFeedsClient() {
   const [copiedSnippet, setCopiedSnippet] = useState(false)
   const [rotatingSiteKey, setRotatingSiteKey] = useState(false)
   const [showRotateSiteKeyModal, setShowRotateSiteKeyModal] = useState(false)
+
+  // ========================================================
+  // Multi-Platform Website Integrations Studio State
+  // ========================================================
+  const [websiteIntegrations, setWebsiteIntegrations] = useState([])
+  const [loadingIntegrations, setLoadingIntegrations] = useState(false)
+  const [selectedIntegration, setSelectedIntegration] = useState(null)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showSnippetsModal, setShowSnippetsModal] = useState(false)
+  const [showMappingModal, setShowMappingModal] = useState(false)
+  const [showTestModal, setShowTestModal] = useState(false)
+  const [saveAsRealLead, setSaveAsRealLead] = useState(false)
+  const [integrationSnippets, setIntegrationSnippets] = useState(null)
+  const [loadingSnippets, setLoadingSnippets] = useState(false)
+  const [testingIntegration, setTestingIntegration] = useState(false)
+  const [integrationTestResult, setIntegrationTestResult] = useState(null)
+  const [selectedPlatformFilter, setSelectedPlatformFilter] = useState("all")
+  const [activeSnippetTab, setActiveSnippetTab] = useState("wordpress")
+  const [copiedSnippetCode, setCopiedSnippetCode] = useState(false)
+
+  // Creation form state
+  const [createForm, setCreateForm] = useState({
+    name: "",
+    type: "wordpress",
+    websiteDomain: "",
+    allowedOrigins: "",
+    defaultStatus: "New",
+    leadSource: "",
+    assignedStaffId: "unassigned",
+  })
+  const [creatingIntegration, setCreatingIntegration] = useState(false)
+  const [createdIntegrationCredentials, setCreatedIntegrationCredentials] = useState(null)
+
+  // Field mapping state
+  const [editingMappings, setEditingMappings] = useState([])
+  const [savingMappings, setSavingMappings] = useState(false)
+
+  // Custom test payload state
+  const [testPayloadText, setTestPayloadText] = useState("")
 
   // ==========================================
   // IndiaMART Integration State (Phase 13)
@@ -267,6 +311,234 @@ export default function LeadFeedsClient() {
     }
   }, [])
 
+  // Load Website Integrations
+  const fetchWebsiteIntegrations = useCallback(async () => {
+    try {
+      setLoadingIntegrations(true)
+      const res = await apiClient.getIntegrations()
+      if (res && res.success) {
+        const all = res.data || []
+        const websiteTypes = ["website", "wordpress", "html", "php", "react", "nextjs", "webhook", "generic"]
+        const filtered = all.filter((i) => websiteTypes.includes(i.type))
+        setWebsiteIntegrations(filtered)
+      }
+    } catch (err) {
+      console.error("Failed to load website integrations:", err)
+    } finally {
+      setLoadingIntegrations(false)
+    }
+  }, [])
+
+  // Create new integration
+  const handleCreateIntegration = async (e) => {
+    e.preventDefault()
+    if (!createForm.name.trim()) {
+      toast.error("Please enter a name for the integration")
+      return
+    }
+
+    try {
+      setCreatingIntegration(true)
+      const origins = createForm.allowedOrigins
+        ? createForm.allowedOrigins.split(/[\n,]+/).map((o) => o.trim()).filter(Boolean)
+        : []
+
+      const payload = {
+        name: createForm.name.trim(),
+        type: createForm.type,
+        assignedStaffId: createForm.assignedStaffId,
+        settings: {
+          websiteDomain: createForm.websiteDomain.trim(),
+          allowedOrigins: origins,
+          defaultStatus: createForm.defaultStatus,
+          leadSource: createForm.leadSource.trim() || undefined,
+          duplicateHandling: "reject",
+        },
+      }
+
+      const res = await apiClient.createIntegration(payload)
+      if (res && res.success) {
+        toast.success("Website integration created successfully!")
+        setCreatedIntegrationCredentials({
+          rawApiKey: res.rawApiKey,
+          siteKey: res.siteKey || res.data?.siteKey,
+          name: res.data?.name,
+          type: res.data?.type,
+        })
+        fetchWebsiteIntegrations()
+      } else {
+        toast.error(res?.error || "Failed to create integration")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to create integration")
+    } finally {
+      setCreatingIntegration(false)
+    }
+  }
+
+  // Open Code Snippets modal
+  const handleOpenSnippets = async (integration) => {
+    setSelectedIntegration(integration)
+    setShowSnippetsModal(true)
+    setActiveSnippetTab(integration.type || "wordpress")
+    try {
+      setLoadingSnippets(true)
+      const res = await apiClient.getIntegrationSnippets(integration.id || integration._id)
+      if (res && res.success && res.data) {
+        setIntegrationSnippets(res.data.snippets)
+      }
+    } catch (err) {
+      toast.error("Failed to load integration code snippets")
+    } finally {
+      setLoadingSnippets(false)
+    }
+  }
+
+  // Open Field Mapping modal
+  const handleOpenMapping = (integration) => {
+    setSelectedIntegration(integration)
+    setEditingMappings(
+      Array.isArray(integration.fieldMapping) && integration.fieldMapping.length > 0
+        ? JSON.parse(JSON.stringify(integration.fieldMapping))
+        : [
+            { sourceField: "name", targetField: "name", transform: "trim", defaultValue: "" },
+            { sourceField: "email", targetField: "email", transform: "lowercase", defaultValue: "" },
+            { sourceField: "phone", targetField: "phone", transform: "phone_e164", defaultValue: "" },
+            { sourceField: "message", targetField: "message", transform: "trim", defaultValue: "" },
+          ]
+    )
+    setShowMappingModal(true)
+  }
+
+  // Save Field Mappings
+  const handleSaveMapping = async () => {
+    if (!selectedIntegration) return
+    try {
+      setSavingMappings(true)
+      const validMappings = editingMappings.filter((m) => m.sourceField && m.targetField)
+      const res = await apiClient.updateIntegration(selectedIntegration.id || selectedIntegration._id, {
+        fieldMapping: validMappings,
+      })
+      if (res && res.success) {
+        toast.success("Field mapping updated successfully!")
+        setShowMappingModal(false)
+        fetchWebsiteIntegrations()
+      } else {
+        toast.error(res?.error || "Failed to update field mappings")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to update field mappings")
+    } finally {
+      setSavingMappings(false)
+    }
+  }
+
+  // Open Test Modal
+  const handleOpenTest = (integration) => {
+    setSelectedIntegration(integration)
+    setIntegrationTestResult(null)
+    setSaveAsRealLead(false)
+    setTestPayloadText(
+      JSON.stringify(
+        {
+          name: "Test Lead (" + integration.name + ")",
+          email: "test.lead@example.com",
+          phone: "+919876543210",
+          message: "Testing website lead ingestion pipeline",
+          source: integration.settings?.leadSource || "Website Test",
+        },
+        null,
+        2
+      )
+    )
+    setShowTestModal(true)
+  }
+
+  // Run Test
+  const handleRunTest = async () => {
+    if (!selectedIntegration) return
+    try {
+      setTestingIntegration(true)
+      let parsed = {}
+      try {
+        parsed = JSON.parse(testPayloadText)
+      } catch (e) {
+        toast.error("Invalid JSON payload: " + e.message)
+        return
+      }
+
+      const res = await apiClient.testIntegration(
+        selectedIntegration.id || selectedIntegration._id,
+        parsed,
+        { createRealLead: saveAsRealLead }
+      )
+      if (res && res.success) {
+        setIntegrationTestResult(res.data || res)
+        if (saveAsRealLead || res.createdRealLead) {
+          toast.success("Real lead created successfully in CRM! Visible on /leads")
+        } else {
+          toast.success("Test lead simulation executed successfully!")
+        }
+      } else {
+        toast.error(res?.error || "Test simulation failed")
+      }
+    } catch (err) {
+      toast.error(err.message || "Test lead failed")
+    } finally {
+      setTestingIntegration(false)
+    }
+  }
+
+  // Toggle active/inactive
+  const handleToggleIntegrationStatus = async (integration) => {
+    const newStatus = integration.status === "active" ? "inactive" : "active"
+    try {
+      const res = await apiClient.updateIntegration(integration.id || integration._id, {
+        status: newStatus,
+      })
+      if (res && res.success) {
+        toast.success(`Integration marked as ${newStatus}`)
+        fetchWebsiteIntegrations()
+      }
+    } catch (err) {
+      toast.error("Failed to update status")
+    }
+  }
+
+  // Rotate Key
+  const handleRotateIntegrationKey = async (integration) => {
+    if (!confirm(`Are you sure you want to rotate the API key for "${integration.name}"? The existing key will be immediately invalidated.`)) {
+      return
+    }
+    try {
+      const res = await apiClient.rotateIntegrationApiKey(integration.id || integration._id)
+      if (res && res.success) {
+        toast.success("API key rotated successfully!")
+        setNewlyGeneratedKey(res.data?.rawApiKey)
+        setShowRotateModal(true)
+        fetchWebsiteIntegrations()
+      }
+    } catch (err) {
+      toast.error("Failed to rotate key")
+    }
+  }
+
+  // Delete Integration
+  const handleDeleteIntegration = async (integration) => {
+    if (!confirm(`Are you sure you want to delete "${integration.name}"? Incoming submissions from this website will be rejected.`)) {
+      return
+    }
+    try {
+      const res = await apiClient.deleteIntegration(integration.id || integration._id)
+      if (res && res.success) {
+        toast.success("Integration deleted successfully")
+        fetchWebsiteIntegrations()
+      }
+    } catch (err) {
+      toast.error("Failed to delete integration")
+    }
+  }
+
   // Load IndiaMART Status
   const loadIndiaMartStatus = useCallback(async () => {
     try {
@@ -415,6 +687,7 @@ export default function LeadFeedsClient() {
       setRefreshingAll(true)
       await Promise.allSettled([
         loadSettings(),
+        fetchWebsiteIntegrations(),
         loadIndiaMartStatus(),
         loadMetaStatus(),
         loadGoogleStatus(),
@@ -439,6 +712,7 @@ export default function LeadFeedsClient() {
       loadAllStatuses(false)
     } else if (activeTab === "website") {
       loadSettings()
+      fetchWebsiteIntegrations()
     } else if (activeTab === "indiamart") {
       loadIndiaMartStatus()
     } else if (activeTab === "meta") {
@@ -567,15 +841,19 @@ export default function LeadFeedsClient() {
     }
   }
 
-  // Send diagnostic test lead
-  const handleSendTestLead = async () => {
+  // Send diagnostic or real test lead
+  const handleSendTestLead = async (createReal = false) => {
     try {
       setTesting(true)
-      const res = await apiClient.sendLeadFeedTest()
+      const res = await apiClient.sendLeadFeedTest({ createRealLead: createReal })
       if (res.success) {
-        setTestResult(res.data)
+        setTestResult({ ...res.data, createdRealLead: createReal })
         setShowTestResultModal(true)
-        toast.success("Test lead processed! Integration pipeline is healthy.")
+        if (createReal) {
+          toast.success("Real lead created successfully in your CRM!")
+        } else {
+          toast.success("Test lead processed! Integration pipeline is healthy.")
+        }
         loadSettings()
       } else {
         toast.error(res.error || "Test submission failed")
@@ -1765,7 +2043,223 @@ export default function LeadFeedsClient() {
           TAB 1: WEBSITE FORMS & REST WEBHOOK
       ======================================================== */}
       {activeTab === "website" && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="space-y-8">
+          {/* Website Integrations Studio Header */}
+          <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+              <div>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                    <Globe className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Website Lead Integrations</h2>
+                    <p className="text-xs text-slate-500">
+                      Receive leads automatically from any external website platform (WordPress, HTML/JS, PHP, React, Next.js, or Webhooks).
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreatedIntegrationCredentials(null)
+                    setShowCreateModal(true)
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Website Integration
+                </button>
+              </div>
+            </div>
+
+            {/* Platform Filter Tabs */}
+            <div className="flex items-center gap-2 pt-4 overflow-x-auto pb-1">
+              {[
+                { id: "all", label: "All Integrations", count: websiteIntegrations.length },
+                { id: "wordpress", label: "WordPress", count: websiteIntegrations.filter((i) => i.type === "wordpress").length },
+                { id: "html", label: "HTML / JS", count: websiteIntegrations.filter((i) => i.type === "html" || i.type === "website").length },
+                { id: "php", label: "PHP", count: websiteIntegrations.filter((i) => i.type === "php").length },
+                { id: "react", label: "React", count: websiteIntegrations.filter((i) => i.type === "react").length },
+                { id: "nextjs", label: "Next.js", count: websiteIntegrations.filter((i) => i.type === "nextjs").length },
+                { id: "webhook", label: "Webhooks", count: websiteIntegrations.filter((i) => i.type === "webhook" || i.type === "generic").length },
+              ].map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() => setSelectedPlatformFilter(filter.id)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                    selectedPlatformFilter === filter.id
+                      ? "bg-slate-900 text-white font-semibold"
+                      : "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                  }`}
+                >
+                  <span>{filter.label}</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                    selectedPlatformFilter === filter.id ? "bg-slate-700 text-slate-200" : "bg-slate-200 text-slate-600"
+                  }`}>
+                    {filter.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Integrations List Grid */}
+            <div className="mt-6">
+              {loadingIntegrations ? (
+                <div className="py-12 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Loading website integrations...
+                </div>
+              ) : websiteIntegrations.length === 0 ? (
+                <div className="py-12 px-6 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                  <Globe className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                  <h3 className="text-sm font-bold text-slate-800">No Website Integrations Yet</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
+                    Connect your WordPress, React, Next.js, PHP, or HTML website to ingest leads seamlessly into Leads-365 CRM.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreatedIntegrationCredentials(null)
+                      setShowCreateModal(true)
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Connect Your First Website
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {websiteIntegrations
+                    .filter((item) => {
+                      if (selectedPlatformFilter === "all") return true
+                      if (selectedPlatformFilter === "html") return item.type === "html" || item.type === "website"
+                      if (selectedPlatformFilter === "webhook") return item.type === "webhook" || item.type === "generic"
+                      return item.type === selectedPlatformFilter
+                    })
+                    .map((item) => {
+                      const isItemActive = item.status === "active"
+                      return (
+                        <div
+                          key={item.id || item._id}
+                          className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-3 mb-3">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-9 h-9 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase">
+                                  {item.type?.slice(0, 2) || "WB"}
+                                </div>
+                                <div>
+                                  <h4 className="text-sm font-bold text-slate-900 leading-tight">{item.name}</h4>
+                                  <span className="text-[11px] text-slate-400 capitalize">{item.type} Integration</span>
+                                </div>
+                              </div>
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  isItemActive
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : "bg-slate-100 text-slate-600 border border-slate-200"
+                                }`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${isItemActive ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+                                {isItemActive ? "Active" : "Disabled"}
+                              </span>
+                            </div>
+
+                            <div className="space-y-1.5 my-3 bg-slate-50 p-2.5 rounded-lg text-[11px] border border-slate-100">
+                              <div className="flex items-center justify-between text-slate-600">
+                                <span className="font-mono text-slate-400">Domain:</span>
+                                <span className="font-medium truncate max-w-[160px]">{item.settings?.websiteDomain || "All origins"}</span>
+                              </div>
+                              {item.siteKey && (
+                                <div className="flex items-center justify-between text-slate-600">
+                                  <span className="font-mono text-slate-400">Site Key:</span>
+                                  <span className="font-mono text-indigo-600 truncate max-w-[160px]">{item.siteKey}</span>
+                                </div>
+                              )}
+                              <div className="flex items-center justify-between text-slate-600">
+                                <span className="font-mono text-slate-400">Received / Success:</span>
+                                <span className="font-semibold text-slate-700">
+                                  {item.stats?.totalReceived || 0} / {item.stats?.totalSuccess || 0}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-1">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenSnippets(item)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-medium transition cursor-pointer"
+                                title="View Code Snippets & Instructions"
+                              >
+                                <Code2 className="w-3.5 h-3.5" />
+                                Code
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenMapping(item)}
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
+                                title="Configure Field Mapping"
+                              >
+                                <Sliders className="w-3.5 h-3.5" />
+                                Mapping
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenTest(item)}
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[11px] font-medium transition cursor-pointer"
+                                title="Send Test Lead"
+                              >
+                                <PlayCircle className="w-3.5 h-3.5" />
+                                Test
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleIntegrationStatus(item)}
+                                className="p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                                title={isItemActive ? "Disable Integration" : "Activate Integration"}
+                              >
+                                <Shield className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRotateIntegrationKey(item)}
+                                className="p-1.5 rounded-md text-amber-500 hover:text-amber-700 hover:bg-amber-50 transition cursor-pointer"
+                                title="Rotate API Key"
+                              >
+                                <RotateCw className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteIntegration(item)}
+                                className="p-1.5 rounded-md text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                                title="Deactivate / Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Legacy Global Feed Settings Accordion */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left 2 Columns: Main Website Feed Settings */}
           <div className="lg:col-span-2 space-y-6">
             {/* Section A: Website Lead Source Card */}
@@ -2223,6 +2717,7 @@ export default function LeadFeedsClient() {
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* ========================================================
@@ -3851,9 +4346,45 @@ export default function LeadFeedsClient() {
               </div>
             </div>
 
-            <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200 text-xs text-emerald-800">
-              <strong>Notice:</strong> This diagnostic test validated your webhook settings without polluting your production CRM database with fake test leads.
-            </div>
+            {testResult.createdRealLead ? (
+              <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-800 space-y-2">
+                <div className="font-bold flex items-center gap-1.5 text-emerald-950">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Real Lead Created in CRM Database!</span>
+                </div>
+                <p className="text-emerald-800">
+                  This lead has been saved in your CRM account. You can view, edit, and call this lead immediately on the Leads page.
+                </p>
+                <div className="pt-1">
+                  <Link
+                    href="/leads"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium text-xs shadow-xs transition"
+                  >
+                    <span>View in Leads</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-2.5">
+                <div className="font-semibold flex items-center gap-1.5 text-amber-950">
+                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Notice: Diagnostic Simulation Mode</span>
+                </div>
+                <p className="text-amber-800 leading-relaxed">
+                  This diagnostic test checked your integration health <strong>without saving dummy records</strong> to your leads table.
+                </p>
+                <button
+                  type="button"
+                  disabled={testing}
+                  onClick={() => handleSendTestLead(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded-lg font-medium text-xs shadow-xs transition cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Create as Real Lead in CRM Now</span>
+                </button>
+              </div>
+            )}
 
             <div className="flex justify-end pt-2">
               <button
@@ -4140,6 +4671,741 @@ export default function LeadFeedsClient() {
           </div>
         </div>
       )}
+
+      {/* ========================================================
+          MODAL 1: ADD WEBSITE INTEGRATION
+      ======================================================== */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Add New Website Integration</h3>
+                  <p className="text-xs text-slate-500">Configure incoming lead feed from your website or app</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {createdIntegrationCredentials ? (
+              <div className="mt-5 space-y-4">
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs">
+                  <div className="flex items-center gap-2 font-bold mb-1">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Integration Created Successfully!
+                  </div>
+                  <p>Save your credentials now. Your private API key will not be shown again.</p>
+                </div>
+
+                {createdIntegrationCredentials.rawApiKey && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-700">Private API Key (Save Securely)</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={createdIntegrationCredentials.rawApiKey}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(createdIntegrationCredentials.rawApiKey)
+                          toast.success("API key copied!")
+                        }}
+                        className="px-3 py-2.5 rounded-lg bg-indigo-600 text-white text-xs font-medium cursor-pointer"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {createdIntegrationCredentials.siteKey && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-700">Public Site Key (For HTML/JS Forms)</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={createdIntegrationCredentials.siteKey}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(createdIntegrationCredentials.siteKey)
+                          toast.success("Site key copied!")
+                        }}
+                        className="px-3 py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium cursor-pointer"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateModal(false)
+                      setCreatedIntegrationCredentials(null)
+                    }}
+                    className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Done & View Integrations
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleCreateIntegration} className="mt-5 space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Integration Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Main Company Website"
+                    value={createForm.name}
+                    onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Platform Type *</label>
+                  <select
+                    value={createForm.type}
+                    onChange={(e) => setCreateForm({ ...createForm, type: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none capitalize"
+                  >
+                    <option value="wordpress">WordPress (Elementor / CF7 / WPForms / PHP)</option>
+                    <option value="html">HTML / JavaScript Static Form</option>
+                    <option value="php">PHP Website (cURL / Backend)</option>
+                    <option value="react">React Website / Component</option>
+                    <option value="nextjs">Next.js (App Router / Server Action)</option>
+                    <option value="webhook">Custom Webhook / External API</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Website Domain</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. mycompany.com"
+                      value={createForm.websiteDomain}
+                      onChange={(e) => setCreateForm({ ...createForm, websiteDomain: e.target.value })}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Lead Source Label</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. WordPress, Landing Page"
+                      value={createForm.leadSource}
+                      onChange={(e) => setCreateForm({ ...createForm, leadSource: e.target.value })}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Allowed Origins (for public browser forms)
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="https://mycompany.com&#10;http://localhost:3000"
+                    value={createForm.allowedOrigins}
+                    onChange={(e) => setCreateForm({ ...createForm, allowedOrigins: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg p-2.5 text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Separate origins by commas or newlines</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Default Lead Status</label>
+                    <select
+                      value={createForm.defaultStatus}
+                      onChange={(e) => setCreateForm({ ...createForm, defaultStatus: e.target.value })}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="New">New</option>
+                      <option value="Engaged">Engaged</option>
+                      <option value="Qualified">Qualified</option>
+                      <option value="Proposal Sent">Proposal Sent</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Assign Incoming Leads To</label>
+                    <select
+                      value={createForm.assignedStaffId}
+                      onChange={(e) => setCreateForm({ ...createForm, assignedStaffId: e.target.value })}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="unassigned">Unassigned (Queue)</option>
+                      {staffList.map((s) => (
+                        <option key={s.id || s._id} value={s.id || s._id}>
+                          {s.name} ({s.email})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateModal(false)}
+                    className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={creatingIntegration}
+                    className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 cursor-pointer"
+                  >
+                    {creatingIntegration ? "Creating..." : "Create Integration"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL 2: CODE SNIPPETS & SETUP INSTRUCTIONS
+      ======================================================== */}
+      {showSnippetsModal && selectedIntegration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                  <Code2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Integration Setup & Code Snippets</h3>
+                  <p className="text-xs text-slate-500">
+                    {selectedIntegration.name} ({selectedIntegration.type})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSnippetsModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Platform Selector Tabs inside Snippets Modal */}
+            <div className="flex items-center gap-1.5 pt-4 pb-2 border-b border-slate-100 overflow-x-auto">
+              {[
+                { id: "wordpress", label: "WordPress" },
+                { id: "html", label: "HTML / JS" },
+                { id: "php", label: "PHP Backend" },
+                { id: "react", label: "React" },
+                { id: "nextjs", label: "Next.js" },
+                { id: "webhook", label: "Custom Webhook" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveSnippetTab(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                    activeSnippetTab === tab.id
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Code & Instructions Content */}
+            <div className="flex-1 overflow-y-auto py-4 space-y-4">
+              {loadingSnippets ? (
+                <div className="py-16 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Generating integration code...
+                </div>
+              ) : integrationSnippets ? (
+                <>
+                  {activeSnippetTab === "wordpress" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                        <div className="font-bold text-slate-900">WordPress Webhook URL</div>
+                        <div className="font-mono text-indigo-600 select-all">{integrationSnippets.wordpress?.webhookUrl}</div>
+                        {selectedIntegration.siteKey && (
+                          <div className="font-mono text-slate-500 pt-1">Site Key: {selectedIntegration.siteKey}</div>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="font-bold text-slate-900">Elementor Form Instructions</div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] whitespace-pre-wrap">
+                          {integrationSnippets.wordpress?.elementorInstructions}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="font-bold text-slate-900">Contact Form 7 / WPForms Instructions</div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] whitespace-pre-wrap">
+                          {integrationSnippets.wordpress?.cf7WebhookInstructions}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">Custom PHP Hook (functions.php)</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.wordpress?.customPhpHook || "")
+                              toast.success("PHP hook code copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy PHP Hook
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.wordpress?.customPhpHook}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSnippetTab === "html" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800">
+                        <strong>Anti-Bot Honeypot Included:</strong> The form snippet below includes a hidden honeypot trap field (<code>_hp_trap</code>) to silently discard spam bot submissions without annoying CAPTCHAs.
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">HTML Form & JavaScript Snippet</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.html?.htmlForm || "")
+                              toast.success("HTML code copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy HTML Form
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.html?.htmlForm}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSnippetTab === "php" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800">
+                        <strong>HMAC-SHA256 & Timestamp Protection:</strong> This server-to-server PHP script securely signs every payload with an HMAC-SHA256 signature and attaches timestamp and idempotency headers to guarantee authenticity and prevent replay attacks.
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">Production-Ready PHP Integration Script</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.php?.serverScript || "")
+                              toast.success("PHP script copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy PHP Script
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.php?.serverScript}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSnippetTab === "react" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">React LeadCaptureForm Component</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.react?.component || "")
+                              toast.success("React component copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy React Component
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.react?.component}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSnippetTab === "nextjs" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-900">
+                        <strong>Environment Variable Security:</strong> Private API keys are strictly kept on the server inside <code>.env.local</code>. The client browser only calls your internal <code>/api/contact</code> route.
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="font-bold text-slate-900">1. .env.local Configuration</div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px]">
+                          {integrationSnippets.nextjs?.envExample}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">2. App Router Server Route (app/api/contact/route.js)</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.nextjs?.routeHandler || "")
+                              toast.success("Route handler copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy Server Handler
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.nextjs?.routeHandler}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">3. Client Form Component (app/components/ContactForm.jsx)</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.nextjs?.clientComponent || "")
+                              toast.success("Client form copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy Client Form
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.nextjs?.clientComponent}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSnippetTab === "webhook" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                        <div className="font-bold text-slate-900">Webhook Endpoint URL</div>
+                        <div className="font-mono text-indigo-600 select-all">{integrationSnippets.webhook?.webhookUrl}</div>
+                        <div className="text-[11px] text-slate-500 pt-1">HTTP Method: POST | Content-Type: application/json</div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">cURL Example</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.webhook?.curlExample || "")
+                              toast.success("cURL command copied!")
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Copy cURL
+                          </button>
+                        </div>
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+                          {integrationSnippets.webhook?.curlExample}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="py-8 text-center text-slate-500 text-xs">Could not load snippets</div>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowSnippetsModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL 3: FIELD MAPPING CONFIGURATION
+      ======================================================== */}
+      {showMappingModal && selectedIntegration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Lead Field Mapping</h3>
+                  <p className="text-xs text-slate-500">
+                    Map incoming website form fields to CRM lead fields for {selectedIntegration.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMappingModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-4 space-y-3">
+              <p className="text-xs text-slate-500">
+                Define how external form fields match CRM attributes. Custom fields (e.g. <code>product</code>, <code>budget</code>) are saved into lead metadata.
+              </p>
+
+              <div className="space-y-2">
+                {editingMappings.map((map, idx) => (
+                  <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
+                    <input
+                      type="text"
+                      placeholder="Source field (e.g. full_name)"
+                      value={map.sourceField}
+                      onChange={(e) => {
+                        const copy = [...editingMappings]
+                        copy[idx].sourceField = e.target.value
+                        setEditingMappings(copy)
+                      }}
+                      className="flex-1 border border-slate-200 rounded px-2.5 py-1.5 text-xs bg-white font-mono"
+                    />
+                    <ArrowRight className="w-4 h-4 text-slate-400 shrink-0" />
+                    <input
+                      type="text"
+                      placeholder="CRM field (name, email, phone...)"
+                      value={map.targetField}
+                      onChange={(e) => {
+                        const copy = [...editingMappings]
+                        copy[idx].targetField = e.target.value
+                        setEditingMappings(copy)
+                      }}
+                      className="flex-1 border border-slate-200 rounded px-2.5 py-1.5 text-xs bg-white font-mono"
+                    />
+                    <select
+                      value={map.transform || "none"}
+                      onChange={(e) => {
+                        const copy = [...editingMappings]
+                        copy[idx].transform = e.target.value
+                        setEditingMappings(copy)
+                      }}
+                      className="border border-slate-200 rounded px-2 py-1.5 text-xs bg-white text-slate-700"
+                    >
+                      <option value="none">No transform</option>
+                      <option value="trim">Trim</option>
+                      <option value="lowercase">Lowercase</option>
+                      <option value="uppercase">Uppercase</option>
+                      <option value="phone_e164">Phone E.164</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingMappings(editingMappings.filter((_, i) => i !== idx))
+                      }}
+                      className="p-1.5 text-rose-500 hover:bg-rose-50 rounded cursor-pointer"
+                      title="Remove field mapping"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingMappings([
+                    ...editingMappings,
+                    { sourceField: "", targetField: "", transform: "trim", defaultValue: "" },
+                  ])
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-indigo-300 text-indigo-600 hover:bg-indigo-50 text-xs font-semibold transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Field Rule
+              </button>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowMappingModal(false)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingMappings}
+                onClick={handleSaveMapping}
+                className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 cursor-pointer"
+              >
+                {savingMappings ? "Saving..." : "Save Field Mappings"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL 4: TEST INTEGRATION SIMULATION
+      ======================================================== */}
+      {showTestModal && selectedIntegration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
+                  <PlayCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Test Website Integration</h3>
+                  <p className="text-xs text-slate-500">Simulate incoming lead payload for {selectedIntegration.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTestModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-4 space-y-4">
+              <div className="flex items-center gap-2.5 p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900">
+                <input
+                  type="checkbox"
+                  id="saveRealLead"
+                  checked={saveAsRealLead}
+                  onChange={(e) => setSaveAsRealLead(e.target.checked)}
+                  className="rounded border-amber-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                />
+                <label htmlFor="saveRealLead" className="cursor-pointer font-medium select-none">
+                  Save as real lead in CRM database (immediately appears on <Link href="/leads" className="font-bold underline text-indigo-600">/leads</Link>)
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Test JSON Payload</label>
+                <textarea
+                  rows={7}
+                  value={testPayloadText}
+                  onChange={(e) => setTestPayloadText(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg p-3 text-xs font-mono bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              {integrationTestResult && (
+                <div className="space-y-3">
+                  {integrationTestResult.createdRealLead || saveAsRealLead ? (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span className="font-semibold">Real lead created in CRM! Check your Leads page.</span>
+                      </div>
+                      <Link
+                        href="/leads"
+                        className="inline-flex items-center gap-1 font-bold text-emerald-700 hover:text-emerald-900 underline"
+                      >
+                        <span>Open Leads</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800 flex items-start gap-2">
+                      <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Simulation Mode:</strong> This pipeline check was successful without writing dummy records to your CRM database. Check the box above if you want to create an actual lead in your CRM table.
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="p-4 bg-slate-900 text-slate-100 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between text-emerald-400 font-bold">
+                      <span>Result Payload</span>
+                      <span>HTTP 200 OK</span>
+                    </div>
+                    <pre className="text-[11px] text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
+                      {JSON.stringify(integrationTestResult, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowTestModal(false)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={testingIntegration}
+                onClick={handleRunTest}
+                className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 cursor-pointer"
+              >
+                {testingIntegration
+                  ? (saveAsRealLead ? "Creating Real Lead..." : "Sending Simulation...")
+                  : (saveAsRealLead ? "Create Real Lead in CRM" : "Send Test Lead (Simulate)")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

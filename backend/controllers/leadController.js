@@ -191,9 +191,11 @@ const getLeads = async (req, res) => {
 
     // Efficiently batch-lookup playable call recordings for the returned leads
     const leadIds = leads.map((l) => l._id)
-    const phoneList = leads
-      .map((l) => l.phoneNormalized || l.phone)
-      .filter((p) => typeof p === "string" && p.trim().length > 0)
+    const phoneList = []
+    leads.forEach((l) => {
+      if (l.phone && typeof l.phone === "string" && l.phone.trim()) phoneList.push(l.phone.trim())
+      if (l.phoneNormalized && typeof l.phoneNormalized === "string" && l.phoneNormalized.trim()) phoneList.push(l.phoneNormalized.trim())
+    })
 
     const callFilterConditions = []
     if (leadIds.length > 0) {
@@ -210,15 +212,28 @@ const getLeads = async (req, res) => {
     const recordingCountsByLead = new Map()
 
     if (callFilterConditions.length > 0) {
+      const hasAudioFileFilter = {
+        $or: [
+          { "recording.fileId": { $ne: null } },
+          { "recording.mp3FileId": { $ne: null } },
+          { "recording.imagekitUrl": { $ne: null } },
+          { "metadata.recordingUrl": { $ne: null } },
+          { recordingUrl: { $ne: null } },
+        ],
+      }
       const callFilter = {
         $and: [
           { $or: callFilterConditions },
           {
             $or: [
-              { "recording.status": { $in: ["stored", "ready"] } },
+              {
+                "recording.status": { $in: ["stored", "ready"] },
+                ...hasAudioFileFilter,
+              },
               {
                 hasRecording: true,
                 "recording.status": { $nin: ["pending", "skipped_dnr", "expired", "failed"] },
+                ...hasAudioFileFilter,
               },
             ],
           },
@@ -480,6 +495,15 @@ const getLeadById = async (req, res) => {
     }
 
     const leadObj = lead.toObject ? lead.toObject() : { ...lead }
+    const hasAudioFileFilter = {
+      $or: [
+        { "recording.fileId": { $ne: null } },
+        { "recording.mp3FileId": { $ne: null } },
+        { "recording.imagekitUrl": { $ne: null } },
+        { "metadata.recordingUrl": { $ne: null } },
+        { recordingUrl: { $ne: null } },
+      ],
+    }
     const callFilter = {
       $and: [
         {
@@ -491,10 +515,14 @@ const getLeadById = async (req, res) => {
         },
         {
           $or: [
-            { "recording.status": { $in: ["stored", "ready"] } },
+            {
+              "recording.status": { $in: ["stored", "ready"] },
+              ...hasAudioFileFilter,
+            },
             {
               hasRecording: true,
               "recording.status": { $nin: ["pending", "skipped_dnr", "expired", "failed"] },
+              ...hasAudioFileFilter,
             },
           ],
         },
@@ -1089,8 +1117,27 @@ const getLeadCalls = async (req, res) => {
       return res.status(403).json({ success: false, error: "Access denied. Cross-tenant access is prohibited." })
     }
 
-    const calls = await Call.find({ leadId: id })
-      .sort({ startTimeMs: -1 })
+    const phoneCandidates = [lead.phone, lead.phoneNormalized].filter(
+      (p) => typeof p === "string" && p.trim().length > 0
+    )
+    const callQuery = {
+      $or: [
+        { leadId: id },
+        ...(phoneCandidates.length > 0
+          ? [
+              { number: { $in: phoneCandidates } },
+              { phoneNumber: { $in: phoneCandidates } },
+              { phoneNormalized: { $in: phoneCandidates } },
+            ]
+          : []),
+      ],
+    }
+    if (lead.tenantId && req.user.role !== "super_admin") {
+      callQuery.tenantId = lead.tenantId
+    }
+    const calls = await Call.find(callQuery)
+      .setOptions({ skipTenantFilter: true })
+      .sort({ startTimeMs: -1, createdAt: -1 })
       .lean()
 
     return res.status(200).json({

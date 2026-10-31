@@ -278,7 +278,7 @@ function CallReportsClient() {
 
   // Handle Device Status toggle
   const handleToggleDeviceStatus = async (device) => {
-    const newStatus = device.status === "active" ? "revoked" : "active"
+    const newStatus = device.status?.toLowerCase() === "active" ? "revoked" : "active"
     try {
       const res = await apiClient.updateDeviceStatus(device._id || device.id, newStatus)
       if (res && res.success) {
@@ -814,7 +814,7 @@ function CallReportsClient() {
                   </tr>
                 ) : (
                   devices.map((device) => {
-                    const isActive = device.status === "active"
+                    const isActive = device.status?.toLowerCase() === "active"
                     return (
                       <tr key={device._id || device.id} className="hover:bg-slate-50/60 transition-colors">
                         <td className="px-5 py-4">

@@ -237,7 +237,7 @@ const listDevices = async (req, res) => {
 
     // If caller is agent (not admin), only see own devices
     if (req.user.role === "agent") {
-      filter.userId = req.user._id
+      filter.userId = req.user._id || req.user.id
     }
 
     const devices = await Device.find(filter)
@@ -278,7 +278,7 @@ const registerDevice = async (req, res) => {
     } = req.body || {}
 
     // Target user: agent registers self; admin can register for any agent
-    let targetUserId = req.user._id
+    let targetUserId = req.user._id || req.user.id
     if (userId && req.user.role === "account_admin" && mongoose.Types.ObjectId.isValid(userId)) {
       targetUserId = userId
     }
@@ -322,7 +322,8 @@ const updateDeviceStatus = async (req, res) => {
     const { id } = req.params
     const { status } = req.body || {}
 
-    if (!["active", "revoked"].includes(status)) {
+    const normalizedStatus = String(status || "").toLowerCase()
+    if (!["active", "revoked"].includes(normalizedStatus)) {
       return res.status(400).json({
         success: false,
         error: "Invalid status: Expected 'active' or 'revoked'",
@@ -338,24 +339,24 @@ const updateDeviceStatus = async (req, res) => {
       return res.status(404).json({ success: false, error: "Device not found" })
     }
 
-    device.status = status
+    device.status = normalizedStatus.toUpperCase()
     await device.save()
 
     // Audit log device revocation
     await audit.log({
       tenantId,
-      actor: { id: req.user._id, name: req.user.name, email: req.user.email, role: req.user.role },
-      action: status === "revoked" ? "device.revoke" : "device.activate",
+      actor: { id: req.user._id || req.user.id, name: req.user.name, email: req.user.email, role: req.user.role },
+      action: normalizedStatus === "revoked" ? "device.revoke" : "device.activate",
       entity: "Device",
       entityId: device._id,
-      summary: `${status === "revoked" ? "Revoked" : "Re-activated"} agent device ${device.label || device.model}`,
-      details: { deviceId: device._id, status, model: device.model },
+      summary: `${normalizedStatus === "revoked" ? "Revoked" : "Re-activated"} agent device ${device.label || device.model}`,
+      details: { deviceId: device._id, status: device.status, model: device.model },
       req,
     })
 
     return res.status(200).json({
       success: true,
-      message: `Device status updated to '${status}'`,
+      message: `Device status updated to '${normalizedStatus}'`,
       data: device,
       device,
     })
@@ -505,6 +506,41 @@ const associateCallWithLead = async (req, res) => {
   }
 }
 
+/**
+ * Retrieves details for a specific device by ID within the authenticated tenant.
+ */
+const getDeviceById = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId
+    const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: "Invalid device ID format" })
+    }
+
+    const device = await Device.findOne({ _id: id, tenantId })
+      .setOptions({ skipTenantFilter: true })
+      .populate("userId", "name email role")
+      .lean()
+
+    if (!device) {
+      return res.status(404).json({ success: false, error: "Device not found" })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: device,
+      device,
+    })
+  } catch (err) {
+    console.error("[DeviceController Get Error]:", err)
+    return res.status(500).json({
+      success: false,
+      error: `Failed to retrieve device: ${err.message}`,
+    })
+  }
+}
+
 module.exports = {
   createCallLog,
   getCallLogs,
@@ -514,6 +550,7 @@ module.exports = {
   listDevices,
   registerDevice,
   updateDeviceStatus,
+  getDeviceById,
   uploadCallRecording,
   playCallRecording,
   purgeRecordings,

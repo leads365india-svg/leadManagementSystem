@@ -15,13 +15,18 @@ const { encrypt, decrypt } = require("../utils/cryptoUtils")
 
 const ALLOWED_INTEGRATION_TYPES = [
   "website",
+  "wordpress",
+  "html",
+  "php",
+  "react",
+  "nextjs",
+  "webhook",
+  "generic",
   "google_ads",
   "meta",
   "zapier",
   "indiamart",
-  "wordpress",
   "wix",
-  "generic",
 ]
 
 const fieldMappingSchema = new mongoose.Schema(
@@ -119,6 +124,25 @@ const integrationSchema = new mongoose.Schema(
       default: "Unassigned",
     },
     settings: {
+      websiteDomain: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      allowedOrigins: {
+        type: [String],
+        default: [],
+      },
+      leadSource: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      defaultStatus: {
+        type: String,
+        default: "New",
+        trim: true,
+      },
       acceptedForms: {
         type: [String],
         default: [],

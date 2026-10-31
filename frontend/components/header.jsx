@@ -370,26 +370,11 @@ export default function Header() {
     }
   }, [activeDropdown])
 
-  // Dropdown open/leave handlers with generous hover bridge
+  // Dropdown open/leave handlers with natural container containment
   const handleOpenDropdown = (categoryId) => {
     if (dropdownTimeoutRef.current) {
       clearTimeout(dropdownTimeoutRef.current)
       dropdownTimeoutRef.current = null
-    }
-
-    const buttonEl = categoryButtonRefs.current[categoryId]
-    if (buttonEl) {
-      const rect = buttonEl.getBoundingClientRect()
-      const dropdownWidth = 288
-      let left = rect.left
-      if (left + dropdownWidth > window.innerWidth - 16) {
-        left = window.innerWidth - dropdownWidth - 16
-      }
-      if (left < 16) left = 16
-      setDropdownCoords({
-        top: Math.round(rect.bottom + 6),
-        left: Math.round(left),
-      })
     }
     setActiveDropdown(categoryId)
     setUserDropdownOpen(false)
@@ -583,11 +568,7 @@ export default function Header() {
                         setActiveDropdown(null)
                         router.push(category.href)
                       } else {
-                        if (isDropdownOpen) {
-                          setActiveDropdown(null)
-                        } else {
-                          handleOpenDropdown(category.id)
-                        }
+                        setActiveDropdown(isDropdownOpen ? null : category.id)
                       }
                     }}
                     className={`flex items-center space-x-1.5 px-2.5 py-1.5 lg:px-3 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-150 focus:outline-none cursor-pointer ${
@@ -610,13 +591,77 @@ export default function Header() {
                       />
                     )}
                   </button>
+
+                  {/* Stable In-Front Category Dropdown Menu */}
+                  {hasDropdown && isDropdownOpen && (
+                    <div
+                      id={`navbar-category-dropdown-${category.id}`}
+                      className={`absolute top-full mt-1.5 w-72 bg-white rounded-xl shadow-2xl border border-slate-200/95 py-1.5 z-[99999] animate-in fade-in slide-in-from-top-1 duration-150 before:content-[''] before:absolute before:-top-3 before:left-0 before:right-0 before:h-3 ${
+                        category.id === "settings" || category.id === "reports" ? "right-0" : "left-0"
+                      }`}
+                      onMouseEnter={handleDropdownEnter}
+                      onMouseLeave={handleDropdownLeave}
+                    >
+                      <div className="px-3.5 py-2 mb-1 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 rounded-t-lg select-none">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          {category.label}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium">
+                          {category.items.length} items
+                        </span>
+                      </div>
+                      <div className="px-1.5 py-0.5 space-y-0.5 max-h-[224px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:bg-transparent">
+                        {category.items.map((item) => {
+                          const ItemIcon = item.icon
+                          const itemActive = isItemActive(item.href)
+                          return (
+                            <Link
+                              key={item.id}
+                              href={item.href}
+                              onClick={() => setActiveDropdown(null)}
+                              className={`flex items-start space-x-2.5 p-2 rounded-lg text-xs transition-colors group ${
+                                itemActive
+                                  ? "bg-indigo-50/90 text-indigo-900 font-semibold"
+                                  : "text-slate-700 hover:bg-slate-50 hover:text-indigo-600"
+                              }`}
+                            >
+                              <div
+                                className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                                  itemActive
+                                    ? "bg-indigo-600 text-white shadow-2xs"
+                                    : "bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600"
+                                }`}
+                              >
+                                <ItemIcon className="w-3.5 h-3.5" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
+                                    {item.label}
+                                  </span>
+                                  {item.badge && (
+                                    <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-700">
+                                      {item.badge}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-400 line-clamp-1 leading-normal">
+                                  {item.description}
+                                </p>
+                              </div>
+                            </Link>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             })}
           </nav>
 
           {/* =========================================================================
-              RIGHT SECTION: Fullscreen & User Profile (Standalone Plus & Settings Removed)
+              RIGHT SECTION: Fullscreen & User Profile
           ========================================================================= */}
           <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
             {/* Fullscreen Toggle */}
@@ -713,81 +758,7 @@ export default function Header() {
         </div>
       </div>
 
-      {/* =========================================================================
-          SAFE FIXED-POSITION CATEGORY DROPDOWN MENU
-          Max 4 items visible at a time with subtle vertical scrolling for overflow
-      ========================================================================= */}
-      {mounted && activeCategoryData && activeCategoryData.items.length > 1 && typeof document !== "undefined" && createPortal(
-        <div
-          id="navbar-category-dropdown"
-          style={{
-            position: "fixed",
-            top: `${dropdownCoords.top}px`,
-            left: `${dropdownCoords.left}px`,
-            zIndex: 99999,
-          }}
-          className="w-72 bg-white rounded-xl shadow-2xl border border-slate-200/95 py-1.5 animate-in fade-in slide-in-from-top-1 duration-150 before:content-[''] before:absolute before:-top-3 before:left-0 before:right-0 before:h-3"
-          onMouseEnter={handleDropdownEnter}
-          onMouseLeave={handleDropdownLeave}
-        >
-          {/* Stable Header */}
-          <div className="px-3.5 py-2 mb-1 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 rounded-t-lg select-none">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              {activeCategoryData.label}
-            </span>
-            <span className="text-[10px] text-slate-400 font-medium">
-              {activeCategoryData.items.length} items
-            </span>
-          </div>
 
-          {/* Max 4 items visible, scrollable if more */}
-          <div className="px-1.5 py-0.5 space-y-0.5 max-h-[224px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:bg-transparent">
-            {activeCategoryData.items.map((item) => {
-              const ItemIcon = item.icon
-              const itemActive = isItemActive(item.href)
-
-              return (
-                <Link
-                  key={item.id}
-                  href={item.href}
-                  onClick={() => setActiveDropdown(null)}
-                  className={`flex items-start space-x-2.5 p-2 rounded-lg text-xs transition-colors group ${
-                    itemActive
-                      ? "bg-indigo-50/90 text-indigo-900 font-semibold"
-                      : "text-slate-700 hover:bg-slate-50 hover:text-indigo-600"
-                  }`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                      itemActive
-                        ? "bg-indigo-600 text-white shadow-2xs"
-                        : "bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600"
-                    }`}
-                  >
-                    <ItemIcon className="w-3.5 h-3.5" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center space-x-1.5">
-                      <span className="font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
-                        {item.label}
-                      </span>
-                      {item.badge && (
-                        <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-700">
-                          {item.badge}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-400 line-clamp-1 leading-normal">
-                      {item.description}
-                    </p>
-                  </div>
-                </Link>
-              )
-            })}
-          </div>
-        </div>,
-        document.body
-      )}
 
       {/* =========================================================================
           MOBILE NAVIGATION DRAWER

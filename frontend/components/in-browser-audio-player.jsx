@@ -47,6 +47,7 @@ export default function InBrowserAudioPlayer({
 
   const initialDuration = recording?.duration || recording?.durationSeconds || 0
   const [blobUrl, setBlobUrl] = useState(null)
+  const [streamSrc, setStreamSrc] = useState(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(initialDuration)
@@ -98,76 +99,16 @@ export default function InBrowserAudioPlayer({
       return
     }
 
-    // Fetch converted MP3 by default
-    const audioStreamUrl = `${API_BASE_URL}/calls/${callId}/recording?format=mp3`
-
-    const fetchAudio = async () => {
+    let token = null
+    if (typeof window !== "undefined") {
       try {
-        let token = null
-        if (typeof window !== "undefined") {
-          try {
-            token = localStorage.getItem("leadflow_token")
-          } catch (_) {}
-        }
-
-        const headers = {}
-        if (token) {
-          headers["Authorization"] = `Bearer ${token}`
-        }
-
-        const response = await fetch(audioStreamUrl, {
-          method: "GET",
-          headers,
-          credentials: "include",
-          signal: controller.signal,
-        })
-
-        if (!response.ok) {
-          let errorMsg = "Unable to stream audio recording."
-          const errData = await response.json().catch(() => null)
-          if (errData && errData.code && errData.error) {
-            errorMsg = errData.error
-          } else if (response.status === 401) {
-            errorMsg = "Authentication required. Please log in again."
-          } else if (response.status === 403) {
-            errorMsg = "Playback restricted by compliance policy or permissions."
-          } else if (response.status === 404) {
-            errorMsg = "Recording audio not found on server."
-          } else if (response.status === 410) {
-            errorMsg = "Recording has expired per retention policy."
-          } else if (response.status === 422) {
-            errorMsg = "Recording audio file is corrupt or in an unconvertible format."
-          } else if (errData && errData.error) {
-            errorMsg = errData.error
-          }
-          throw new Error(errorMsg)
-        }
-
-        const contentType = response.headers.get("content-type") || ""
-        if (contentType.includes("application/json")) {
-          const errData = await response.json().catch(() => ({}))
-          throw new Error(errData.error || "Server returned an error response instead of audio data.")
-        }
-
-        const blob = await response.blob()
-        if (!blob || blob.size === 0) {
-          throw new Error("Recording audio file is empty (0 bytes).")
-        }
-
-        // Guarantee audio/mpeg type on blob
-        const audioBlob = blob.type ? blob : new Blob([blob], { type: "audio/mpeg" })
-        const objectUrl = URL.createObjectURL(audioBlob)
-        blobUrlRef.current = objectUrl
-        setBlobUrl(objectUrl)
-      } catch (err) {
-        if (controller.signal.aborted) return
-        console.warn("[AudioPlayback Error]:", err.message || err)
-        setError(err.message || "Unable to stream audio recording. It may be restricted by privacy policy or expired.")
-        setIsLoading(false)
-      }
+        token = localStorage.getItem("leadflow_token")
+      } catch (_) {}
     }
 
-    fetchAudio()
+    // Instant Direct Streaming (0ms latency without waiting for full blob download)
+    const directUrl = `${API_BASE_URL}/calls/${callId}/recording?format=mp3${token ? `&token=${encodeURIComponent(token)}` : ""}`
+    setStreamSrc(directUrl)
 
     return () => {
       controller.abort()
@@ -178,10 +119,11 @@ export default function InBrowserAudioPlayer({
     }
   }, [callId])
 
-  // 2. Audio DOM event handlers on Blob URL change
+  // 2. Audio DOM event handlers with Instant Auto-play & Error Diagnostics
   useEffect(() => {
     const audio = audioRef.current
-    if (!audio || !blobUrl) return
+    const activeSrc = streamSrc || blobUrl
+    if (!audio || !activeSrc) return
 
     const handleLoadedMetadata = () => {
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
@@ -192,6 +134,14 @@ export default function InBrowserAudioPlayer({
 
     const handleCanPlay = () => {
       setIsLoading(false)
+      audio.play().then(() => {
+        setIsPlaying(true)
+        setError(null)
+      }).catch((e) => {
+        if (e.name !== "AbortError") {
+          setIsPlaying(false)
+        }
+      })
     }
 
     const handleTimeUpdate = () => {
@@ -203,11 +153,24 @@ export default function InBrowserAudioPlayer({
       setCurrentTime(0)
     }
 
-    const handleError = (e) => {
+    const handleError = async () => {
       setIsLoading(false)
       setIsPlaying(false)
-      console.warn("[AudioPlayback Decode Error]:", e)
-      setError("Audio decode error. The audio recording could not be processed by your browser.")
+      try {
+        let token = null
+        if (typeof window !== "undefined") {
+          try { token = localStorage.getItem("leadflow_token") } catch (_) {}
+        }
+        const checkRes = await fetch(`${API_BASE_URL}/calls/${callId}/recording?format=mp3`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+        if (!checkRes.ok) {
+          const errData = await checkRes.json().catch(() => ({}))
+          setError(errData.error || (checkRes.status === 404 ? "Recording audio not found on server." : "Unable to stream audio recording."))
+          return
+        }
+      } catch (_) {}
+      setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
     }
 
     audio.addEventListener("loadedmetadata", handleLoadedMetadata)
@@ -224,7 +187,7 @@ export default function InBrowserAudioPlayer({
       audio.removeEventListener("error", handleError)
       audio.pause()
     }
-  }, [blobUrl])
+  }, [streamSrc, blobUrl, callId])
 
   const togglePlay = () => {
     const audio = audioRef.current
@@ -248,8 +211,10 @@ export default function InBrowserAudioPlayer({
           setError(null)
         })
         .catch((err) => {
-          console.error("Playback start error:", err)
-          setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+          if (err.name !== "AbortError") {
+            console.error("Playback start error:", err)
+            setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+          }
         })
     }
   }
@@ -312,7 +277,7 @@ export default function InBrowserAudioPlayer({
     >
       <audio
         ref={audioRef}
-        src={blobUrl || undefined}
+        src={streamSrc || blobUrl || undefined}
         preload="metadata"
       />
 

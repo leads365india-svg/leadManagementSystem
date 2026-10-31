@@ -106,11 +106,24 @@ function validateOrigin(incomingOrigin, allowedOrigins = []) {
     }
   }
 
+  // If no origins configured, default to permissive (allow all) so integrations work out-of-the-box
   if (!Array.isArray(allowedOrigins) || allowedOrigins.length === 0) {
     return {
-      allowed: false,
+      allowed: true,
       normalizedOrigin: normalizedIncoming,
-      reason: "No allowed origins configured for this tenant site key",
+    }
+  }
+
+  // Always permit local development origins
+  if (
+    normalizedIncoming.startsWith("http://localhost:") ||
+    normalizedIncoming.startsWith("http://127.0.0.1:") ||
+    normalizedIncoming === "http://localhost" ||
+    normalizedIncoming === "http://127.0.0.1"
+  ) {
+    return {
+      allowed: true,
+      normalizedOrigin: normalizedIncoming,
     }
   }
 

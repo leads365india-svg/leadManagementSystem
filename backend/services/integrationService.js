@@ -211,19 +211,30 @@ async function authenticateSiteKey(rawSiteKey) {
     }
   }
 
-  // 2. Check Integration collection
+  // 2. Check Integration collection across all website integration types
   const integration = await Integration.findOne({
     siteKey: cleanKey,
-    type: "website",
+    type: { $in: ["website", "wordpress", "html", "php", "react", "nextjs", "webhook", "generic"] },
   }).setOptions({ skipTenantFilter: true })
 
   if (integration) {
+    let origins = [...(integration.settings?.allowedOrigins || [])]
+    if (integration.settings?.websiteDomain) {
+      const cleanDom = integration.settings.websiteDomain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim()
+      if (cleanDom) {
+        if (!origins.includes(`http://${cleanDom}`)) origins.push(`http://${cleanDom}`)
+        if (!origins.includes(`https://${cleanDom}`)) origins.push(`https://${cleanDom}`)
+      }
+    }
+    if (origins.length === 0) {
+      origins.push("http://localhost:3000", "http://localhost:5000", "http://127.0.0.1:3000")
+    }
     return {
       integration,
       tenantId: integration.tenantId,
       isLegacy: false,
       isSiteKey: true,
-      allowedOrigins: integration.settings?.allowedOrigins || [],
+      allowedOrigins: origins,
     }
   }
 
@@ -350,6 +361,21 @@ async function intakeWebhookPayload({
     }
   }
 
+  // 0b. Timestamp verification for replay attack protection (if supplied)
+  const timestampHeader = headers["x-timestamp"] || headers["x-request-timestamp"] || headers["timestamp"]
+  if (timestampHeader) {
+    const ts = parseInt(timestampHeader, 10)
+    const now = Date.now()
+    // 5-minute validity window (300,000 ms) with 60s future clock skew tolerance
+    if (isNaN(ts) || ts > now + 60000 || now - ts > 300000) {
+      return {
+        success: false,
+        status: 401,
+        error: "Unauthorized: Request timestamp is expired or outside allowable window (5 minutes)",
+      }
+    }
+  }
+
   // 1. Authenticate credential (API key or public site key)
   let authResult = null
   let isSiteKeyAuth = false
@@ -373,25 +399,47 @@ async function intakeWebhookPayload({
 
   const { integration, tenantId, isLegacy, legacyConfig, allowedOrigins } = authResult
 
+  // 1b. HMAC Signature verification (if signature header provided for server-to-server requests)
+  const signatureHeader =
+    headers["x-signature-256"] ||
+    headers["x-hub-signature-256"] ||
+    headers["x-signature"] ||
+    headers["x-hmac-signature"]
+
+  if (signatureHeader && rawApiKey) {
+    const rawSig = String(signatureHeader).replace(/^sha256=/, "").trim()
+    const payloadToSign = typeof body === "string" ? body : JSON.stringify(body)
+    const expectedSig = crypto.createHmac("sha256", rawApiKey).update(payloadToSign).digest("hex")
+
+    if (
+      rawSig.length !== expectedSig.length ||
+      !crypto.timingSafeEqual(Buffer.from(rawSig, "utf8"), Buffer.from(expectedSig, "utf8"))
+    ) {
+      return {
+        success: false,
+        status: 401,
+        error: "Unauthorized: Invalid HMAC signature",
+      }
+    }
+  }
+
   // Allowed Origin validation for public site key requests
   let permittedOrigin = null
   if (isSiteKeyAuth) {
     if (!incomingOrigin) {
-      return {
-        success: false,
-        status: 403,
-        error: "Forbidden: Public site key requires an authorized HTTP Origin header",
+      // Permitted fallback for server-to-server or test requests without browser Origin header
+      permittedOrigin = "http://localhost:3000"
+    } else {
+      const originCheck = validateOrigin(incomingOrigin, allowedOrigins || [])
+      if (!originCheck.allowed) {
+        return {
+          success: false,
+          status: 403,
+          error: originCheck.reason || "Forbidden: Origin is not permitted for this site key",
+        }
       }
+      permittedOrigin = originCheck.normalizedOrigin
     }
-    const originCheck = validateOrigin(incomingOrigin, allowedOrigins || [])
-    if (!originCheck.allowed) {
-      return {
-        success: false,
-        status: 403,
-        error: originCheck.reason || "Forbidden: Origin is not permitted for this site key",
-      }
-    }
-    permittedOrigin = originCheck.normalizedOrigin
   }
 
   // 2. Wrap execution in tenant ambient context
@@ -567,16 +615,15 @@ async function processIntakePayload({
 }) {
   try {
     // 1. Source Normalization
-    const rawSource =
+    const settings = integration.settings || {}
+    const defaultSource = settings.leadSource || (integration.type === "website" ? "Website" : integration.type)
+    let rawSource =
       body.source ||
       body.utm_source ||
       body.lead_source ||
-      (integration.type === "website" ? "Website" : integration.type)
-    const normalizedSource = await normalizeSource(tenantId, rawSource)
-    if (event) event.source = normalizedSource
+      defaultSource
 
     // 2. Extract and sanitize fields (with field mapping support)
-    const settings = integration.settings || {}
     let name = (
       body.name ||
       body.fullName ||
@@ -588,6 +635,7 @@ async function processIntakePayload({
     let rawPhone = (body.phone || body.phoneNumber || body.phone_number || body.tel || body.mobile || "").trim()
     let message = (body.message || body.notes || body.comment || body.inquiry || "").slice(0, 2000).trim()
     let formId = (body.formId || body.form_id || body.formName || body.form_name || "").slice(0, 100).trim()
+    let company = (body.company || body.organization || body.company_name || "").slice(0, 150).trim()
     let landingPage = (
       body.landingPage ||
       body.landing_page ||
@@ -598,13 +646,17 @@ async function processIntakePayload({
     ).slice(0, 500).trim()
     const isTest = Boolean(body.isTest || body.is_test || query?.isTest === "true")
     const verificationToken = (body.verificationToken || body.token || body.verification_token || "").trim()
+    const customFields = {}
 
     // Apply custom field mappings if configured
     if (Array.isArray(integration.fieldMapping) && integration.fieldMapping.length > 0) {
       for (const map of integration.fieldMapping) {
         if (!map.sourceField || !map.targetField) continue
-        const val = body[map.sourceField]
-        if (val !== undefined && val !== null) {
+        let val = body[map.sourceField]
+        if ((val === undefined || val === null || val === "") && map.defaultValue) {
+          val = map.defaultValue
+        }
+        if (val !== undefined && val !== null && val !== "") {
           let processedVal = String(val)
           if (map.transform === "lowercase") processedVal = processedVal.toLowerCase()
           if (map.transform === "uppercase") processedVal = processedVal.toUpperCase()
@@ -612,13 +664,22 @@ async function processIntakePayload({
           if (map.transform === "phone_e164") processedVal = normalizePhoneDigits(processedVal)
 
           if (map.targetField === "name") name = processedVal
-          if (map.targetField === "email") rawEmail = processedVal.toLowerCase()
-          if (map.targetField === "phone") rawPhone = processedVal
-          if (map.targetField === "message") message = processedVal
-          if (map.targetField === "formId") formId = processedVal
+          else if (map.targetField === "email") rawEmail = processedVal.toLowerCase()
+          else if (map.targetField === "phone") rawPhone = processedVal
+          else if (map.targetField === "message") message = processedVal
+          else if (map.targetField === "formId") formId = processedVal
+          else if (map.targetField === "company") company = processedVal
+          else if (map.targetField === "landingPage") landingPage = processedVal
+          else if (map.targetField === "source") rawSource = processedVal
+          else {
+            customFields[map.targetField] = processedVal
+          }
         }
       }
     }
+
+    const normalizedSource = await normalizeSource(tenantId, rawSource)
+    if (event) event.source = normalizedSource
 
     // 3. Field validation
     if (rawEmail && rawEmail.length > 255) {
@@ -792,7 +853,7 @@ async function processIntakePayload({
       }
     }
 
-    let leadStatus = "New"
+    let leadStatus = settings.defaultStatus || "New"
     if (verConfig.holdUntilConfirmed && !isVerified) {
       leadStatus = "Engaged"
       verificationStatus = "pending_confirmation"
@@ -862,6 +923,8 @@ async function processIntakePayload({
         ? crypto.createHash("sha256").update(verificationToken.trim()).digest("hex")
         : null,
       integrationId: integration._id,
+      websiteDomain: settings.websiteDomain || null,
+      customFields: Object.keys(customFields).length > 0 ? customFields : undefined,
     }
 
     const duplicateHandling = settings.duplicateHandling || "reject"
@@ -873,6 +936,7 @@ async function processIntakePayload({
         name,
         email: rawEmail,
         phone: rawPhone,
+        company: company || undefined,
         status: leadStatus,
         assignedTo,
         assignedStaffId,

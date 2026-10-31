@@ -201,13 +201,23 @@ async function convertToMp3(inputPath, outputPath = null) {
 
   const finalOutput = outputPath || path.join(os.tmpdir(), `converted_${Date.now()}_${crypto.randomBytes(6).toString("hex")}.mp3`)
 
+  // Voice Call Audio Preservation:
+  // 1. Maintain native channel count (mono for 1-channel phone calls) to prevent out-of-phase robotic/alien hollow voice
+  // 2. Use aresample with async=1000 to correct any mobile frame timestamp drift without altering human pitch or tempo
+  const channelArgs = probe.channels === 1 ? ["-ac", "1"] : ["-ac", "2"]
+  const sampleRateArgs = probe.sampleRate && [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000].includes(probe.sampleRate)
+    ? ["-ar", String(probe.sampleRate)]
+    : ["-ar", "44100"]
+
   const ffmpegArgs = [
     "-y",
     "-i", inputPath,
     "-vn", // Drop video stream if container had one
     "-acodec", "libmp3lame",
     "-b:a", "128k",
-    "-ar", "44100",
+    ...channelArgs,
+    ...sampleRateArgs,
+    "-af", "aresample=async=1000:first_pts=0",
     finalOutput,
   ]
 
