@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useRef } from "react"
+import { createPortal } from "react-dom"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
@@ -269,6 +270,11 @@ export default function Header() {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   const { user: authUser, logout } = useAuth()
   const user = authUser
 
@@ -491,7 +497,7 @@ export default function Header() {
   return (
     <header
       ref={navRef}
-      className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-colors w-full max-w-full overflow-hidden"
+      className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-colors w-full max-w-full"
     >
       <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6">
         <div className="flex items-center justify-between h-16 gap-2 sm:gap-4 lg:gap-6 min-w-0">
@@ -711,16 +717,16 @@ export default function Header() {
           SAFE FIXED-POSITION CATEGORY DROPDOWN MENU
           Max 4 items visible at a time with subtle vertical scrolling for overflow
       ========================================================================= */}
-      {activeCategoryData && activeCategoryData.items.length > 1 && (
+      {mounted && activeCategoryData && activeCategoryData.items.length > 1 && typeof document !== "undefined" && createPortal(
         <div
           id="navbar-category-dropdown"
           style={{
             position: "fixed",
             top: `${dropdownCoords.top}px`,
             left: `${dropdownCoords.left}px`,
-            zIndex: 9999,
+            zIndex: 99999,
           }}
-          className="w-72 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in slide-in-from-top-1 duration-150 before:content-[''] before:absolute before:-top-3 before:left-0 before:right-0 before:h-3"
+          className="w-72 bg-white rounded-xl shadow-2xl border border-slate-200/95 py-1.5 animate-in fade-in slide-in-from-top-1 duration-150 before:content-[''] before:absolute before:-top-3 before:left-0 before:right-0 before:h-3"
           onMouseEnter={handleDropdownEnter}
           onMouseLeave={handleDropdownLeave}
         >
@@ -779,7 +785,8 @@ export default function Header() {
               )
             })}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* =========================================================================

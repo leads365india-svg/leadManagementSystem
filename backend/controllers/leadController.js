@@ -189,37 +189,126 @@ const getLeads = async (req, res) => {
 
     const totalPages = Math.ceil(total / limitNum)
 
-    const transformedLeads = leads.map((lead) => ({
-      _id: lead._id.toString(),
-      id: lead._id.toString(),
-      name: lead.name,
-      email: lead.email || "",
-      phone: lead.phone || "",
-      phoneNormalized: lead.phoneNormalized || "",
-      company: lead.company || lead.metadata?.company || lead.metadata?.companyName || "",
-      city: lead.city || "",
-      alternatePhone: lead.alternatePhone || "",
-      ownerId: lead.ownerId ? lead.ownerId.toString() : null,
-      teamId: lead.teamId ? lead.teamId.toString() : null,
-      tags: lead.tags || [],
-      attribution: lead.attribution || null,
-      assignmentHistory: Array.isArray(lead.assignmentHistory) ? lead.assignmentHistory : [],
-      lastContactedAt: lead.lastContactedAt || null,
-      deletedAt: lead.deletedAt || null,
-      source: lead.source || "Website Form",
-      assignedTo: lead.assignedTo || "Unassigned",
-      assignedStaffId: lead.assignedStaffId || "unassigned",
-      status: lead.status || "New",
-      message: lead.message || "",
-      formId: lead.formId || "",
-      landingPage: lead.landingPage || "",
-      isEmailVerified: Boolean(lead.isEmailVerified),
-      verificationStatus: lead.verificationStatus || "unverified",
-      tenantId: lead.tenantId,
-      metadata: lead.metadata || {},
-      createdAt: lead.createdAt,
-      updatedAt: lead.updatedAt,
-    }))
+    // Efficiently batch-lookup playable call recordings for the returned leads
+    const leadIds = leads.map((l) => l._id)
+    const phoneList = leads
+      .map((l) => l.phoneNormalized || l.phone)
+      .filter((p) => typeof p === "string" && p.trim().length > 0)
+
+    const callFilterConditions = []
+    if (leadIds.length > 0) {
+      callFilterConditions.push({ leadId: { $in: leadIds } })
+    }
+    if (phoneList.length > 0) {
+      callFilterConditions.push({ phoneNormalized: { $in: phoneList } })
+      callFilterConditions.push({ number: { $in: phoneList } })
+      callFilterConditions.push({ phoneNumber: { $in: phoneList } })
+    }
+
+    const recordingsByLeadId = new Map()
+    const recordingsByPhone = new Map()
+    const recordingCountsByLead = new Map()
+
+    if (callFilterConditions.length > 0) {
+      const callFilter = {
+        $and: [
+          { $or: callFilterConditions },
+          {
+            $or: [
+              { "recording.status": { $in: ["stored", "ready"] } },
+              {
+                hasRecording: true,
+                "recording.status": { $nin: ["pending", "skipped_dnr", "expired", "failed"] },
+              },
+            ],
+          },
+        ],
+      }
+      if (effectiveTenantId) {
+        callFilter.tenantId = effectiveTenantId
+      }
+
+      const playableCalls = await Call.find(callFilter)
+        .setOptions({ skipTenantFilter: !effectiveTenantId || isSuperAdmin })
+        .select("_id leadId number phoneNumber phoneNormalized duration durationSeconds recording startTimeMs startedAt createdAt")
+        .sort({ startTimeMs: -1, createdAt: -1 })
+        .lean()
+
+      for (const call of playableCalls) {
+        const lId = call.leadId ? call.leadId.toString() : null
+        const callDuration = call.recording?.duration || call.duration || call.durationSeconds || 0
+        const callId = call._id.toString()
+
+        if (lId) {
+          recordingCountsByLead.set(lId, (recordingCountsByLead.get(lId) || 0) + 1)
+          if (!recordingsByLeadId.has(lId)) {
+            recordingsByLeadId.set(lId, {
+              latestCallId: callId,
+              duration: callDuration,
+              status: call.recording?.status || "stored",
+            })
+          }
+        }
+
+        const phoneKeys = [call.phoneNormalized, call.number, call.phoneNumber].filter(Boolean)
+        for (const pk of phoneKeys) {
+          if (!recordingsByPhone.has(pk)) {
+            recordingsByPhone.set(pk, {
+              latestCallId: callId,
+              duration: callDuration,
+              status: call.recording?.status || "stored",
+            })
+          }
+        }
+      }
+    }
+
+    const transformedLeads = leads.map((lead) => {
+      const leadIdStr = lead._id.toString()
+      const recByLead = recordingsByLeadId.get(leadIdStr)
+      const recByPhone =
+        (lead.phoneNormalized && recordingsByPhone.get(lead.phoneNormalized)) ||
+        (lead.phone && recordingsByPhone.get(lead.phone)) ||
+        null
+      const rec = recByLead || recByPhone
+      const hasRec = Boolean(rec)
+
+      return {
+        _id: leadIdStr,
+        id: leadIdStr,
+        name: lead.name,
+        email: lead.email || "",
+        phone: lead.phone || "",
+        phoneNormalized: lead.phoneNormalized || "",
+        company: lead.company || lead.metadata?.company || lead.metadata?.companyName || "",
+        city: lead.city || "",
+        alternatePhone: lead.alternatePhone || "",
+        ownerId: lead.ownerId ? lead.ownerId.toString() : null,
+        teamId: lead.teamId ? lead.teamId.toString() : null,
+        tags: lead.tags || [],
+        attribution: lead.attribution || null,
+        assignmentHistory: Array.isArray(lead.assignmentHistory) ? lead.assignmentHistory : [],
+        lastContactedAt: lead.lastContactedAt || null,
+        deletedAt: lead.deletedAt || null,
+        source: lead.source || "Website Form",
+        assignedTo: lead.assignedTo || "Unassigned",
+        assignedStaffId: lead.assignedStaffId || "unassigned",
+        status: lead.status || "New",
+        message: lead.message || "",
+        formId: lead.formId || "",
+        landingPage: lead.landingPage || "",
+        isEmailVerified: Boolean(lead.isEmailVerified),
+        verificationStatus: lead.verificationStatus || "unverified",
+        tenantId: lead.tenantId,
+        metadata: lead.metadata || {},
+        hasRecording: hasRec,
+        recordingsCount: recordingCountsByLead.get(leadIdStr) || (hasRec ? 1 : 0),
+        latestCallId: rec?.latestCallId || null,
+        latestRecordingDuration: rec?.duration || 0,
+        createdAt: lead.createdAt,
+        updatedAt: lead.updatedAt,
+      }
+    })
 
     res.status(200).json({
       success: true,
@@ -390,9 +479,44 @@ const getLeadById = async (req, res) => {
       return
     }
 
+    const leadObj = lead.toObject ? lead.toObject() : { ...lead }
+    const callFilter = {
+      $and: [
+        {
+          $or: [
+            { leadId: id },
+            ...(lead.phoneNormalized ? [{ phoneNormalized: lead.phoneNormalized }] : []),
+            ...(lead.phone ? [{ number: lead.phone }, { phoneNumber: lead.phone }] : []),
+          ],
+        },
+        {
+          $or: [
+            { "recording.status": { $in: ["stored", "ready"] } },
+            {
+              hasRecording: true,
+              "recording.status": { $nin: ["pending", "skipped_dnr", "expired", "failed"] },
+            },
+          ],
+        },
+      ],
+    }
+    if (lead.tenantId) {
+      callFilter.tenantId = lead.tenantId
+    }
+
+    const latestPlayableCall = await Call.findOne(callFilter)
+      .setOptions({ skipTenantFilter: true })
+      .select("_id duration durationSeconds recording startTimeMs startedAt createdAt")
+      .sort({ startTimeMs: -1, createdAt: -1 })
+      .lean()
+
+    leadObj.hasRecording = Boolean(latestPlayableCall)
+    leadObj.latestCallId = latestPlayableCall ? latestPlayableCall._id.toString() : null
+    leadObj.latestRecordingDuration = latestPlayableCall?.recording?.duration || latestPlayableCall?.duration || 0
+
     res.status(200).json({
       success: true,
-      data: lead,
+      data: leadObj,
     })
   } catch (error) {
     console.error("Error fetching lead:", error)

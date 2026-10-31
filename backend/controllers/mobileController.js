@@ -1315,8 +1315,8 @@ const uploadMobileRecording = async (req, res) => {
 
     // 6. Idempotency Check: if call already has confirmed recording with matching SHA-256
     const clientProvidedSha = (req.headers["x-content-sha256"] || req.headers["x-audio-sha256"] || "").trim().toLowerCase()
-    if (call.hasRecording && call.metadata?.recordingSha256) {
-      if (!clientProvidedSha || clientProvidedSha === call.metadata.recordingSha256.toLowerCase()) {
+    if (call.hasRecording && call.metadata?.recordingSha256 && clientProvidedSha) {
+      if (clientProvidedSha === call.metadata.recordingSha256.toLowerCase()) {
         return res.status(200).json({
           success: true,
           message: "Recording already uploaded (idempotent)",
@@ -1356,6 +1356,7 @@ const uploadMobileRecording = async (req, res) => {
       contentLength,
       expectedSha256: clientProvidedSha,
       retentionDays: 30,
+      allowOverwrite: true,
       allowUnmatchedReview: Boolean(!call.leadId || call.isUnlinked),
     })
 
@@ -2167,8 +2168,8 @@ async function reportCall(req, res) {
  */
 async function getRecordingTicket(req, res) {
   try {
-    const tenantId = req.tenantId
-    const agentId = req.user?._id || req.user?.id
+    const tenantId = req.tenantId || req.user?.tenantId || req.device?.tenantId
+    const agentId = req.user?._id || req.user?.id || req.device?.userId
     const callId = req.params.id
 
     const result = await mobileSyncService.issueRecordingTicket({
