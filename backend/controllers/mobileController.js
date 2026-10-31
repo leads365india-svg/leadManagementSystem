@@ -155,6 +155,8 @@ const reportMobileCall = async (req, res) => {
       notes,
       next_followup_at,
       sim_id,
+      auto_create_lead,
+      call_type,
     } = req.body
 
     // 1. Validate required fields
@@ -162,15 +164,6 @@ const reportMobileCall = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "client_call_id is required for idempotency",
-      })
-    }
-
-    const isUnlinkedCall = (!lead_id || lead_id === "unlinked")
-
-    if (!isUnlinkedCall && (!lead_id || !mongoose.Types.ObjectId.isValid(lead_id))) {
-      return res.status(400).json({
-        success: false,
-        error: "Valid lead_id is required for linked calls",
       })
     }
 
@@ -188,9 +181,138 @@ const reportMobileCall = async (req, res) => {
       })
     }
 
-    // 3. Lead Verification & Ownership Enforcement (or Unlinked Call DNR check)
+    const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
+    const normPhone = normalizePhoneE164(phone_number.trim(), "+91") || phone_number.trim()
+
+    // 1b. Fetch trusted tenant-level configuration from Account metadata
+    const tenantAccount = targetTenantId
+      ? await Account.findOne({
+          $or: [
+            { accountId: targetTenantId },
+            ...(mongoose.Types.ObjectId.isValid(targetTenantId) ? [{ _id: targetTenantId }] : []),
+          ],
+        }).lean()
+      : null
+
+    const tenantAutoLeadEnabled = Boolean(tenantAccount?.metadata?.autoLeadCaptureEnabled)
+    const validDurations = [5, 10, 15, 30]
+    const configuredMinDuration = validDurations.includes(Number(tenantAccount?.metadata?.autoLeadMinDurationSeconds))
+      ? Number(tenantAccount.metadata.autoLeadMinDurationSeconds)
+      : 10
+
+    // 1c. Independent Server-Side Validation:
+    // Verify native CallLog metadata, direction, outcome, and duration threshold.
+    // Client flag alone is never treated as sufficient authorization, and client cannot lower threshold.
+    const isMissedOrRejected =
+      call_direction === "MISSED" ||
+      call_direction === "REJECTED" ||
+      call_direction === "missed" ||
+      call_direction === "rejected" ||
+      (typeof call_type === "number" && call_type !== 1) || // Native CallLog.Calls.INCOMING_TYPE is 1
+      String(call_outcome || "").toLowerCase().includes("missed") ||
+      String(call_outcome || "").toLowerCase().includes("reject") ||
+      String(call_outcome || "").toLowerCase().includes("unanswered") ||
+      String(call_outcome || "").toLowerCase().includes("busy") ||
+      String(call_outcome || "").toLowerCase().includes("declined")
+
+    const isIncomingDirection = (call_direction === "INCOMING" || call_direction === "inbound") && !isMissedOrRejected
+    const isAnsweredCall = !isMissedOrRejected && typeof duration_seconds === "number" && duration_seconds >= configuredMinDuration
+    const callerDigits = (normPhone || "").replace(/\D/g, "")
+    const isValidCallerId = callerDigits.length >= 7 &&
+      !phone_number.toLowerCase().includes("unknown") &&
+      !phone_number.toLowerCase().includes("private")
+
+    const clientRequestedAutoLead = Boolean(auto_create_lead || (lead_id && String(lead_id).startsWith("lead_auto_")))
+
+    // Strictly enforce server-controlled authorization:
+    // Tenant must have explicitly enabled the feature; client cannot unilaterally authorize auto-creation.
+    const isAutoLead = tenantAutoLeadEnabled && clientRequestedAutoLead && isIncomingDirection && isAnsweredCall && isValidCallerId
+
     let lead = null
-    if (!isUnlinkedCall) {
+    let autoLeadCreated = false
+    let isUnlinkedCall = (!lead_id || lead_id === "unlinked" || String(lead_id).startsWith("lead_auto_"))
+
+    if (isAutoLead) {
+      // Automatic Lead Capture Flow:
+      // 1. Check Do-Not-Record (DNR) Policy for incoming caller
+      const dnrMatch = await Lead.findOne({
+        tenantId: targetTenantId,
+        $or: [
+          { phone: phone_number.trim() },
+          { phoneNormalized: normPhone },
+          { "metadata.normalizedPhone": normPhone },
+        ],
+        "metadata.isDoNotRecord": true,
+        deletedAt: null,
+      }).setOptions({ skipTenantFilter: true }).lean()
+
+      if (dnrMatch) {
+        return res.status(400).json({
+          success: false,
+          error: "Call reporting rejected: Phone number is marked Do-Not-Record (DNR).",
+        })
+      }
+
+      // 2. Query existing leads in caller's tenant
+      const matchingLeads = await Lead.find({
+        tenantId: targetTenantId,
+        deletedAt: null,
+        $or: [
+          { phoneNormalized: normPhone },
+          { phone: phone_number.trim() },
+          { "metadata.normalizedPhone": normPhone },
+        ],
+      }).setOptions({ skipTenantFilter: true })
+
+      if (matchingLeads.length === 1) {
+        // Single unambiguous match: attach call to existing lead (preserve name, avoid duplicate)
+        lead = matchingLeads[0]
+        isUnlinkedCall = false
+      } else if (matchingLeads.length > 1) {
+        // Multiple matches: flag ambiguous, do not guess
+        lead = null
+        isUnlinkedCall = true
+      } else {
+        // 0 matches: create provisional CRM lead
+        const leadService = require("../services/leadService")
+        const autoLeadResult = await leadService.createOrMergeLead({
+          tenantId: targetTenantId,
+          source: "Incoming Call",
+          payload: {
+            name: `Unknown Caller - ${normPhone}`,
+            phone: phone_number.trim(),
+            status: "New",
+            ownerId: user.id || user._id,
+            assignedStaffId: (user.id || user._id)?.toString(),
+            assignedTo: user.name || "Agent",
+            message: `Auto-captured from answered incoming call (${duration_seconds || 0}s)`,
+            metadata: {
+              captureSource: "ANDROID_AUTO_CALL_CAPTURE",
+              autoCaptured: true,
+              initialPhone: phone_number.trim(),
+              capturedAt: Date.now(),
+              reportedByDeviceId: sim_id || null,
+            },
+          },
+          options: {
+            duplicateHandling: "merge",
+            overwriteName: false,
+            defaultCountry: "+91",
+          },
+          actor: user,
+        })
+        lead = autoLeadResult.lead
+        isUnlinkedCall = false
+        autoLeadCreated = true
+      }
+    } else if (!isUnlinkedCall) {
+      if (!lead_id || !mongoose.Types.ObjectId.isValid(lead_id)) {
+        return res.status(400).json({
+          success: false,
+          error: "Valid lead_id is required for linked calls",
+        })
+      }
+
       lead = await Lead.findById(lead_id)
       if (!lead) {
         return res.status(404).json({
@@ -386,14 +508,14 @@ const reportMobileCall = async (req, res) => {
       return res.status(200).json({
         success: true,
         call_id: existingCall._id.toString(),
+        lead_id: lead ? lead._id.toString() : (existingCall.leadId ? existingCall.leadId.toString() : null),
+        auto_lead_created: false,
         message: isUpdated ? "Call report updated successfully (idempotent upsert)" : "Call report already received (idempotent)",
         call: existingCall,
       })
     }
 
     // 2b. Fallback candidate match for existing call without clientCallId or matching signature
-    const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
-    const normPhone = normalizePhoneE164(phone_number.trim(), "+91") || phone_number.trim()
     const minTime = start_time_ms - 5000
     const maxTime = start_time_ms + 5000
     const isIncoming = (call_direction === "INCOMING" || call_direction === "inbound")
@@ -448,6 +570,8 @@ const reportMobileCall = async (req, res) => {
         return res.status(200).json({
           success: true,
           call_id: matchedCall._id.toString(),
+          lead_id: lead ? lead._id.toString() : (matchedCall.leadId ? matchedCall.leadId.toString() : null),
+          auto_lead_created: false,
           message: "Matched existing call record by candidate signature (idempotent merge)",
           call: matchedCall,
         })
@@ -486,7 +610,9 @@ const reportMobileCall = async (req, res) => {
     return res.status(201).json({
       success: true,
       call_id: newCall._id.toString(),
-      message: "Call recorded and synced successfully",
+      lead_id: lead ? lead._id.toString() : null,
+      auto_lead_created: autoLeadCreated,
+      message: autoLeadCreated ? "Call recorded and lead auto-created successfully" : "Call recorded and synced successfully",
     })
   } catch (error) {
     // Handle unique constraint collision in race conditions
@@ -499,6 +625,8 @@ const reportMobileCall = async (req, res) => {
         return res.status(200).json({
           success: true,
           call_id: existing._id.toString(),
+          lead_id: existing.leadId ? existing.leadId.toString() : null,
+          auto_lead_created: false,
           message: "Call report already received (idempotent)",
           call: existing,
         })
@@ -1277,6 +1405,8 @@ const getMobilePolicy = async (req, res) => {
       "In compliance with telecom regulations and agency policy, calls with assigned leads may be recorded for quality and training purposes. Calls with non-lead contacts and Do-Not-Record (DNR) designated leads are never recorded or uploaded."
     let allowRecordingPause = true
     let enforceStrictDnr = true
+    let autoLeadCaptureEnabled = false
+    let autoLeadMinDurationSeconds = 10
 
     if (user.tenantId) {
       const account = await Account.findOne({ accountId: user.tenantId }).lean()
@@ -1291,6 +1421,15 @@ const getMobilePolicy = async (req, res) => {
         if (account.metadata?.consentNoticeText) {
           consentNoticeText = account.metadata.consentNoticeText
         }
+        if (account.metadata?.autoLeadCaptureEnabled !== undefined) {
+          autoLeadCaptureEnabled = Boolean(account.metadata.autoLeadCaptureEnabled)
+        }
+        if (account.metadata?.autoLeadMinDurationSeconds !== undefined) {
+          const val = Number(account.metadata.autoLeadMinDurationSeconds)
+          if ([5, 10, 15, 30].includes(val)) {
+            autoLeadMinDurationSeconds = val
+          }
+        }
       }
     }
 
@@ -1304,6 +1443,8 @@ const getMobilePolicy = async (req, res) => {
         allow_recording_pause: allowRecordingPause,
         recording_sync_paused: recordingSyncPaused,
         enforce_strict_dnr: enforceStrictDnr,
+        auto_lead_capture_enabled: autoLeadCaptureEnabled,
+        auto_lead_min_duration_seconds: autoLeadMinDurationSeconds,
         server_time: Date.now(),
       },
     })
@@ -1358,6 +1499,90 @@ const setMobileRecordingSyncPause = async (req, res) => {
     return res.status(500).json({
       success: false,
       error: "Internal server error setting pause state: " + error.message,
+    })
+  }
+}
+
+/**
+ * POST /api/mobile/v1/policy/auto-lead
+ * Configure automatic lead creation toggle and minimum duration threshold for the tenant.
+ * Stored in Account.metadata: autoLeadCaptureEnabled (Boolean, default false), autoLeadMinDurationSeconds (Number, default 10).
+ */
+const setMobileAutoLeadPolicy = async (req, res) => {
+  try {
+    const user = req.user
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required.",
+      })
+    }
+
+    const tenantId = user.tenantId
+    if (!tenantId) {
+      return res.status(400).json({
+        success: false,
+        error: "Tenant context is required to configure auto-lead policy.",
+      })
+    }
+
+    const { enabled, min_duration_seconds } = req.body
+
+    if (enabled !== undefined && typeof enabled !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid 'enabled' parameter: must be a boolean.",
+      })
+    }
+
+    const validDurations = [5, 10, 15, 30]
+    if (min_duration_seconds !== undefined) {
+      const dur = Number(min_duration_seconds)
+      if (!validDurations.includes(dur)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid 'min_duration_seconds' parameter: must be one of [5, 10, 15, 30].",
+        })
+      }
+    }
+
+    let account = await Account.findOne({ accountId: tenantId })
+    if (!account && mongoose.Types.ObjectId.isValid(tenantId)) {
+      account = await Account.findById(tenantId)
+    }
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: `Tenant account '${tenantId}' not found.`,
+      })
+    }
+
+    if (!account.metadata) account.metadata = {}
+
+    if (enabled !== undefined) {
+      account.metadata.autoLeadCaptureEnabled = Boolean(enabled)
+    }
+    if (min_duration_seconds !== undefined) {
+      account.metadata.autoLeadMinDurationSeconds = Number(min_duration_seconds)
+    }
+
+    account.markModified("metadata")
+    await account.save()
+
+    return res.status(200).json({
+      success: true,
+      message: "Auto-lead capture policy updated successfully.",
+      data: {
+        auto_lead_capture_enabled: Boolean(account.metadata.autoLeadCaptureEnabled),
+        auto_lead_min_duration_seconds: account.metadata.autoLeadMinDurationSeconds ?? 10,
+      },
+    })
+  } catch (error) {
+    console.error("Error in setMobileAutoLeadPolicy:", error.message)
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error configuring auto-lead policy: " + error.message,
     })
   }
 }
@@ -2012,6 +2237,7 @@ module.exports = {
   streamAudioFile,
   getMobilePolicy,
   setMobileRecordingSyncPause,
+  setMobileAutoLeadPolicy,
   mobileLogin,
   mobileRefreshToken,
   mobileRegisterDevice,

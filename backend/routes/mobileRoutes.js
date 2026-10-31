@@ -15,6 +15,7 @@ const {
   streamCallRecording,
   getMobilePolicy,
   setMobileRecordingSyncPause,
+  setMobileAutoLeadPolicy,
   mobileHeartbeat,
   mobileDiagnostics,
 } = mobileController
@@ -132,8 +133,9 @@ router.get("/calls/:callId/recording", authenticate, streamCallRecording)
 // ----------------------------------------------------
 // Phase 9: Agency Privacy, Consent & DNR Policy
 // ----------------------------------------------------
-router.get("/policy", authenticate, getMobilePolicy)
-router.post("/policy/pause", authenticate, setMobileRecordingSyncPause)
+router.get("/policy", authenticateAnyMobile, getMobilePolicy)
+router.post("/policy/pause", authenticateAnyMobile, setMobileRecordingSyncPause)
+router.post("/policy/auto-lead", authenticateAnyMobile, setMobileAutoLeadPolicy)
 
 // ----------------------------------------------------
 // Phase 11: Diagnostics & Health Heartbeat

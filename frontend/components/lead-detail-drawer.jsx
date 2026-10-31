@@ -677,6 +677,14 @@ export default function LeadDetailDrawer({
                       <Globe className="w-3 h-3" />
                       <span>{lead?.source || "Website"}</span>
                     </div>
+
+                    {/* Auto-Captured Badge */}
+                    {(lead?.metadata?.captureSource === "ANDROID_AUTO_CALL_CAPTURE" || lead?.metadata?.autoCaptured === true) && (
+                      <div className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 shadow-2xs">
+                        <PhoneIncoming className="w-3 h-3 text-amber-600" />
+                        <span>Auto Captured from Incoming Call</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

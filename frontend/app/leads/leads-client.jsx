@@ -53,6 +53,7 @@ import {
   XCircle,
   Building2,
   ChevronDown,
+  PhoneIncoming,
 } from "lucide-react"
 
 // Status configurations with accessible color tokens and navigation labels
@@ -1047,13 +1048,24 @@ export default function LeadsClient() {
                             {lead.name ? lead.name.charAt(0) : "L"}
                           </div>
                           <div>
-                            <p
-                              onClick={() => setActiveLeadDetails(lead)}
-                              className="font-bold text-slate-900 truncate max-w-[180px] hover:text-indigo-600 transition-colors cursor-pointer"
-                              title="Click to open Lead Drawer"
-                            >
-                              {lead.name}
-                            </p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p
+                                onClick={() => setActiveLeadDetails(lead)}
+                                className="font-bold text-slate-900 truncate max-w-[180px] hover:text-indigo-600 transition-colors cursor-pointer"
+                                title="Click to open Lead Drawer"
+                              >
+                                {lead.name}
+                              </p>
+                              {(lead.metadata?.captureSource === "ANDROID_AUTO_CALL_CAPTURE" || lead.metadata?.autoCaptured === true) && (
+                                <span
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                                  title="Auto-captured from incoming call"
+                                >
+                                  <PhoneIncoming className="w-2.5 h-2.5 text-amber-600" />
+                                  <span>Auto</span>
+                                </span>
+                              )}
+                            </div>
                             {lead.company ? (
                               <p className="text-[11px] text-indigo-600 font-medium truncate max-w-[180px] flex items-center gap-1">
                                 <Building2 className="w-3 h-3 text-indigo-500 shrink-0" />
