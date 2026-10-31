@@ -246,12 +246,57 @@ async function reportMobileCall({ tenantId, agentId, deviceId, callData = {} }) 
     await result.call.save()
   }
 
+  // 4. If auto lead capture requested and no lead was matched by logCall
+  let autoCreatedLead = false
+  const shouldAutoCreate = Boolean(callData.autoCreateLead || (callData.leadId && String(callData.leadId).startsWith("lead_auto_")))
+  if (shouldAutoCreate && !result.lead && result.call) {
+    try {
+      const leadService = require("./leadService")
+      const normNumber = normalizePhoneE164(rawNumber, "+91") || rawNumber
+      const autoRes = await leadService.createOrMergeLead({
+        tenantId,
+        source: "Incoming Call",
+        payload: {
+          name: `Unknown Caller - ${normNumber}`,
+          phone: rawNumber,
+          status: "New",
+          ownerId: agentId,
+          assignedStaffId: agentId.toString(),
+          assignedTo: "Mobile Agent",
+          message: `Auto-captured from answered incoming call (${duration || 0}s)`,
+          metadata: {
+            captureSource: "ANDROID_AUTO_CALL_CAPTURE",
+            autoCaptured: true,
+            initialPhone: rawNumber,
+            capturedAt: Date.now(),
+          },
+        },
+        options: {
+          duplicateHandling: "merge",
+          overwriteName: false,
+          defaultCountry: "+91",
+        },
+        actor: { id: agentId, role: "agent", name: "Mobile Agent" },
+      })
+      if (autoRes?.lead) {
+        result.lead = autoRes.lead
+        result.call.leadId = autoRes.lead._id
+        result.call.isUnlinked = false
+        await result.call.save()
+        autoCreatedLead = true
+      }
+    } catch (autoErr) {
+      console.warn("Notice: auto lead creation in mobileSyncService:", autoErr.message)
+    }
+  }
+
   return {
     success: true,
     call: result.call,
     isDuplicate: false,
     duplicate: false,
     leadMatched: Boolean(result.lead),
+    autoLeadCreated: autoCreatedLead,
     lead: result.lead
       ? {
           id: result.lead._id,
