@@ -20,6 +20,7 @@ const connectDB = async () => {
     }
 
     const conn = await mongoose.connect(mongoURI, {
+      dbName: process.env.MONGODB_DB_NAME || "leadflow",
       serverSelectionTimeoutMS: 5000,
     })
 

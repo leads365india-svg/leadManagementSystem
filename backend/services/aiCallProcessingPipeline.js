@@ -45,14 +45,23 @@ async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, forc
     throw new Error(`Call '${callId}' not found for tenant '${cleanTenantId}'.`)
   }
 
-  if (!call.hasRecording && call.recording?.status !== "stored") {
+  const hasRecording = Boolean(
+    call.hasRecording ||
+    call.recording?.status === "stored" ||
+    call.recording?.fileId ||
+    call.recording?.mp3FileId ||
+    call.recordingFileId ||
+    call.recordingUrl
+  )
+
+  if (!hasRecording) {
     return {
       enqueued: false,
       reason: "Call has no stored recording available for AI processing.",
     }
   }
 
-  const checksum = call.recording?.mp3Sha256 || call.recording?.sha256 || "unknown_chk"
+  const checksum = call.recording?.mp3Sha256 || call.recording?.sha256 || `rec_${call._id.toString()}`
   const idempotencyKey = force
     ? `ai_call_${call._id.toString()}_${Date.now()}`
     : `ai_call_${call._id.toString()}_${checksum}`
@@ -96,7 +105,16 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     throw new Error(`Call '${callId}' does not exist for tenant '${tenantId}'.`)
   }
 
-  if (!call.hasRecording && call.recording?.status !== "stored") {
+  const hasRecording = Boolean(
+    call.hasRecording ||
+    call.recording?.status === "stored" ||
+    call.recording?.fileId ||
+    call.recording?.mp3FileId ||
+    call.recordingFileId ||
+    call.recordingUrl
+  )
+
+  if (!hasRecording) {
     console.warn(`[AIPipeline] Call ${callId} has no stored recording. Skipping intelligence job.`)
     return { skipped: true, reason: "No stored recording" }
   }

@@ -74,7 +74,13 @@ export default function AICallIntelligenceClient() {
   const searchParams = useSearchParams()
   const urlCallId = searchParams.get("callId")
 
-  const isAdmin = user?.role === "admin" || user?.role === "superadmin" || user?.isSuperAdmin
+  const isAdmin = Boolean(
+    user?.role === "admin" ||
+    user?.role === "account_admin" ||
+    user?.role === "superadmin" ||
+    user?.role === "super_admin" ||
+    user?.isSuperAdmin
+  )
 
   // --- Dashboard & Listing State ---
   const [metrics, setMetrics] = useState({
@@ -132,8 +138,22 @@ export default function AICallIntelligenceClient() {
     try {
       setLoadingMetrics(true)
       const res = await apiClient.getAICallDashboard()
-      if (res && res.success && res.data) {
-        setMetrics(res.data)
+      if (res && res.success) {
+        const d = res.data || {
+          eligibleRecordedCalls: res.kpis?.totalRecordedCalls || 0,
+          analyzedCalls: res.kpis?.analyzedCount || 0,
+          processingCalls: res.kpis?.pendingCount || 0,
+          failedCalls: res.kpis?.failedCount || 0,
+          pendingCalls: res.kpis?.pendingCount || 0,
+          totalAudioSeconds: (res.kpis?.totalAudioMinutes || 0) * 60,
+          analysisRate: res.kpis?.totalRecordedCalls > 0
+            ? Number(((res.kpis.analyzedCount / res.kpis.totalRecordedCalls) * 100).toFixed(1))
+            : 0,
+          outcomeDistribution: res.outcomeDistribution || {},
+          sentimentDistribution: res.sentimentDistribution || {},
+          topTopics: res.topTopics || [],
+        }
+        setMetrics(d)
       }
     } catch (err) {
       console.warn("Failed to load AI Call Dashboard metrics:", err.message)
@@ -156,10 +176,12 @@ export default function AICallIntelligenceClient() {
         dateRange: dateRange !== "all" ? dateRange : undefined,
       }
       const res = await apiClient.listAICalls(query)
-      if (res && res.success && res.data) {
-        setCalls(res.data.calls || [])
-        setTotalPages(res.data.pagination?.totalPages || 1)
-        setTotalRecords(res.data.pagination?.total || 0)
+      if (res && res.success) {
+        const callList = res.data?.calls || res.calls || (Array.isArray(res.data) ? res.data : [])
+        const pag = res.data?.pagination || res.pagination
+        setCalls(callList)
+        setTotalPages(pag?.totalPages || 1)
+        setTotalRecords(pag?.total || callList.length)
       }
     } catch (err) {
       toast.error(err.message || "Failed to load analyzed calls")
@@ -179,9 +201,15 @@ export default function AICallIntelligenceClient() {
         apiClient.getAICallAnalysis(callId),
       ])
 
-      const status = statusRes.status === "fulfilled" && statusRes.value?.success ? statusRes.value.data : null
-      const transcript = transcriptRes.status === "fulfilled" && transcriptRes.value?.success ? transcriptRes.value.data?.transcript : null
-      const analysis = analysisRes.status === "fulfilled" && analysisRes.value?.success ? analysisRes.value.data?.analysis : null
+      const status = statusRes.status === "fulfilled" && statusRes.value?.success
+        ? (statusRes.value.data || statusRes.value)
+        : null
+      const transcript = transcriptRes.status === "fulfilled" && transcriptRes.value?.success
+        ? (transcriptRes.value.data?.transcript || transcriptRes.value.transcript || null)
+        : null
+      const analysis = analysisRes.status === "fulfilled" && analysisRes.value?.success
+        ? (analysisRes.value.data?.analysis || analysisRes.value.analysis || null)
+        : null
 
       setDetailData({
         call: status?.call || null,
@@ -268,17 +296,36 @@ export default function AICallIntelligenceClient() {
 
   // Trigger initial analysis
   const handleTriggerAnalysis = async (callId) => {
+    if (!callId) return
     try {
+      setReprocessing(true)
       const res = await apiClient.triggerAICallAnalysis(callId)
       if (res && res.success) {
-        toast.success(res.message || "Analysis job enqueued!")
+        toast.success(res.message || "AI Analysis job enqueued successfully!")
         fetchCallsList()
         fetchDashboardMetrics()
+
+        // Poll for completion
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await apiClient.getAICallStatus(callId)
+            const st = statusRes?.data || statusRes
+            if (st?.overallStatus === "COMPLETED" || st?.overallStatus === "FAILED") {
+              clearInterval(pollInterval)
+              fetchCallDetail(callId)
+              fetchCallsList()
+              fetchDashboardMetrics()
+            }
+          } catch (_) {}
+        }, 2000)
+        setTimeout(() => clearInterval(pollInterval), 60000)
       } else {
-        toast.error(res?.error || "Analysis trigger failed")
+        toast.error(res?.message || res?.error || "Analysis trigger failed")
       }
     } catch (err) {
       toast.error(err.message || "Failed to trigger analysis")
+    } finally {
+      setReprocessing(false)
     }
   }
 
@@ -887,7 +934,7 @@ export default function AICallIntelligenceClient() {
                         {/* Action Buttons */}
                         <td className="px-5 py-4 whitespace-nowrap text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            {hasAnalysis || call.hasRecording ? (
+                            {hasAnalysis ? (
                               <button
                                 type="button"
                                 onClick={() => handleOpenReport(call._id)}
@@ -896,15 +943,28 @@ export default function AICallIntelligenceClient() {
                                 <Sparkles className="w-3.5 h-3.5" />
                                 <span>Report</span>
                               </button>
+                            ) : call.hasRecording ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleTriggerAnalysis(call._id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition"
+                                  title="Trigger AI Analysis Now"
+                                >
+                                  <Zap className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Analyze Now</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenReport(call._id)}
+                                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                                  title="View Audio & Details"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleTriggerAnalysis(call._id)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
-                              >
-                                <Zap className="w-3.5 h-3.5" />
-                                <span>Analyze</span>
-                              </button>
+                              <span className="text-slate-400 text-[11px]">No Recording</span>
                             )}
 
                             {isAdmin && (
@@ -1123,17 +1183,28 @@ export default function AICallIntelligenceClient() {
                   <h3 className="text-sm font-bold text-slate-800">Intelligence Report Not Ready</h3>
                   <p className="text-xs text-slate-400 max-w-sm mx-auto">
                     {detailData.status?.transcript?.safeErrorMessage ||
-                      "This call has not finished AI transcription and analysis yet."}
+                      (detailData.status?.overallStatus === "PROCESSING"
+                        ? "AI transcription and analysis are currently in progress..."
+                        : detailData.status?.overallStatus === "PENDING"
+                        ? "Call is queued for AI processing..."
+                        : "This call has an existing recording, but its AI transcription and analysis are not available yet.")}
                   </p>
                   {isAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => handleReprocess(selectedCallId)}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                      Trigger AI Processing Now
-                    </button>
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        disabled={reprocessing}
+                        onClick={() => handleTriggerAnalysis(selectedCallId)}
+                        className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 shadow-md shadow-indigo-200 transition disabled:opacity-50"
+                      >
+                        {reprocessing ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="w-3.5 h-3.5" />
+                        )}
+                        <span>{reprocessing ? "Queueing Analysis..." : "Analyze Now"}</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -1360,9 +1431,9 @@ export default function AICallIntelligenceClient() {
                                   {Math.round((tm.confidenceScore || 0.8) * 100)}% match
                                 </span>
                               </div>
-                              {tm.evidence && (
+                              {(tm.evidenceQuote || tm.evidence) && (
                                 <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-xs text-slate-600 italic">
-                                  &quot;{tm.evidence}&quot;
+                                  &quot;{tm.evidenceQuote || tm.evidence}&quot;
                                 </div>
                               )}
                               {typeof tm.timestamp === "number" && (

@@ -45,7 +45,16 @@ async function triggerCallAnalysis(req, res) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
 
-    if (!call.hasRecording && call.recording?.status !== "stored") {
+    const hasRecording = Boolean(
+      call.hasRecording ||
+      call.recording?.status === "stored" ||
+      call.recording?.fileId ||
+      call.recording?.mp3FileId ||
+      call.recordingFileId ||
+      call.recordingUrl
+    )
+
+    if (!hasRecording) {
       return res.status(400).json({
         success: false,
         message: "This call does not have an available audio recording for AI analysis.",
@@ -93,7 +102,10 @@ async function getCallStatus(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const call = await Call.findOne({ _id: callId, tenantId }).setOptions({ skipTenantFilter: true })
+    const call = await Call.findOne({ _id: callId, tenantId })
+      .populate("agentId", "name email")
+      .populate("leadId", "name phone email")
+      .setOptions({ skipTenantFilter: true })
     if (!call) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
@@ -107,8 +119,17 @@ async function getCallStatus(req, res) {
         .setOptions({ skipTenantFilter: true }),
     ])
 
+    const hasRecording = Boolean(
+      call.hasRecording ||
+      call.recording?.status === "stored" ||
+      call.recording?.fileId ||
+      call.recording?.mp3FileId ||
+      call.recordingFileId ||
+      call.recordingUrl
+    )
+
     let overallStatus = "NOT_STARTED"
-    if (!call.hasRecording && call.recording?.status !== "stored") {
+    if (!hasRecording) {
       overallStatus = "NOT_RECORDED"
     } else if (latestAnalysis?.status === "COMPLETED") {
       overallStatus = "COMPLETED"
@@ -120,35 +141,62 @@ async function getCallStatus(req, res) {
       overallStatus = "PENDING"
     }
 
+    const transcriptPayload = latestTranscript
+      ? {
+          id: latestTranscript._id,
+          status: latestTranscript.status,
+          version: latestTranscript.version,
+          language: latestTranscript.language,
+          duration: latestTranscript.duration,
+          completedAt: latestTranscript.completedAt,
+          errorCode: latestTranscript.errorCode,
+          safeErrorMessage: latestTranscript.safeErrorMessage,
+        }
+      : null
+
+    const analysisPayload = latestAnalysis
+      ? {
+          id: latestAnalysis._id,
+          status: latestAnalysis.status,
+          analysisVersion: latestAnalysis.analysisVersion,
+          callOutcome: latestAnalysis.callOutcome,
+          sentiment: latestAnalysis.sentiment,
+          completedAt: latestAnalysis.completedAt,
+          errorCode: latestAnalysis.errorCode,
+          safeErrorMessage: latestAnalysis.safeErrorMessage,
+        }
+      : null
+
+    const callSummary = {
+      _id: call._id,
+      id: call._id,
+      customerNumber: call.customerNumber || call.phoneNumber,
+      direction: call.direction,
+      duration: call.duration,
+      durationSeconds: call.durationSeconds || call.duration,
+      agentId: call.agentId,
+      leadId: call.leadId,
+      disposition: call.disposition,
+      notes: call.notes,
+      hasRecording,
+      recording: call.recording,
+      createdAt: call.createdAt,
+      startedAt: call.startedAt || call.createdAt,
+    }
+
+    const statusData = {
+      callId: call._id,
+      call: callSummary,
+      overallStatus,
+      hasRecording,
+      transcript: transcriptPayload,
+      analysis: analysisPayload,
+    }
+
     return res.status(200).json({
       success: true,
-      callId: call._id,
-      overallStatus,
-      hasRecording: Boolean(call.hasRecording || call.recording?.status === "stored"),
-      transcript: latestTranscript
-        ? {
-            id: latestTranscript._id,
-            status: latestTranscript.status,
-            version: latestTranscript.version,
-            language: latestTranscript.language,
-            duration: latestTranscript.duration,
-            completedAt: latestTranscript.completedAt,
-            errorCode: latestTranscript.errorCode,
-            safeErrorMessage: latestTranscript.safeErrorMessage,
-          }
-        : null,
-      analysis: latestAnalysis
-        ? {
-            id: latestAnalysis._id,
-            status: latestAnalysis.status,
-            analysisVersion: latestAnalysis.analysisVersion,
-            callOutcome: latestAnalysis.callOutcome,
-            sentiment: latestAnalysis.sentiment,
-            completedAt: latestAnalysis.completedAt,
-            errorCode: latestAnalysis.errorCode,
-            safeErrorMessage: latestAnalysis.safeErrorMessage,
-          }
-        : null,
+      data: statusData,
+      ...statusData,
     })
   } catch (err) {
     console.error("Error in getCallStatus:", err)
@@ -182,6 +230,7 @@ async function getCallTranscript(req, res) {
 
     return res.status(200).json({
       success: true,
+      data: { transcript },
       transcript,
     })
   } catch (err) {
@@ -217,6 +266,7 @@ async function getCallAnalysis(req, res) {
 
     return res.status(200).json({
       success: true,
+      data: { analysis },
       analysis,
     })
   } catch (err) {
@@ -246,14 +296,23 @@ async function reprocessCall(req, res) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
 
-    if (!call.hasRecording && call.recording?.status !== "stored") {
+    const hasRecording = Boolean(
+      call.hasRecording ||
+      call.recording?.status === "stored" ||
+      call.recording?.fileId ||
+      call.recording?.mp3FileId ||
+      call.recordingFileId ||
+      call.recordingUrl
+    )
+
+    if (!hasRecording) {
       return res.status(400).json({
         success: false,
-        message: "Cannot reprocess: Call does not have a stored audio recording.",
+        message: "Cannot reprocess: Call does not have an available audio recording.",
       })
     }
 
-    const forceNewTranscript = Boolean(req.body?.forceNewTranscript)
+    const forceNewTranscript = Boolean(req.body?.forceNewTranscript || req.body?.force)
 
     const enqueueResult = await enqueueCallIntelligenceJob({
       callId: call._id,
@@ -272,6 +331,12 @@ async function reprocessCall(req, res) {
     return res.status(202).json({
       success: true,
       message: "Reprocessing job enqueued successfully.",
+      data: {
+        jobId: enqueueResult.jobId,
+        callId: call._id,
+        enqueued: enqueueResult.enqueued,
+        duplicate: enqueueResult.duplicate,
+      },
       jobId: enqueueResult.jobId,
     })
   } catch (err) {
@@ -282,7 +347,7 @@ async function reprocessCall(req, res) {
 
 /**
  * 6. GET /api/ai-calls
- * Lists analyzed calls with pagination, filters, and summary metrics.
+ * Lists recorded calls and their associated AI intelligence status with pagination and filters.
  */
 async function listAnalyzedCalls(req, res) {
   try {
@@ -307,55 +372,116 @@ async function listAnalyzedCalls(req, res) {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20))
     const skip = (pageNum - 1) * limitNum
 
-    const filter = { tenantId }
-
-    if (status && status.toUpperCase() !== "ALL") {
-      filter.status = status.toUpperCase()
-    }
-    if (callOutcome && callOutcome.toUpperCase() !== "ALL") {
-      filter.callOutcome = callOutcome.toUpperCase()
-    }
-    if (sentiment && sentiment.toUpperCase() !== "ALL") {
-      filter.sentiment = sentiment.toUpperCase()
+    const callFilter = {
+      tenantId,
+      $or: [
+        { hasRecording: true },
+        { "recording.status": "stored" },
+        { "recording.fileId": { $exists: true, $ne: null } },
+        { "recording.mp3FileId": { $exists: true, $ne: null } },
+        { recordingFileId: { $exists: true, $ne: null } },
+        { recordingUrl: { $exists: true, $ne: null, $ne: "" } },
+      ],
     }
 
     if (startDate || endDate) {
-      filter.createdAt = {}
-      if (startDate) filter.createdAt.$gte = new Date(startDate)
-      if (endDate) filter.createdAt.$lte = new Date(endDate)
+      callFilter.createdAt = {}
+      if (startDate) callFilter.createdAt.$gte = new Date(startDate)
+      if (endDate) callFilter.createdAt.$lte = new Date(endDate)
+    }
+
+    if (agentId) {
+      callFilter.agentId = agentId
     }
 
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
-      filter.$or = [
-        { summary: searchRegex },
-        { customerIntent: searchRegex },
-        { "topicMatches.topicName": searchRegex },
+      callFilter.$or = [
+        { customerNumber: searchRegex },
+        { notes: searchRegex },
       ]
     }
 
-    const [analyses, total] = await Promise.all([
-      AICallAnalysis.find(filter)
-        .populate("callId", "customerNumber direction duration agentId clientCallId recording createdAt")
-        .populate("transcriptId", "language duration status")
-        .populate("topicMatches.topicId", "name category")
+    // Parallel fetch: calls with recordings and total count
+    const [calls, total] = await Promise.all([
+      Call.find(callFilter)
+        .populate("leadId", "name phone email")
+        .populate("agentId", "name email")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
         .lean()
         .setOptions({ skipTenantFilter: true }),
-      AICallAnalysis.countDocuments(filter).setOptions({ skipTenantFilter: true }),
+      Call.countDocuments(callFilter).setOptions({ skipTenantFilter: true }),
     ])
+
+    const callIds = calls.map((c) => c._id)
+
+    // Fetch corresponding latest analyses for these calls
+    const analyses = await AICallAnalysis.find({
+      tenantId,
+      callId: { $in: callIds },
+    })
+      .populate("topicMatches.topicId", "name category primaryKeywords")
+      .sort({ analysisVersion: -1 })
+      .lean()
+      .setOptions({ skipTenantFilter: true })
+
+    const analysisMap = new Map()
+    for (const a of analyses) {
+      const cIdStr = a.callId ? a.callId.toString() : null
+      if (cIdStr && !analysisMap.has(cIdStr)) {
+        analysisMap.set(cIdStr, a)
+      }
+    }
+
+    // Map into unified call objects with attached aiAnalysis
+    let mappedCalls = calls.map((c) => {
+      const cIdStr = c._id.toString()
+      const analysis = analysisMap.get(cIdStr) || null
+      return {
+        ...c,
+        id: c._id,
+        aiAnalysis: analysis,
+        intelligenceStatus: analysis ? analysis.status : "NOT_ANALYZED",
+      }
+    })
+
+    // Filter by analysis status/outcome/sentiment if specified
+    if (status && status.toUpperCase() !== "ALL") {
+      const targetStatus = status.toUpperCase()
+      mappedCalls = mappedCalls.filter((c) => c.intelligenceStatus === targetStatus)
+    }
+    if (callOutcome && callOutcome.toUpperCase() !== "ALL") {
+      const targetOutcome = callOutcome.toUpperCase()
+      mappedCalls = mappedCalls.filter((c) => c.aiAnalysis?.callOutcome === targetOutcome)
+    }
+    if (sentiment && sentiment.toUpperCase() !== "ALL") {
+      const targetSentiment = sentiment.toUpperCase()
+      mappedCalls = mappedCalls.filter((c) => c.aiAnalysis?.sentiment === targetSentiment)
+    }
+
+    const mappedAnalyses = mappedCalls.map((c) => c.aiAnalysis).filter(Boolean)
 
     return res.status(200).json({
       success: true,
+      data: {
+        calls: mappedCalls,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      },
       pagination: {
         page: pageNum,
         limit: limitNum,
         total,
         totalPages: Math.ceil(total / limitNum),
       },
-      analyses,
+      calls: mappedCalls,
+      analyses: mappedAnalyses,
     })
   } catch (err) {
     console.error("Error in listAnalyzedCalls:", err)
@@ -382,13 +508,22 @@ async function getDashboardMetrics(req, res) {
       if (endDate) dateFilter.createdAt.$lte = new Date(endDate)
     }
 
+    const recordingQuery = {
+      tenantId,
+      $or: [
+        { hasRecording: true },
+        { "recording.status": "stored" },
+        { "recording.fileId": { $exists: true, $ne: null } },
+        { "recording.mp3FileId": { $exists: true, $ne: null } },
+        { recordingFileId: { $exists: true, $ne: null } },
+        { recordingUrl: { $exists: true, $ne: null, $ne: "" } },
+      ],
+      ...dateFilter,
+    }
+
     // Parallel fetch: Total recorded calls, analyses, and transcripts
     const [totalRecordedCalls, allAnalyses, allTranscripts] = await Promise.all([
-      Call.countDocuments({
-        tenantId,
-        $or: [{ hasRecording: true }, { "recording.status": "stored" }],
-        ...dateFilter,
-      }).setOptions({ skipTenantFilter: true }),
+      Call.countDocuments(recordingQuery).setOptions({ skipTenantFilter: true }),
       AICallAnalysis.find({ tenantId, ...dateFilter }).lean().setOptions({ skipTenantFilter: true }),
       AITranscript.find({ tenantId, ...dateFilter }).select("duration status").lean().setOptions({ skipTenantFilter: true }),
     ])
@@ -425,21 +560,39 @@ async function getDashboardMetrics(req, res) {
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      kpis: {
-        totalRecordedCalls,
-        analyzedCount,
-        pendingCount,
-        failedCount,
-        totalAudioMinutes: Number((totalAudioSeconds / 60).toFixed(2)),
-      },
+    const topTopicsList = Object.entries(topicFrequency)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+
+    const kpis = {
+      totalRecordedCalls,
+      analyzedCount,
+      pendingCount,
+      failedCount,
+      totalAudioMinutes: Number((totalAudioSeconds / 60).toFixed(2)),
+    }
+
+    const data = {
+      eligibleRecordedCalls: totalRecordedCalls,
+      analyzedCalls: analyzedCount,
+      processingCalls: pendingCount,
+      failedCalls: failedCount,
+      pendingCalls: pendingCount,
+      totalAudioSeconds,
+      analysisRate: totalRecordedCalls > 0 ? Number(((analyzedCount / totalRecordedCalls) * 100).toFixed(1)) : 0,
       outcomeDistribution,
       sentimentDistribution,
-      topTopics: Object.entries(topicFrequency)
-        .map(([name, count]) => ({ name, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 10),
+      topTopics: topTopicsList,
+    }
+
+    return res.status(200).json({
+      success: true,
+      data,
+      kpis,
+      outcomeDistribution,
+      sentimentDistribution,
+      topTopics: topTopicsList,
     })
   } catch (err) {
     console.error("Error in getDashboardMetrics:", err)

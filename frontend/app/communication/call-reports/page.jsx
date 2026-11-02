@@ -722,11 +722,11 @@ function CallReportsClient() {
                           {/* Actions */}
                           <td className="px-5 py-4 whitespace-nowrap text-right">
                             <div className="flex items-center justify-end space-x-1">
-                              {call.hasRecording && (
+                              {Boolean(call.hasRecording || call.recording?.status === "stored" || call.recording?.fileId || call.recording?.mp3FileId || call.recordingUrl) && (
                                 <Link
                                   href={`/dashboard/ai-call-intelligence?callId=${call._id || call.id}`}
                                   className="p-1.5 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition"
-                                  title="View AI Call Intelligence Report"
+                                  title="AI Call Intelligence & Report"
                                 >
                                   <Sparkles className="w-3.5 h-3.5" />
                                 </Link>

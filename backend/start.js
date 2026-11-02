@@ -331,6 +331,12 @@ const startServer = async () => {
     const { registerAllHandlers } = require("./jobs")
     registerAllHandlers()
 
+    if (process.env.DISABLE_EMBEDDED_WORKER !== "true") {
+      const worker = require("./worker")
+      worker.processNext()
+      console.log("✅ Background queue worker polling loop active.")
+    }
+
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server is running on port ${PORT}`)
       console.log(`Environment: ${process.env.NODE_ENV || "development"}`)
