@@ -49,6 +49,11 @@ const {
   rotateGenericKey,
   sendGenericTestLead,
 } = require("../controllers/genericConnectorController")
+const {
+  handleShopifyWebhook,
+  connectShopifyIntegration,
+  getShopifyStatus,
+} = require("../controllers/shopifyController")
 const { authenticate, requireAccountAdmin } = require("../middleware/authMiddleware")
 
 const router = express.Router()
@@ -116,6 +121,11 @@ router.post("/generic/connect", authenticate, requireAccountAdmin, connectGeneri
 router.post("/generic/rotate-key", authenticate, requireAccountAdmin, rotateGenericKey)
 router.post("/generic/test", authenticate, requireAccountAdmin, sendGenericTestLead)
 
+// 9b. Phase 3A Shopify Webhook Endpoints
+router.post("/webhooks/shopify", webhookLimiter, handleShopifyWebhook)
+router.post("/shopify/connect", authenticate, requireAccountAdmin, connectShopifyIntegration)
+router.get("/shopify/status", authenticate, getShopifyStatus)
+
 // 10. Phase 11 Multi-Tenant Integration Connectors CRUD
 router.get("/", authenticate, listIntegrations)
 router.post("/", authenticate, requireAccountAdmin, createIntegration)
@@ -125,5 +135,7 @@ router.post("/:id/test", authenticate, requireAccountAdmin, testIntegrationById)
 router.put("/:id", authenticate, requireAccountAdmin, updateIntegration)
 router.post("/:id/rotate-key", authenticate, requireAccountAdmin, rotateIntegrationKey)
 router.delete("/:id", authenticate, requireAccountAdmin, deleteIntegration)
+
+router.webhookLimiter = webhookLimiter
 
 module.exports = router

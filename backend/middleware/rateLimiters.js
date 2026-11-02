@@ -1,4 +1,5 @@
 const rateLimit = require("express-rate-limit")
+const crypto = require("crypto")
 
 /**
  * LeadFlow CRM - Configurable Domain Rate Limiters
@@ -8,6 +9,20 @@ const rateLimit = require("express-rate-limit")
  * devices never bottleneck against the standard dashboard web limiter.
  */
 
+const shouldSkipDashboardRateLimit = (req) => {
+  const url = req.originalUrl || req.baseUrl || req.url || ""
+  return url.startsWith("/api/integrations")
+}
+
+const generateIntegrationKey = (req) => {
+  const apiKey = req.headers?.["x-api-key"] || req.headers?.["x-site-key"] || req.query?.apiKey
+  if (apiKey) {
+    const keyHash = crypto.createHash("sha256").update(String(apiKey)).digest("hex").slice(0, 16)
+    return `integration_${keyHash}`
+  }
+  return `integration_ip_${req.ip || "unknown_ip"}`
+}
+
 // 1. Dashboard Limiter: Standard web portal and admin interface
 const dashboardLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -16,6 +31,7 @@ const dashboardLimiter = rateLimit({
     // Key by authenticated user ID if present, otherwise IP
     return req.user?.id ? `user_${req.user.id}` : (req.ip || "unknown_ip")
   },
+  skip: shouldSkipDashboardRateLimit,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -23,6 +39,7 @@ const dashboardLimiter = rateLimit({
     error: "Too many dashboard requests. Please slow down and try again shortly.",
   },
 })
+dashboardLimiter.skip = shouldSkipDashboardRateLimit
 
 // 2. Auth Limiter: Login and password endpoints
 const authLimiter = rateLimit({
@@ -45,14 +62,7 @@ const authLimiter = rateLimit({
 const integrationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 600, // High throughput allowance for high-volume lead capture
-  keyGenerator: (req) => {
-    // Keyed by API credential if available, preventing office-wide IP blocking
-    const apiKey = req.headers["x-api-key"] || req.headers["x-site-key"] || req.query?.apiKey
-    if (apiKey) {
-      return `integration_${String(apiKey).slice(-12)}`
-    }
-    return `integration_ip_${req.ip || "unknown_ip"}`
-  },
+  keyGenerator: generateIntegrationKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -60,6 +70,7 @@ const integrationLimiter = rateLimit({
     error: "Integration rate limit exceeded. Please regulate webhook delivery rate.",
   },
 })
+integrationLimiter.keyGenerator = generateIntegrationKey
 
 // 4. Mobile Sync Limiter: Device-bound call logs and lead sync (Phase 15 readiness)
 const mobileLimiter = rateLimit({

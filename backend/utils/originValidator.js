@@ -22,6 +22,8 @@ function normalizeOrigin(raw) {
   // Reject dangerous pseudo-protocols, data URIs, or wildcards
   if (
     trimmed === "*" ||
+    trimmed.toLowerCase() === "null" ||
+    trimmed.toLowerCase() === "undefined" ||
     trimmed.startsWith("javascript:") ||
     trimmed.startsWith("data:") ||
     trimmed.startsWith("file:") ||
@@ -106,24 +108,12 @@ function validateOrigin(incomingOrigin, allowedOrigins = []) {
     }
   }
 
-  // If no origins configured, default to permissive (allow all) so integrations work out-of-the-box
+  // If no origins configured, fail closed to prevent unauthorized use of public siteKey
   if (!Array.isArray(allowedOrigins) || allowedOrigins.length === 0) {
     return {
-      allowed: true,
+      allowed: false,
       normalizedOrigin: normalizedIncoming,
-    }
-  }
-
-  // Always permit local development origins
-  if (
-    normalizedIncoming.startsWith("http://localhost:") ||
-    normalizedIncoming.startsWith("http://127.0.0.1:") ||
-    normalizedIncoming === "http://localhost" ||
-    normalizedIncoming === "http://127.0.0.1"
-  ) {
-    return {
-      allowed: true,
-      normalizedOrigin: normalizedIncoming,
+      reason: "No allowed origins configured for this integration. Please configure allowed origins in CRM settings.",
     }
   }
 

@@ -154,6 +154,9 @@ export default function LeadFeedsClient() {
   // Field mapping state
   const [editingMappings, setEditingMappings] = useState([])
   const [savingMappings, setSavingMappings] = useState(false)
+  const [tenantCustomFields, setTenantCustomFields] = useState([])
+  const [loadingCustomFields, setLoadingCustomFields] = useState(false)
+  const [mappingConflictError, setMappingConflictError] = useState("")
 
   // Custom test payload state
   const [testPayloadText, setTestPayloadText] = useState("")
@@ -395,38 +398,100 @@ export default function LeadFeedsClient() {
   }
 
   // Open Field Mapping modal
-  const handleOpenMapping = (integration) => {
+  const handleOpenMapping = async (integration) => {
     setSelectedIntegration(integration)
-    setEditingMappings(
+    setMappingConflictError("")
+    setShowMappingModal(true)
+
+    // Load existing mappings or fallback to standard defaults
+    const currentMappings =
       Array.isArray(integration.fieldMapping) && integration.fieldMapping.length > 0
         ? JSON.parse(JSON.stringify(integration.fieldMapping))
         : [
-            { sourceField: "name", targetField: "name", transform: "trim", defaultValue: "" },
-            { sourceField: "email", targetField: "email", transform: "lowercase", defaultValue: "" },
-            { sourceField: "phone", targetField: "phone", transform: "phone_e164", defaultValue: "" },
-            { sourceField: "message", targetField: "message", transform: "trim", defaultValue: "" },
+            { sourceField: "name", targetField: "name", transform: "trim", defaultValue: "", required: false },
+            { sourceField: "email", targetField: "email", transform: "lowercase", defaultValue: "", required: false },
+            { sourceField: "phone", targetField: "phone", transform: "phone_e164", defaultValue: "", required: false },
+            { sourceField: "message", targetField: "message", transform: "trim", defaultValue: "", required: false },
           ]
-    )
-    setShowMappingModal(true)
+    setEditingMappings(currentMappings)
+
+    // Fetch tenant's configured custom fields
+    try {
+      setLoadingCustomFields(true)
+      const res = await apiClient.getCustomFields({ status: "active" })
+      if (res && res.success) {
+        setTenantCustomFields(res.data || [])
+      }
+    } catch (err) {
+      console.error("Failed to load tenant custom fields for mapping:", err)
+    } finally {
+      setLoadingCustomFields(false)
+    }
   }
 
-  // Save Field Mappings
+  // Save Field Mappings with conflict validation
   const handleSaveMapping = async () => {
     if (!selectedIntegration) return
+    setMappingConflictError("")
+
+    // 1. Filter out empty rows
+    const validMappings = editingMappings.filter((m) => m.sourceField?.trim() && m.targetField?.trim())
+
+    if (validMappings.length === 0) {
+      setMappingConflictError("Please configure at least one valid source -> target field mapping")
+      return
+    }
+
+    // 2. Validate conflict: duplicate target fields
+    const seenTargets = new Set()
+    for (const map of validMappings) {
+      const cleanTarget = map.targetField.trim()
+      if (seenTargets.has(cleanTarget)) {
+        const errMsg = `Mapping conflict: Multiple source fields are mapped to the same CRM field '${cleanTarget}'. Each CRM field should only be mapped once.`
+        setMappingConflictError(errMsg)
+        toast.error(`Conflict: duplicate mapping to '${cleanTarget}'`)
+        return
+      }
+      seenTargets.add(cleanTarget)
+    }
+
+    // 3. Validate conflict: duplicate source fields
+    const seenSources = new Set()
+    for (const map of validMappings) {
+      const cleanSource = map.sourceField.trim()
+      if (seenSources.has(cleanSource)) {
+        const errMsg = `Mapping conflict: Source form field '${cleanSource}' is mapped multiple times.`
+        setMappingConflictError(errMsg)
+        toast.error(`Conflict: duplicate source '${cleanSource}'`)
+        return
+      }
+      seenSources.add(cleanSource)
+    }
+
     try {
       setSavingMappings(true)
-      const validMappings = editingMappings.filter((m) => m.sourceField && m.targetField)
+      const payloadMappings = validMappings.map((m) => ({
+        sourceField: m.sourceField.trim(),
+        targetField: m.targetField.trim(),
+        transform: m.transform || "none",
+        defaultValue: m.defaultValue?.trim() || "",
+        required: Boolean(m.required),
+      }))
+
       const res = await apiClient.updateIntegration(selectedIntegration.id || selectedIntegration._id, {
-        fieldMapping: validMappings,
+        fieldMapping: payloadMappings,
       })
+
       if (res && res.success) {
         toast.success("Field mapping updated successfully!")
         setShowMappingModal(false)
         fetchWebsiteIntegrations()
       } else {
+        setMappingConflictError(res?.error || "Failed to update field mappings")
         toast.error(res?.error || "Failed to update field mappings")
       }
     } catch (err) {
+      setMappingConflictError(err.message || "Failed to update field mappings")
       toast.error(err.message || "Failed to update field mappings")
     } finally {
       setSavingMappings(false)
@@ -5052,6 +5117,18 @@ export default function LeadFeedsClient() {
 
                   {activeSnippetTab === "react" && (
                     <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-950 space-y-1.5">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <ShieldCheck className="w-4 h-4 text-blue-600" />
+                          <span>Browser Authentication &amp; Domain Allowlisting</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed">
+                          Browser SPAs authenticate using the public <strong>Site Key ({selectedIntegration.siteKey})</strong>.
+                          Ensure your website domain (e.g. <code>https://yourdomain.com</code>) is added to <strong>Allowed Origins</strong> in integration settings.
+                          Private API keys are never exposed in browser bundles.
+                        </p>
+                      </div>
+
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-slate-900">React LeadCaptureForm Component</span>
@@ -5178,16 +5255,22 @@ export default function LeadFeedsClient() {
       ======================================================== */}
       {showMappingModal && selectedIntegration && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[92vh] flex flex-col">
+            {/* Modal Header */}
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
                   <Sliders className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Lead Field Mapping</h3>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-base font-bold text-slate-900">Integration Field Mapping</h3>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      {selectedIntegration.type?.toUpperCase()}
+                    </span>
+                  </div>
                   <p className="text-xs text-slate-500">
-                    Map incoming website form fields to CRM lead fields for {selectedIntegration.name}
+                    Map incoming website form fields to standard CRM fields &amp; custom attributes for {selectedIntegration.name}
                   </p>
                 </div>
               </div>
@@ -5200,97 +5283,217 @@ export default function LeadFeedsClient() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto py-4 space-y-3">
-              <p className="text-xs text-slate-500">
-                Define how external form fields match CRM attributes. Custom fields (e.g. <code>product</code>, <code>budget</code>) are saved into lead metadata.
-              </p>
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto py-4 space-y-4 text-xs">
+              {/* Conflict Error Alert */}
+              {mappingConflictError && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start space-x-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <span className="font-bold block">Mapping Conflict Detected</span>
+                    <span className="text-[11px] leading-relaxed block">{mappingConflictError}</span>
+                  </div>
+                </div>
+              )}
 
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-600 text-[11px]">
+                <p>
+                  Incoming form fields map to standard CRM properties or custom fields. Custom fields are automatically saved in{" "}
+                  <code className="font-mono font-bold text-indigo-700">lead.metadata.customFields</code>.
+                </p>
+                <Link
+                  href="/settings/custom-fields"
+                  target="_blank"
+                  className="inline-flex items-center space-x-1 text-indigo-600 hover:text-indigo-800 font-semibold shrink-0 cursor-pointer"
+                >
+                  <span>Configure Custom Fields</span>
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+              </div>
+
+              {/* Table / Row mapping manager */}
               <div className="space-y-2">
+                <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">
+                  <div className="col-span-3">Website Form Field</div>
+                  <div className="col-span-1 text-center"></div>
+                  <div className="col-span-3">CRM Target Field</div>
+                  <div className="col-span-2">Transform</div>
+                  <div className="col-span-2">Default Value</div>
+                  <div className="col-span-1 text-right">Req.</div>
+                </div>
+
                 {editingMappings.map((map, idx) => (
-                  <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
-                    <input
-                      type="text"
-                      placeholder="Source field (e.g. full_name)"
-                      value={map.sourceField}
-                      onChange={(e) => {
-                        const copy = [...editingMappings]
-                        copy[idx].sourceField = e.target.value
-                        setEditingMappings(copy)
-                      }}
-                      className="flex-1 border border-slate-200 rounded px-2.5 py-1.5 text-xs bg-white font-mono"
-                    />
-                    <ArrowRight className="w-4 h-4 text-slate-400 shrink-0" />
-                    <input
-                      type="text"
-                      placeholder="CRM field (name, email, phone...)"
-                      value={map.targetField}
-                      onChange={(e) => {
-                        const copy = [...editingMappings]
-                        copy[idx].targetField = e.target.value
-                        setEditingMappings(copy)
-                      }}
-                      className="flex-1 border border-slate-200 rounded px-2.5 py-1.5 text-xs bg-white font-mono"
-                    />
-                    <select
-                      value={map.transform || "none"}
-                      onChange={(e) => {
-                        const copy = [...editingMappings]
-                        copy[idx].transform = e.target.value
-                        setEditingMappings(copy)
-                      }}
-                      className="border border-slate-200 rounded px-2 py-1.5 text-xs bg-white text-slate-700"
-                    >
-                      <option value="none">No transform</option>
-                      <option value="trim">Trim</option>
-                      <option value="lowercase">Lowercase</option>
-                      <option value="uppercase">Uppercase</option>
-                      <option value="phone_e164">Phone E.164</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingMappings(editingMappings.filter((_, i) => i !== idx))
-                      }}
-                      className="p-1.5 text-rose-500 hover:bg-rose-50 rounded cursor-pointer"
-                      title="Remove field mapping"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div
+                    key={idx}
+                    className="grid grid-cols-12 gap-2 items-center p-2.5 bg-slate-50/70 hover:bg-slate-50 rounded-xl border border-slate-200 transition"
+                  >
+                    {/* Source Field Input */}
+                    <div className="col-span-3">
+                      <input
+                        type="text"
+                        placeholder="e.g. your-name or budget"
+                        value={map.sourceField}
+                        onChange={(e) => {
+                          const copy = [...editingMappings]
+                          copy[idx].sourceField = e.target.value
+                          setEditingMappings(copy)
+                          setMappingConflictError("")
+                        }}
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    {/* Arrow */}
+                    <div className="col-span-1 flex justify-center text-slate-400">
+                      <ArrowRight className="w-4 h-4" />
+                    </div>
+
+                    {/* Target Field Select */}
+                    <div className="col-span-3">
+                      <select
+                        value={map.targetField}
+                        onChange={(e) => {
+                          const copy = [...editingMappings]
+                          copy[idx].targetField = e.target.value
+                          setEditingMappings(copy)
+                          setMappingConflictError("")
+                        }}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                      >
+                        <option value="">-- Select CRM Target --</option>
+                        <optgroup label="Standard CRM Fields">
+                          <option value="name">Lead Name (name)</option>
+                          <option value="email">Email Address (email)</option>
+                          <option value="phone">Phone Number (phone)</option>
+                          <option value="company">Company Name (company)</option>
+                          <option value="message">Message / Inquiry (message)</option>
+                          <option value="formId">Form ID (formId)</option>
+                          <option value="landingPage">Landing Page (landingPage)</option>
+                          <option value="source">Lead Source (source)</option>
+                        </optgroup>
+                        {tenantCustomFields.length > 0 && (
+                          <optgroup label="Tenant Custom Fields">
+                            {tenantCustomFields.map((cf) => (
+                              <option key={cf.id || cf._id} value={cf.name}>
+                                {cf.label} ({cf.name}) [{cf.type}]
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Transform */}
+                    <div className="col-span-2">
+                      <select
+                        value={map.transform || "none"}
+                        onChange={(e) => {
+                          const copy = [...editingMappings]
+                          copy[idx].transform = e.target.value
+                          setEditingMappings(copy)
+                        }}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white text-slate-700 focus:outline-none cursor-pointer"
+                      >
+                        <option value="none">No transform</option>
+                        <option value="trim">Trim</option>
+                        <option value="lowercase">Lowercase</option>
+                        <option value="uppercase">Uppercase</option>
+                        <option value="phone_e164">Phone E.164</option>
+                      </select>
+                    </div>
+
+                    {/* Default Fallback Value */}
+                    <div className="col-span-2">
+                      <input
+                        type="text"
+                        placeholder="Fallback"
+                        value={map.defaultValue || ""}
+                        onChange={(e) => {
+                          const copy = [...editingMappings]
+                          copy[idx].defaultValue = e.target.value
+                          setEditingMappings(copy)
+                        }}
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white text-slate-700 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Required Checkbox & Remove */}
+                    <div className="col-span-1 flex items-center justify-end space-x-1">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(map.required)}
+                        onChange={(e) => {
+                          const copy = [...editingMappings]
+                          copy[idx].required = e.target.checked
+                          setEditingMappings(copy)
+                        }}
+                        title="Mark as required field (rejects if missing)"
+                        className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingMappings(editingMappings.filter((_, i) => i !== idx))
+                          setMappingConflictError("")
+                        }}
+                        className="p-1 text-slate-400 hover:text-rose-600 rounded transition cursor-pointer"
+                        title="Remove mapping"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingMappings([
-                    ...editingMappings,
-                    { sourceField: "", targetField: "", transform: "trim", defaultValue: "" },
-                  ])
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-indigo-300 text-indigo-600 hover:bg-indigo-50 text-xs font-semibold transition cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Add Field Rule
-              </button>
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingMappings([
+                      ...editingMappings,
+                      { sourceField: "", targetField: "", transform: "trim", defaultValue: "", required: false },
+                    ])
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-indigo-300 text-indigo-600 hover:bg-indigo-50 text-xs font-semibold transition cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Field Mapping Rule</span>
+                </button>
+
+                {loadingCustomFields && (
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    <span>Syncing custom fields...</span>
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowMappingModal(false)}
-                className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={savingMappings}
-                onClick={handleSaveMapping}
-                className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 cursor-pointer"
-              >
-                {savingMappings ? "Saving..." : "Save Field Mappings"}
-              </button>
+            {/* Modal Footer */}
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-slate-400 text-[11px]">
+                {editingMappings.length} mappings configured
+              </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMappingModal(false)}
+                  className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingMappings}
+                  onClick={handleSaveMapping}
+                  className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                >
+                  {savingMappings && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{savingMappings ? "Saving Mappings..." : "Save Field Mappings"}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

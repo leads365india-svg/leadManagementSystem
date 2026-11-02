@@ -17,7 +17,10 @@ const MAX_PAYLOAD_BYTES = 64 * 1024 // 64 KB limit
 const ALLOWED_EVENT_STATUSES = [
   "received",
   "queued",
+  "processing",
   "processed",
+  "succeeded",
+  "rejected",
   "failed",
   "replayed",
 ]
@@ -197,12 +200,22 @@ integrationEventSchema.pre("save", function (next) {
     } catch (_) {}
   }
 
-  // 2. Sanitize headers (scrub authorization, cookie, x-api-key)
+  // 2. Sanitize headers (scrub authorization, cookie, x-api-key, signatures, site keys, and secrets)
   if (this.headers && typeof this.headers === "object") {
     const cleanHeaders = {}
     for (const [key, val] of Object.entries(this.headers)) {
       const lKey = key.toLowerCase()
-      if (lKey === "authorization" || lKey === "x-api-key" || lKey === "cookie") {
+      if (
+        lKey === "authorization" ||
+        lKey === "x-api-key" ||
+        lKey === "cookie" ||
+        lKey === "x-site-key" ||
+        lKey.includes("signature") ||
+        lKey.includes("hmac") ||
+        lKey.includes("token") ||
+        lKey.includes("secret") ||
+        lKey.includes("password")
+      ) {
         cleanHeaders[key] = "[REDACTED]"
       } else {
         cleanHeaders[key] = val

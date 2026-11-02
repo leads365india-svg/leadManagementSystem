@@ -78,10 +78,9 @@ const verifyEmailToken = async (email, token, rawApiKey, tenantId, strictMode = 
                 tenantId,
                 "metadata.verificationTokenHash": tokenHash,
               })
-              if (replayed) {
-                console.warn(`Replay protection triggered: Token for ${cleanEmail} was already redeemed.`)
+                const maskedEmail = cleanEmail.replace(/(.{2})(.*)(@.*)/, "$1***$3")
+                console.warn(`Replay protection triggered: Token for ${maskedEmail} was already redeemed.`)
                 return false
-              }
             }
             return true
           }
@@ -104,7 +103,8 @@ const verifyEmailToken = async (email, token, rawApiKey, tenantId, strictMode = 
             "metadata.verificationTokenHash": tokenHash,
           })
           if (replayed) {
-            console.warn(`Replay protection triggered: Direct token for ${cleanEmail} was already redeemed.`)
+            const maskedEmail = cleanEmail.replace(/(.{2})(.*)(@.*)/, "$1***$3")
+            console.warn(`Replay protection triggered: Direct token for ${maskedEmail} was already redeemed.`)
             return false
           }
         }
@@ -817,7 +817,7 @@ const receiveWebsiteLead = async (req, res) => {
     req.body.site_key ||
     null
 
-  const incomingOrigin = req.headers.origin || req.headers.referer || null
+  const incomingOrigin = req.headers.origin || null
 
   const result = await integrationService.intakeWebhookPayload({
     rawApiKey,
@@ -1461,18 +1461,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 
   // 4. React
+  // 4. React
   const react = {
-    title: "React Component Integration",
-    description: "Reusable React functional component using public Site Key, client-side validation, loading states, and honeypot protection.",
+    title: "React / Vite Component Integration",
+    description: "Reusable React component using public Site Key authentication, automated UTM capture, custom fields mapping, and anti-spam honeypot.",
     siteKey,
     webhookUrl,
-    component: `import React, { useState } from 'react';
+    allowedOriginsGuidance: "Make sure your website origin (e.g. https://yourdomain.com) is added to Allowed Origins in this integration's settings. Browser requests from unauthorized origins will be rejected.",
+    component: `import React, { useState, useEffect } from 'react';
 
 export default function LeadCaptureForm() {
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '', message: '', _hp_trap: '' });
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    company: '',
+    message: '',
+    budget: '',
+    product_interest: '',
+    _hp_trap: ''
+  });
+  const [attribution, setAttribution] = useState({});
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState(null);
+
+  // Capture UTM parameters and click IDs on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const tracking = {};
+    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'fbclid'].forEach(k => {
+      const v = params.get(k);
+      if (v) tracking[k] = v.trim();
+    });
+    tracking.landingPage = window.location.href;
+    if (document.referrer) tracking.referrer = document.referrer;
+    setAttribution(tracking);
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1481,16 +1507,26 @@ export default function LeadCaptureForm() {
     setSuccess(false);
 
     try {
+      // Generate client idempotency key for safe retries
+      const idempotencyKey = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : 'react_' + Date.now();
+
       const res = await fetch('${webhookUrl}', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Site-Key': '${siteKey}'
+          'X-Site-Key': '${siteKey}',
+          'X-Idempotency-Key': idempotencyKey
         },
         body: JSON.stringify({
           ...formData,
+          ...attribution,
           source: 'React Website',
-          landingPage: typeof window !== 'undefined' ? window.location.href : ''
+          customFields: {
+            budget: formData.budget,
+            product_interest: formData.product_interest
+          }
         })
       });
 
@@ -1500,7 +1536,7 @@ export default function LeadCaptureForm() {
       }
 
       setSuccess(true);
-      setFormData({ name: '', email: '', phone: '', message: '', _hp_trap: '' });
+      setFormData({ name: '', email: '', phone: '', company: '', message: '', budget: '', product_interest: '', _hp_trap: '' });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1509,7 +1545,8 @@ export default function LeadCaptureForm() {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 max-w-md mx-auto p-6 bg-white shadow rounded-lg">
+    <form onSubmit={handleSubmit} className="space-y-4 max-w-md mx-auto p-6 bg-white shadow rounded-xl border border-gray-100">
+      {/* Honeypot field */}
       <input
         type="text"
         name="_hp_trap"
@@ -1520,56 +1557,79 @@ export default function LeadCaptureForm() {
       />
 
       <div>
-        <label className="block text-sm font-medium text-gray-700">Full Name *</label>
+        <label className="block text-xs font-semibold text-gray-700">Full Name *</label>
         <input
           type="text"
           required
           value={formData.name}
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          className="mt-1 block w-full border border-gray-300 rounded-md p-2"
+          className="mt-1 block w-full border border-gray-300 rounded-lg p-2 text-sm"
         />
       </div>
 
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-xs font-semibold text-gray-700">Phone *</label>
+          <input
+            type="tel"
+            required
+            value={formData.phone}
+            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+            className="mt-1 block w-full border border-gray-300 rounded-lg p-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-700">Email</label>
+          <input
+            type="email"
+            value={formData.email}
+            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            className="mt-1 block w-full border border-gray-300 rounded-lg p-2 text-sm"
+          />
+        </div>
+      </div>
+
       <div>
-        <label className="block text-sm font-medium text-gray-700">Email Address</label>
+        <label className="block text-xs font-semibold text-gray-700">Product / Service</label>
         <input
-          type="email"
-          value={formData.email}
-          onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-          className="mt-1 block w-full border border-gray-300 rounded-md p-2"
+          type="text"
+          placeholder="e.g. Enterprise CRM"
+          value={formData.product_interest}
+          onChange={(e) => setFormData({ ...formData, product_interest: e.target.value })}
+          className="mt-1 block w-full border border-gray-300 rounded-lg p-2 text-sm"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700">Phone Number *</label>
+        <label className="block text-xs font-semibold text-gray-700">Estimated Budget</label>
         <input
-          type="tel"
-          required
-          value={formData.phone}
-          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-          className="mt-1 block w-full border border-gray-300 rounded-md p-2"
+          type="number"
+          placeholder="e.g. 50000"
+          value={formData.budget}
+          onChange={(e) => setFormData({ ...formData, budget: e.target.value })}
+          className="mt-1 block w-full border border-gray-300 rounded-lg p-2 text-sm"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700">Message</label>
+        <label className="block text-xs font-semibold text-gray-700">Message</label>
         <textarea
           rows={3}
           value={formData.message}
           onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-          className="mt-1 block w-full border border-gray-300 rounded-md p-2"
+          className="mt-1 block w-full border border-gray-300 rounded-lg p-2 text-sm"
         />
       </div>
 
-      {error && <div className="p-3 text-sm text-red-600 bg-red-50 rounded-md">{error}</div>}
-      {success && <div className="p-3 text-sm text-green-700 bg-green-50 rounded-md">Enquiry sent successfully!</div>}
+      {error && <div className="p-3 text-xs text-red-700 bg-red-50 rounded-lg border border-red-200">{error}</div>}
+      {success && <div className="p-3 text-xs text-green-800 bg-green-50 rounded-lg border border-green-200">Enquiry sent successfully!</div>}
 
       <button
         type="submit"
         disabled={loading}
-        className="w-full bg-blue-600 text-white font-medium py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+        className="w-full bg-indigo-600 text-white font-semibold py-2.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm transition"
       >
-        {loading ? 'Submitting...' : 'Submit Lead'}
+        {loading ? 'Submitting...' : 'Submit Enquiry'}
       </button>
     </form>
   );
@@ -1579,93 +1639,166 @@ export default function LeadCaptureForm() {
   // 5. Next.js
   const nextjs = {
     title: "Next.js App Router Integration",
-    description: "Next.js Route Handler / Server Action storing private API keys securely in backend environment variables, with client-side form.",
+    description: "Next.js Route Handler storing private API keys securely in backend environment variables, with server-side HMAC-SHA256 signature verification and client form.",
     webhookUrl,
     apiKey,
-    envExample: `# .env.local (Never prefix with NEXT_PUBLIC_)
+    envExample: `# .env.local (Never prefix private keys with NEXT_PUBLIC_)
 LEADS365_WEBHOOK_URL="${webhookUrl}"
 LEADS365_API_KEY="${apiKey}"`,
     routeHandler: `// app/api/contact/route.js (Next.js App Router Server Handler)
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 
 export async function POST(request) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
 
+    // 1. Anti-bot honeypot check
     if (body._hp_trap) {
       return NextResponse.json({ error: 'Spam detected' }, { status: 400 });
     }
 
-    const res = await fetch(process.env.LEADS365_WEBHOOK_URL, {
+    // 2. Validate mandatory attributes
+    if (!body.name || !body.phone) {
+      return NextResponse.json({ error: 'Name and phone are required' }, { status: 400 });
+    }
+
+    const webhookUrl = process.env.LEADS365_WEBHOOK_URL;
+    const apiKey = process.env.LEADS365_API_KEY;
+
+    if (!webhookUrl || !apiKey) {
+      return NextResponse.json({ error: 'Server misconfiguration' }, { status: 503 });
+    }
+
+    const payload = {
+      name: body.name,
+      email: body.email || undefined,
+      phone: body.phone,
+      company: body.company || undefined,
+      message: body.message || undefined,
+      source: 'Next.js Website',
+      customFields: body.customFields || {},
+      ...body.customFields,
+      utm_source: body.utm_source,
+      utm_medium: body.utm_medium,
+      utm_campaign: body.utm_campaign,
+      landingPage: body.landingPage,
+      referrer: body.referrer
+    };
+
+    const jsonPayload = JSON.stringify(payload);
+    const timestamp = Date.now().toString();
+    const idempotencyKey = 'nextjs_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+
+    // 3. Cryptographic HMAC-SHA256 signature calculation
+    const signature = crypto
+      .createHmac('sha256', apiKey)
+      .update(jsonPayload)
+      .digest('hex');
+
+    const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': process.env.LEADS365_API_KEY,
-        'X-Idempotency-Key': 'nextjs_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+        'X-API-Key': apiKey,
+        'X-Signature-256': signature,
+        'X-Timestamp': timestamp,
+        'X-Idempotency-Key': idempotencyKey
       },
-      body: JSON.stringify({
-        name: body.name,
-        email: body.email,
-        phone: body.phone,
-        message: body.message,
-        source: 'Next.js Website'
-      })
+      body: jsonPayload
     });
 
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
-    return NextResponse.json({ error: error.message || 'Server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Server communication error' }, { status: 500 });
   }
 }`,
     clientComponent: `// app/components/ContactForm.jsx (Client Form)
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function ContactForm() {
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', company: '', message: '', budget: '', product_interest: '', _hp_trap: '' });
+  const [attribution, setAttribution] = useState({});
   const [status, setStatus] = useState({ loading: false, msg: '', error: false });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const tracking = {};
+    ['utm_source', 'utm_medium', 'utm_campaign'].forEach(k => {
+      const v = params.get(k);
+      if (v) tracking[k] = v;
+    });
+    tracking.landingPage = window.location.href;
+    setAttribution(tracking);
+  }, []);
 
   const onSubmit = async (e) => {
     e.preventDefault();
     setStatus({ loading: true, msg: '', error: false });
 
-    const form = e.target;
-    const payload = {
-      name: form.name.value,
-      email: form.email.value,
-      phone: form.phone.value,
-      message: form.message.value,
-      _hp_trap: form._hp_trap.value
-    };
-
     try {
       const res = await fetch('/api/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...formData,
+          ...attribution,
+          customFields: {
+            budget: formData.budget,
+            product_interest: formData.product_interest
+          }
+        })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to submit');
+      if (!res.ok) throw new Error(data.error || 'Failed to submit enquiry');
       setStatus({ loading: false, msg: 'Thank you! We will get in touch shortly.', error: false });
-      form.reset();
+      setFormData({ name: '', email: '', phone: '', company: '', message: '', budget: '', product_interest: '', _hp_trap: '' });
     } catch (err) {
       setStatus({ loading: false, msg: err.message, error: true });
     }
   };
 
   return (
-    <form onSubmit={onSubmit} className="max-w-md mx-auto space-y-4">
-      <input type="text" name="_hp_trap" className="hidden" tabIndex={-1} />
-      <input name="name" placeholder="Full Name" required className="w-full p-2 border rounded" />
-      <input name="email" type="email" placeholder="Email Address" className="w-full p-2 border rounded" />
-      <input name="phone" type="tel" placeholder="Phone Number" required className="w-full p-2 border rounded" />
-      <textarea name="message" placeholder="Your Message" className="w-full p-2 border rounded" />
-      {status.msg && (
-        <p className={status.error ? "text-red-500 text-sm" : "text-green-600 text-sm"}>{status.msg}</p>
-      )}
-      <button type="submit" disabled={status.loading} className="w-full bg-blue-600 text-white p-2 rounded">
-        {status.loading ? 'Sending...' : 'Send Message'}
+    <form onSubmit={onSubmit} className="space-y-3 max-w-md mx-auto p-6 bg-white rounded-xl shadow border">
+      <input
+        type="text"
+        name="_hp_trap"
+        value={formData._hp_trap}
+        onChange={(e) => setFormData({ ...formData, _hp_trap: e.target.value })}
+        style={{ display: 'none' }}
+        tabIndex={-1}
+      />
+      <div>
+        <label className="block text-xs font-semibold">Name *</label>
+        <input required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full border p-2 rounded text-sm mt-1" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold">Phone *</label>
+        <input required type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="w-full border p-2 rounded text-sm mt-1" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold">Email</label>
+        <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="w-full border p-2 rounded text-sm mt-1" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold">Product</label>
+        <input value={formData.product_interest} onChange={(e) => setFormData({ ...formData, product_interest: e.target.value })} className="w-full border p-2 rounded text-sm mt-1" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold">Budget</label>
+        <input type="number" value={formData.budget} onChange={(e) => setFormData({ ...formData, budget: e.target.value })} className="w-full border p-2 rounded text-sm mt-1" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold">Message</label>
+        <textarea rows={3} value={formData.message} onChange={(e) => setFormData({ ...formData, message: e.target.value })} className="w-full border p-2 rounded text-sm mt-1" />
+      </div>
+      {status.msg && <div className={\`p-3 text-xs rounded \${status.error ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}\`}>{status.msg}</div>}
+      <button type="submit" disabled={status.loading} className="w-full bg-indigo-600 text-white font-semibold py-2 rounded text-sm hover:bg-indigo-700 disabled:opacity-50">
+        {status.loading ? 'Submitting...' : 'Send Enquiry'}
       </button>
     </form>
   );

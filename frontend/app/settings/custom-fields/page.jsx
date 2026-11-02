@@ -1,15 +1,10 @@
-import CrmPlaceholderPage from "@/components/crm-placeholder-page"
+import CustomFieldsClient from "./custom-fields-client"
 
 export const metadata = {
-  title: "Custom Fields | LeadFlow CRM",
+  title: "Custom Fields Management | Leads365 CRM",
+  description: "Configure tenant custom attributes, dropdown options, and website integration fields.",
 }
 
 export default function CustomFieldsPage() {
-  return (
-    <CrmPlaceholderPage
-      title="Custom Fields"
-      category="Settings"
-      description="Configure custom attributes, metadata tags, and client specific data properties on lead objects."
-    />
-  )
+  return <CustomFieldsClient />
 }
