@@ -551,6 +551,14 @@ async function streamUpload({
           }).catch(() => {})
         }
 
+        // Phase 3: Safely enqueue AI Call Intelligence job (fire-and-forget, never fails recording upload)
+        try {
+          const { enqueueCallIntelligenceJob } = require("./aiCallProcessingPipeline")
+          enqueueCallIntelligenceJob({ callId: call._id, tenantId }).catch((e) => {
+            console.warn("[RecordingStorage] AI intelligence enqueue notice:", e.message)
+          })
+        } catch (_) {}
+
         resolve({
           success: true,
           message: "Recording uploaded and stored successfully",

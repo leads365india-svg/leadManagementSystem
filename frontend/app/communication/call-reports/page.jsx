@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useCallback, useMemo, Suspense } from "react"
+import Link from "next/link"
 import dynamic from "next/dynamic"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
@@ -13,6 +14,7 @@ const InBrowserAudioPlayer = dynamic(() => import("@/components/in-browser-audio
   ssr: false,
 })
 import {
+  Sparkles,
   PhoneCall,
   PhoneIncoming,
   PhoneOutgoing,
@@ -720,6 +722,15 @@ function CallReportsClient() {
                           {/* Actions */}
                           <td className="px-5 py-4 whitespace-nowrap text-right">
                             <div className="flex items-center justify-end space-x-1">
+                              {call.hasRecording && (
+                                <Link
+                                  href={`/dashboard/ai-call-intelligence?callId=${call._id || call.id}`}
+                                  className="p-1.5 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition"
+                                  title="View AI Call Intelligence Report"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                </Link>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setEditingCall({ ...call })}

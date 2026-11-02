@@ -91,6 +91,13 @@ const NAV_CATEGORIES = [
         icon: PhoneCall,
       },
       {
+        id: "comm-ai-intelligence",
+        label: "AI Call Intelligence",
+        href: "/dashboard/ai-call-intelligence",
+        description: "Transcripts, summaries & conversation analytics",
+        icon: Sparkles,
+      },
+      {
         id: "comm-meetings",
         label: "Meetings",
         href: "/communication/meetings",
@@ -175,6 +182,13 @@ const NAV_CATEGORIES = [
         href: "/reports/performance",
         description: "Agent quota tracking and leaderboard",
         icon: TrendingUp,
+      },
+      {
+        id: "reports-ai-sales-intelligence",
+        label: "AI Sales Intelligence",
+        href: "/dashboard/ai-sales-intelligence",
+        description: "Agent scorecards, sales coaching & lead priority",
+        icon: Sparkles,
       },
       {
         id: "reports-call-ingestion",

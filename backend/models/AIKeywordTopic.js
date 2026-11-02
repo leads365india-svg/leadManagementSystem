@@ -165,14 +165,31 @@ aiKeywordTopicSchema.index({ tenantId: 1, name: 1 })
 // Text index on name and primaryKeywords for keyword search
 aiKeywordTopicSchema.index({ name: "text", primaryKeywords: "text", category: "text" })
 
+/**
+ * Phase 3 Call Analysis Contract:
+ * Strictly retrieves only APPROVED discussion topics for the given tenant.
+ * Topics with status PENDING_APPROVAL, DRAFT, REJECTED, or ARCHIVED are excluded.
+ *
+ * @param {string} tenantId - Tenant ID partition
+ * @param {Object} [projection] - Optional fields to select
+ * @returns {Promise<Array>} List of approved topics
+ */
+aiKeywordTopicSchema.statics.getApprovedTopicsForTenant = async function (tenantId, projection = null) {
+  if (!tenantId || typeof tenantId !== "string") {
+    throw new Error("A valid tenantId is required to query approved discussion topics.")
+  }
+  return this.find({ tenantId: tenantId.trim(), status: "APPROVED" }, projection)
+    .populate("relatedProductIds", "name type category price")
+    .lean()
+}
+
 // Apply strict tenant isolation plugin
 aiKeywordTopicSchema.plugin(tenantIsolationPlugin)
 
 const AIKeywordTopic = mongoose.model("AIKeywordTopic", aiKeywordTopicSchema)
 
-module.exports = {
-  AIKeywordTopic,
-  TOPIC_STATUSES,
-  DEFAULT_CATEGORIES,
-}
+module.exports = AIKeywordTopic
+module.exports.AIKeywordTopic = AIKeywordTopic
+module.exports.TOPIC_STATUSES = TOPIC_STATUSES
+module.exports.DEFAULT_CATEGORIES = DEFAULT_CATEGORIES
 

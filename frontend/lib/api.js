@@ -1115,6 +1115,185 @@ class ApiClient {
       method: "DELETE",
     })
   }
+
+  // ========================================================
+  // AI Call Intelligence: Recording Analysis & Reports (Phase 3)
+  // ========================================================
+  async getAICallDashboard() {
+    return this.request("/ai-calls/dashboard")
+  }
+
+  async listAICalls(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-calls${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getAICallStatus(callId) {
+    return this.request(`/ai-calls/${callId}/status`)
+  }
+
+  async getAICallTranscript(callId) {
+    return this.request(`/ai-calls/${callId}/transcript`)
+  }
+
+  async getAICallAnalysis(callId) {
+    return this.request(`/ai-calls/${callId}/analysis`)
+  }
+
+  async triggerAICallAnalysis(callId, payload = {}) {
+    return this.request(`/ai-calls/${callId}/analyze`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async reprocessAICall(callId, payload = {}) {
+    return this.request(`/ai-calls/${callId}/reprocess`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getAICallUsage(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-calls/usage${queryString ? `?${queryString}` : ""}`)
+  }
+
+  // ========================================================
+  // AI Sales Intelligence & Coaching (Phase 4)
+  // ========================================================
+  async getSalesIntelligenceDashboard(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-sales-intelligence/dashboard${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getTopicIntelligence() {
+    return this.request("/ai-sales-intelligence/topics")
+  }
+
+  async getCallCoaching(callId) {
+    return this.request(`/ai-sales-intelligence/coaching/${callId}`)
+  }
+
+  async listAgentScorecards(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-sales-intelligence/scorecards${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getAgentScorecard(agentId, query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-sales-intelligence/scorecards/${agentId}${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async recomputeAgentScorecard(agentId, payload = {}) {
+    return this.request(`/ai-sales-intelligence/scorecards/${agentId}/recompute`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async listLeadPriorities(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-sales-intelligence/lead-priorities${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async evaluateLeadPriority(leadId) {
+    return this.request(`/ai-sales-intelligence/lead-priorities/${leadId}/evaluate`, {
+      method: "POST",
+    })
+  }
+
+  async acceptLeadPriority(leadId, payload = {}) {
+    return this.request(`/ai-sales-intelligence/lead-priorities/${leadId}/accept`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async dismissLeadPriority(leadId, payload = {}) {
+    return this.request(`/ai-sales-intelligence/lead-priorities/${leadId}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async listManagerRecommendations(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-sales-intelligence/recommendations${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async updateRecommendationStatus(id, payload = {}) {
+    return this.request(`/ai-sales-intelligence/recommendations/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async listCoachingReviews(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-sales-intelligence/coaching-reviews${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async createCoachingReview(payload = {}) {
+    return this.request("/ai-sales-intelligence/coaching-reviews", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async completeCoachingReview(id) {
+    return this.request(`/ai-sales-intelligence/coaching-reviews/${id}/complete`, {
+      method: "PATCH",
+    })
+  }
 }
 
 export const apiClient = new ApiClient()

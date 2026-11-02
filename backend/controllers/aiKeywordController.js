@@ -5,15 +5,17 @@ const BusinessProduct = require("../models/BusinessProduct")
 const { AIKnowledgeSource } = require("../models/AIKnowledgeSource")
 const aiProviderService = require("../services/aiProvider.service")
 const audit = require("../services/auditService")
+const { getEffectiveTenant } = require("../middleware/tenantContext")
 
 /**
  * AI Keyword & Topic Controller - Phase 2: AI Keyword Generation & Admin Approval
  * Strict tenant scoping and Account Admin authorization enforced across all methods.
  */
 
-// Helper to resolve tenantId safely
+// Helper to resolve tenantId safely across tenant users and super admins
 function getTenantId(req) {
-  return req.tenantId || req.user?.tenantId
+  const effective = getEffectiveTenant ? getEffectiveTenant(req) : {}
+  return effective.tenantId || req.tenantId || req.user?.tenantId
 }
 
 /**
@@ -525,6 +527,14 @@ async function deleteKeyword(req, res) {
   }
 }
 
+/**
+ * 10. Phase 3 Call Analysis Eligibility Contract
+ * Reusable backend service helper that strictly retrieves only APPROVED topics for the given tenant.
+ */
+async function getApprovedTopics(tenantId) {
+  return AIKeywordTopic.getApprovedTopicsForTenant(tenantId)
+}
+
 module.exports = {
   generateKeywords,
   listKeywords,
@@ -535,4 +545,5 @@ module.exports = {
   bulkApproveKeywords,
   archiveKeyword,
   deleteKeyword,
+  getApprovedTopics,
 }

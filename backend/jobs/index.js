@@ -155,7 +155,11 @@ function registerAllHandlers() {
     return await pushService.executePushLeadAssigned(job.payload)
   })
 
-  // 6. Sample Recurring Job Handler
+  // 6. Phase 3: AI Call Intelligence Processing Pipeline Handler
+  const { registerPipelineHandlers } = require("../services/aiCallProcessingPipeline")
+  registerPipelineHandlers()
+
+  // 7. Sample Recurring Job Handler
   queue.registerHandler("recurring.sample", async (job) => {
     return {
       status: "success",

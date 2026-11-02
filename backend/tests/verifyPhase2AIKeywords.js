@@ -20,6 +20,7 @@ const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
 const BusinessProduct = require("../models/BusinessProduct")
 const { AIKnowledgeSource } = require("../models/AIKnowledgeSource")
 const { AIKeywordTopic } = require("../models/AIKeywordTopic")
+const { getApprovedTopics } = require("../controllers/aiKeywordController")
 const { getJwtSecret } = require("../middleware/authMiddleware")
 
 const TEST_ID = `p2_${Date.now()}`
@@ -428,9 +429,62 @@ async function runTests() {
     record("Approved/Archived topic was preserved across regeneration", checkArchivedPreserved !== null)
 
     // ---------------------------------------------------------
-    // Suite 7: Regression Testing (Phase 1 & Core CRM APIs)
+    // Suite 7: Phase 3 Eligibility Contract (getApprovedTopics)
     // ---------------------------------------------------------
-    console.log("\n--- Suite 7: Regression Testing (Phase 1 & Core CRM APIs) ---")
+    console.log("\n--- Suite 7: Phase 3 Eligibility Contract (Approved-Only) ---")
+
+    // Create an explicit APPROVED topic for Tenant A
+    const explicitApproved = await AIKeywordTopic.create({
+      tenantId: TENANT_A,
+      name: "Explicit Approved Topic for Call Analysis",
+      category: "Sales & Inquiries",
+      status: "APPROVED",
+      primaryKeywords: ["approved", "eligible"],
+      approvedAt: new Date(),
+    })
+
+    // Create an unapproved PENDING_APPROVAL topic
+    const explicitPending = await AIKeywordTopic.create({
+      tenantId: TENANT_A,
+      name: "Pending Topic Should Be Excluded",
+      status: "PENDING_APPROVAL",
+      primaryKeywords: ["pending"],
+    })
+
+    // Create a REJECTED topic
+    const explicitRejected = await AIKeywordTopic.create({
+      tenantId: TENANT_A,
+      name: "Rejected Topic Should Be Excluded",
+      status: "REJECTED",
+      primaryKeywords: ["rejected"],
+    })
+
+    const approvedTopicsList = await getApprovedTopics(TENANT_A)
+    const approvedIds = approvedTopicsList.map((t) => t._id.toString())
+
+    record("Phase 3 Contract: getApprovedTopics returns array of topics", Array.isArray(approvedTopicsList))
+    record("Phase 3 Contract: getApprovedTopics includes explicitly APPROVED topic", approvedIds.includes(explicitApproved._id.toString()))
+    record("Phase 3 Contract: getApprovedTopics excludes PENDING_APPROVAL topics", !approvedIds.includes(explicitPending._id.toString()))
+    record("Phase 3 Contract: getApprovedTopics excludes REJECTED topics", !approvedIds.includes(explicitRejected._id.toString()))
+    record("Phase 3 Contract: Every item returned has status === 'APPROVED'", approvedTopicsList.every((t) => t.status === "APPROVED"))
+
+    // Cross-tenant check
+    const tenantBApproved = await getApprovedTopics(TENANT_B)
+    record("Phase 3 Contract: getApprovedTopics for Tenant B returns 0 topics (Tenant Isolated)", tenantBApproved.length === 0)
+
+    // Missing tenantId check
+    let missingTenantThrew = false
+    try {
+      await getApprovedTopics("")
+    } catch (_) {
+      missingTenantThrew = true
+    }
+    record("Phase 3 Contract: getApprovedTopics throws error if tenantId is missing", missingTenantThrew)
+
+    // ---------------------------------------------------------
+    // Suite 8: Regression Testing (Phase 1 & Core CRM APIs)
+    // ---------------------------------------------------------
+    console.log("\n--- Suite 8: Regression Testing (Phase 1 & Core CRM APIs) ---")
 
     // Phase 1 Profile
     const profileCheck = await request(app)

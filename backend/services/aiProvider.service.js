@@ -13,6 +13,46 @@
 
 const https = require("https")
 
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
+const OBSOLETE_MODELS = new Set([
+  "gemini-1.5-flash",
+  "gemini-1.5-pro",
+  "gemini-1.0",
+  "gemini-1.0-pro",
+])
+
+/**
+ * Sanitizes strings, URLs, and errors to prevent leaking API keys, secrets, or sensitive tokens.
+ */
+function sanitizeErrorMessage(msg) {
+  if (!msg || typeof msg !== "string") return ""
+  return msg
+    .replace(/key=[^&\s]+/gi, "key=[REDACTED]")
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, "[REDACTED_API_KEY]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
+    .replace(/x-goog-api-key:\s*[^\s,]+/gi, "x-goog-api-key: [REDACTED]")
+}
+
+/**
+ * Resolves and validates the active Gemini model configuration.
+ * Defaults to 'gemini-3.8-flash', allows override via process.env.GEMINI_MODEL.
+ * Throws a clear, safe error if model is obsolete or malformed.
+ */
+function resolveGeminiModel() {
+  const model = (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim()
+
+  if (OBSOLETE_MODELS.has(model.toLowerCase())) {
+    throw new Error(`Configured Gemini model '${model}' is obsolete or shut down. Please use '${DEFAULT_GEMINI_MODEL}' or a supported model.`)
+  }
+
+  if (!model || !/^gemini-[a-zA-Z0-9_.-]+$/.test(model)) {
+    throw new Error(`Invalid Gemini model configuration '${model}'. Model name must be a valid gemini identifier.`)
+  }
+
+  return model
+}
+
 /**
  * Executes an HTTPS POST request with JSON payload.
  * Native implementation avoids third-party transport dependencies.
@@ -47,19 +87,20 @@ function makeHttpsRequest(urlStr, data, headers = {}) {
               resolve(body)
             }
           } else {
-            reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 500)}`))
+            const sanitizedBody = sanitizeErrorMessage(body.slice(0, 500))
+            reject(new Error(`HTTP ${res.statusCode}: ${sanitizedBody}`))
           }
         })
       })
 
-      req.on("error", (err) => reject(err))
+      req.on("error", (err) => reject(new Error(sanitizeErrorMessage(err.message))))
       req.setTimeout(30000, () => {
         req.destroy(new Error("AI Provider request timed out after 30 seconds"))
       })
       req.write(postData)
       req.end()
     } catch (err) {
-      reject(err)
+      reject(new Error(sanitizeErrorMessage(err.message)))
     }
   })
 }
@@ -318,9 +359,21 @@ function generateDeterministicTopics({ profile, products = [], knowledgeSources 
 }
 
 /**
- * Calls Gemini API with structured output prompt.
+ * Calls Gemini API with structured output prompt and request-level logging control (store: false).
  */
-async function generateGeminiTopics({ apiKey, profile, products = [], knowledgeSources = [] }) {
+async function generateGeminiTopics({
+  apiKey,
+  profile,
+  products = [],
+  knowledgeSources = [],
+  httpClient = makeHttpsRequest,
+  modelOverride = null,
+}) {
+  if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+    throw new Error("A valid Gemini API key is required.")
+  }
+
+  const model = modelOverride || resolveGeminiModel()
   const groundingContext = buildGroundingContext({ profile, products, knowledgeSources })
 
   const systemInstruction = `You are a Senior AI Call Intelligence Engineer inside Leads-365 CRM.
@@ -346,6 +399,8 @@ Each object must have the following schema:
 }`
 
   const requestBody = {
+    // Controls request-level API logging behavior on Google AI Studio
+    store: false,
     contents: [
       {
         role: "user",
@@ -357,16 +412,24 @@ Each object must have the following schema:
       },
     ],
     generationConfig: {
-      temperature: 0.2,
       maxOutputTokens: 4096,
       responseMimeType: "application/json",
     },
   }
 
-  // Use Gemini 1.5 Flash (standard model)
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  // Construct secure endpoint with x-goog-api-key header; avoids key exposure in URL strings
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+  const headers = {
+    "x-goog-api-key": apiKey.trim(),
+  }
 
-  const response = await makeHttpsRequest(endpoint, requestBody)
+  let response
+  try {
+    response = await httpClient(endpoint, requestBody, headers)
+  } catch (netErr) {
+    throw new Error(sanitizeErrorMessage(netErr.message))
+  }
+
   const rawText = response?.candidates?.[0]?.content?.parts?.[0]?.text
   if (!rawText) {
     throw new Error("Empty response received from Gemini API")
@@ -378,7 +441,7 @@ Each object must have the following schema:
     const cleaned = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim()
     parsed = JSON.parse(cleaned)
   } catch (err) {
-    throw new Error(`Failed to parse Gemini JSON output: ${err.message}. Raw: ${rawText.slice(0, 200)}`)
+    throw new Error(`Failed to parse Gemini JSON output: ${sanitizeErrorMessage(err.message)}. Raw: ${sanitizeErrorMessage(rawText.slice(0, 200))}`)
   }
 
   if (!Array.isArray(parsed)) {
@@ -421,24 +484,28 @@ Each object must have the following schema:
 
 /**
  * Main public entrypoint for AI Keyword & Topic Generation.
- * Tries the configured provider (Gemini / OpenAI), gracefully falling back to deterministic NLP engine.
+ * Tries the configured provider (Gemini), gracefully falling back to deterministic NLP engine.
+ * Clearly distinguishes actual Gemini success from deterministic fallback.
  */
-async function generateKeywordsAndTopics({ profile, products = [], knowledgeSources = [] }) {
+async function generateKeywordsAndTopics({ profile, products = [], knowledgeSources = [], httpClient = makeHttpsRequest }) {
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase().trim()
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY
 
   if (provider === "gemini" && apiKey) {
     try {
-      console.log("ℹ️ Invoking Gemini API for tenant AI Keyword generation...")
-      const topics = await generateGeminiTopics({ apiKey, profile, products, knowledgeSources })
+      const model = resolveGeminiModel()
+      console.log(`ℹ️ Invoking Gemini API (${model}) for tenant AI Keyword generation...`)
+      const topics = await generateGeminiTopics({ apiKey, profile, products, knowledgeSources, httpClient })
       if (topics && topics.length > 0) {
         return {
           provider: "gemini",
+          model,
           topics,
         }
       }
     } catch (err) {
-      console.warn("⚠️ Gemini API invocation failed, falling back to deterministic engine:", err.message)
+      const sanitizedErr = sanitizeErrorMessage(err.message)
+      console.warn("⚠️ Gemini API invocation failed, falling back to deterministic engine:", sanitizedErr)
     }
   }
 
@@ -453,7 +520,12 @@ async function generateKeywordsAndTopics({ profile, products = [], knowledgeSour
 
 module.exports = {
   generateKeywordsAndTopics,
+  generateGeminiTopics,
   buildGroundingContext,
   generateDeterministicTopics,
+  resolveGeminiModel,
+  sanitizeErrorMessage,
+  DEFAULT_GEMINI_MODEL,
+  makeHttpsRequest,
 }
 

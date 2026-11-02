@@ -95,17 +95,27 @@ const bootstrapSuperAdmin = async () => {
         } else {
           // Both arguments are guaranteed valid strings before invoking bcrypt.compare
           try {
-            const isMatch = await bcrypt.compare(configuredPassword, storedHash)
-            if (isMatch) {
+            const isPasswordMatch = await bcrypt.compare(configuredPassword, storedHash)
+            const isEmailMatch = !configuredEmail || superAdminExists.email.toLowerCase().trim() === configuredEmail.toLowerCase().trim()
+
+            if (isPasswordMatch && isEmailMatch) {
               console.log("ℹ️ Super Admin credentials verified against environment configuration.")
             } else {
               if (isForceReseed) {
-                superAdminExists.password = configuredPassword
+                if (!isPasswordMatch) {
+                  superAdminExists.password = configuredPassword
+                }
                 if (configuredEmail) {
                   superAdminExists.email = configuredEmail
                 }
+                if (configuredName) {
+                  superAdminExists.name = configuredName
+                }
+                superAdminExists.isActive = true
+                superAdminExists.status = "active"
+                superAdminExists.tokenVersion = (superAdminExists.tokenVersion || 0) + 1
                 await superAdminExists.save()
-                console.log("✅ Super Admin password synchronized from SUPERADMIN_PASSWORD environment variable via FORCE_RESEED_SUPERADMIN.")
+                console.log("✅ Super Admin credentials synchronized from environment variables via FORCE_RESEED_SUPERADMIN.")
               } else {
                 console.log("ℹ️ Super Admin credentials in database differ from environment configuration. Preserving existing database credentials (set FORCE_RESEED_SUPERADMIN=true to force synchronization).")
               }
