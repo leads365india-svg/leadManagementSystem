@@ -84,37 +84,46 @@ async function createOrMergeLead({
 
   const duplicateHandling = options.duplicateHandling || "reject"
 
-  // 1. Check for duplicates within caller's tenant partition
-  const duplicateConditions = []
-  if (rawEmail) {
-    duplicateConditions.push({ email: rawEmail })
-  }
-  if (phoneNormalized) {
-    duplicateConditions.push({ phoneNormalized })
-  } else if (rawPhone) {
-    duplicateConditions.push({ phone: rawPhone })
-  }
+  const { acquireLeadIdentityLock } = require("./leadConcurrencyService")
+  const lock = await acquireLeadIdentityLock({
+    tenantId: cleanTenantId,
+    email: rawEmail,
+    phone: phoneNormalized || rawPhone,
+    duplicateHandling,
+  })
 
-  let existingLead = null
-  if (duplicateConditions.length > 0) {
-    existingLead = await Lead.findOne({
-      tenantId: cleanTenantId,
-      $or: duplicateConditions,
-      deletedAt: null,
-    })
-  }
-
-  const attributionTouch = extractAttributionPayload(payload, source)
-
-  // 2. Handle duplicate scenarios
-  if (existingLead) {
-    if (duplicateHandling === "reject") {
-      return {
-        action: "duplicate_rejected",
-        lead: existingLead,
-        reason: "A lead with this email or phone number already exists in this account",
-      }
+  try {
+    // 1. Check for duplicates within caller's tenant partition
+    const duplicateConditions = []
+    if (rawEmail) {
+      duplicateConditions.push({ email: rawEmail })
     }
+    if (phoneNormalized) {
+      duplicateConditions.push({ phoneNormalized })
+    } else if (rawPhone) {
+      duplicateConditions.push({ phone: rawPhone })
+    }
+
+    let existingLead = null
+    if (duplicateConditions.length > 0) {
+      existingLead = await Lead.findOne({
+        tenantId: cleanTenantId,
+        $or: duplicateConditions,
+        deletedAt: null,
+      })
+    }
+
+    const attributionTouch = extractAttributionPayload(payload, source)
+
+    // 2. Handle duplicate scenarios
+    if (existingLead) {
+      if (duplicateHandling === "reject") {
+        return {
+          action: "duplicate_rejected",
+          lead: existingLead,
+          reason: "A lead with this email or phone number already exists in this account",
+        }
+      }
 
     if (duplicateHandling === "update" || duplicateHandling === "merge") {
       // Merge new data into existing lead
@@ -330,48 +339,54 @@ async function createOrMergeLead({
 
   const savedLead = await newLead.save()
 
-  // Automatically reconcile historical unassigned calls matching this new lead
+  const isReplay = Boolean(options.isReplay)
+
+  // Automatically reconcile historical unassigned calls matching this new lead (skip on replay)
   let reconciledCalls = null
-  try {
-    const callService = require("./callService")
-    reconciledCalls = await callService.reconcileHistoricalCallsForLead({
-      lead: savedLead,
-      tenantId: cleanTenantId,
-      user: actor,
-    })
-  } catch (reconcileErr) {
-    console.warn("[LeadService] Call reconciliation notice on lead creation:", reconcileErr.message)
+  if (!isReplay) {
+    try {
+      const callService = require("./callService")
+      reconciledCalls = await callService.reconcileHistoricalCallsForLead({
+        lead: savedLead,
+        tenantId: cleanTenantId,
+        user: actor,
+      })
+    } catch (reconcileErr) {
+      console.warn("[LeadService] Call reconciliation notice on lead creation:", reconcileErr.message)
+    }
   }
 
-  // Phase 10: Record lead.created activity event
-  try {
-    const { activity } = require("./activityService")
-    await activity.record({
-      tenantId: cleanTenantId,
-      leadId: savedLead._id,
-      type: "lead.created",
-      actor: actor
-        ? {
-            id: actor._id || actor.id,
-            name: actor.name || "System",
-            email: actor.email || "",
-            role: actor.role || "user",
-          }
-        : { name: source || "System", role: "system" },
-      payload: {
-        source: savedLead.source,
-        assignedTo: savedLead.assignedTo,
-        status: savedLead.status,
-        company: savedLead.company || "",
-        landingPage: savedLead.landingPage || "",
-      },
-    })
-  } catch (actErr) {
-    console.error("Failed to record lead.created activity:", actErr.message)
+  // Phase 10: Record lead.created activity event (skip on replay to avoid duplicate audit log)
+  if (!isReplay) {
+    try {
+      const { activity } = require("./activityService")
+      await activity.record({
+        tenantId: cleanTenantId,
+        leadId: savedLead._id,
+        type: "lead.created",
+        actor: actor
+          ? {
+              id: actor._id || actor.id,
+              name: actor.name || "System",
+              email: actor.email || "",
+              role: actor.role || "user",
+            }
+          : { name: source || "System", role: "system" },
+        payload: {
+          source: savedLead.source,
+          assignedTo: savedLead.assignedTo,
+          status: savedLead.status,
+          company: savedLead.company || "",
+          landingPage: savedLead.landingPage || "",
+        },
+      })
+    } catch (actErr) {
+      console.error("Failed to record lead.created activity:", actErr.message)
+    }
   }
 
-  // Phase 15: Mobile lead assignment push notification
-  if (savedLead.ownerId) {
+  // Phase 15: Mobile lead assignment push notification (skip on replay to prevent duplicate notifications)
+  if (savedLead.ownerId && !isReplay) {
     try {
       const pushService = require("./pushService")
       await pushService.sendLeadAssignedPush({
@@ -388,6 +403,9 @@ async function createOrMergeLead({
     action: "created",
     lead: savedLead,
     reconciledCalls,
+  }
+  } finally {
+    await lock.release()
   }
 }
 

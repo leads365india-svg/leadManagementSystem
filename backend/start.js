@@ -24,6 +24,7 @@ const deviceRoutes = require("./routes/deviceRoutes")
 const mobileRoutes = require("./routes/mobileRoutes")
 const privacyRoutes = require("./routes/privacyRoutes")
 const mediaRoutes = require("./routes/mediaRoutes")
+const customFieldRoutes = require("./routes/customFieldRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
@@ -82,15 +83,39 @@ const webhookCors = cors({
     "X-Api-Key",
     "x-site-key",
     "X-Site-Key",
+    "x-signature-256",
+    "X-Signature-256",
+    "x-hub-signature-256",
+    "X-Hub-Signature-256",
+    "x-signature",
+    "X-Signature",
+    "x-hmac-signature",
+    "X-Hmac-Signature",
+    "x-timestamp",
+    "X-Timestamp",
+    "x-request-timestamp",
+    "X-Request-Timestamp",
+    "timestamp",
+    "Timestamp",
     "x-idempotency-key",
     "X-Idempotency-Key",
     "idempotency-key",
+    "x-queue-async",
+    "X-Queue-Async",
     "X-Content-SHA256",
     "x-content-sha256",
     "X-Audio-SHA256",
     "x-audio-sha256",
     "X-File-Name",
     "x-file-name",
+    "X-Shopify-Hmac-Sha256",
+    "x-shopify-hmac-sha256",
+    "X-Shopify-Shop-Domain",
+    "x-shopify-shop-domain",
+    "X-Shopify-Topic",
+    "x-shopify-topic",
+    "X-Shopify-Webhook-Id",
+    "x-shopify-webhook-id",
   ],
 })
 app.use("/api/integrations/leads/website", webhookCors)
@@ -152,8 +177,17 @@ app.use(
 const { dashboardLimiter, integrationLimiter } = require("./middleware/rateLimiters")
 app.use("/api", dashboardLimiter)
 
-// Body and Cookie parsing middleware (hardened 2mb request-size limit)
-app.use(express.json({ limit: "2mb" }))
+// Body and Cookie parsing middleware (hardened 2mb request-size limit with rawBody preservation)
+app.use(
+  express.json({
+    limit: "2mb",
+    verify: (req, _res, buf) => {
+      if (buf && buf.length) {
+        req.rawBody = buf
+      }
+    },
+  })
+)
 app.use(express.urlencoded({ extended: true, limit: "2mb" }))
 app.use(cookieParser())
 app.use(verifyCSRF(allowedOrigins))
@@ -195,6 +229,7 @@ app.use("/api/assignment-rules", assignmentRuleRoutes)
 app.use("/api/audit-logs", auditRoutes)
 app.use("/api/admin/queues", queueMonitorRoutes)
 app.use("/api/integrations", integrationLimiter, integrationRoutes)
+app.use("/api/custom-fields", customFieldRoutes)
 
 // Secure Call Recording Streaming & Playback endpoints (Phase 8 + Final Integration)
 const {
@@ -313,5 +348,6 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 module.exports = app
+module.exports.webhookCors = webhookCors
 module.exports.startServer = startServer
 module.exports.setupGracefulShutdown = setupGracefulShutdown

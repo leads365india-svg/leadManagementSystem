@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leads365 CRM - React Integration Live Demo</title>
+  <link rel="stylesheet" href="./form.css">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body {
+      background: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 40px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .demo-container {
+      max-width: 650px;
+      width: 100%;
+      background: #ffffff;
+      padding: 32px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    }
+    .demo-header {
+      margin-bottom: 24px;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 16px;
+    }
+    .demo-header h1 {
+      margin: 0 0 8px 0;
+      font-size: 24px;
+      color: #0f172a;
+    }
+    .demo-header p {
+      margin: 0;
+      color: #64748b;
+      font-size: 14px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #e0e7ff;
+      color: #3730a3;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-container">
+    <div class="demo-header">
+      <span class="badge">React 18 + Vite Component Live Demo</span>
+      <h1>Enterprise Sales Enquiry</h1>
+      <p>Submit an enquiry to test live React browser ingestion into Leads365 CRM.</p>
+    </div>
+    <div id="react-root"></div>
+  </div>
+
+  <script type="text/babel">
+    const { useState, useId } = React;
+
+    // Inlined client SDK logic matching lead365.js
+    const extractAttribution = () => {
+      const params = new URLSearchParams(window.location.search);
+      const attribution = {};
+      ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid"].forEach(k => {
+        const val = params.get(k);
+        if (val) attribution[k] = val.trim();
+      });
+      if (document.referrer) attribution.referrer = document.referrer;
+      attribution.landingPage = window.location.href;
+      return attribution;
+    };
+
+    const generateIdempotencyKey = () => {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+      return "idemp_" + Date.now() + "_" + Math.random().toString(36).substring(2, 10);
+    };
+
+    const submitLead = async ({ siteKey, webhookUrl, leadData, customFields = {}, source = "React Website", honeypot = "", idempotencyKey }) => {
+      const attribution = extractAttribution();
+      const payload = {
+        name: leadData.name?.trim() || "",
+        email: leadData.email?.trim().toLowerCase() || "",
+        phone: leadData.phone?.trim() || "",
+        company: leadData.company?.trim() || "",
+        message: leadData.message?.trim() || "",
+        source,
+        ...customFields,
+        ...attribution,
+        _hp_trap: honeypot || ""
+      };
+
+      const finalIdempotencyKey = idempotencyKey || generateIdempotencyKey();
+      const res = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Site-Key": siteKey,
+          "X-Idempotency-Key": finalIdempotencyKey
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || ("Request failed with status " + res.status));
+      }
+      return {
+        success: true,
+        status: res.status,
+        leadId: data.data?.id || data.leadId,
+        data: data.data
+      };
+    };
+
+    function LeadEnquiryForm({ siteKey, webhookUrl }) {
+      const [formData, setFormData] = useState({ name: "", email: "", phone: "", company: "", message: "" });
+      const [customValues, setCustomValues] = useState({ product_interest: "Enterprise CRM", budget: "75000" });
+      const [honeypot, setHoneypot] = useState("");
+      const [submitting, setSubmitting] = useState(false);
+      const [errorMessage, setErrorMessage] = useState(null);
+      const [successResult, setSuccessResult] = useState(null);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setSubmitting(true);
+        setErrorMessage(null);
+
+        try {
+          const res = await submitLead({
+            siteKey: siteKey || window.LEADS365_SITE_KEY,
+            webhookUrl: webhookUrl || window.LEADS365_WEBHOOK_URL || "http://localhost:5000/api/integrations/leads/website",
+            leadData: formData,
+            customFields: customValues,
+            source: "React Browser Demo",
+            honeypot
+          });
+          setSuccessResult(res);
+        } catch (err) {
+          setErrorMessage(err.message);
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      if (successResult) {
+        return (
+          <div className="leads365-success-card" id="submission-success-card">
+            <h3>Enquiry Received!</h3>
+            <p>Thank you! Your enquiry has been received and registered in Leads365 CRM.</p>
+            <p><strong>Lead ID:</strong> <span id="lead-id-badge">{successResult.leadId}</span></p>
+            <button className="leads365-btn-secondary" onClick={() => setSuccessResult(null)}>Submit Another</button>
+          </div>
+        );
+      }
+
+      return (
+        <form className="leads365-form" onSubmit={handleSubmit} id="lead-enquiry-form">
+          {errorMessage && <div className="leads365-alert-error" id="form-error-banner">{errorMessage}</div>}
+
+          <div style={{ display: "none" }} aria-hidden="true">
+            <input type="text" name="_hp_trap" value={honeypot} onChange={e => setHoneypot(e.target.value)} tabIndex="-1" autoComplete="off" />
+          </div>
+
+          <div className="leads365-form-group">
+            <label htmlFor="lead-name">Full Name *</label>
+            <input id="lead-name" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="e.g. Alex Morgan" />
+          </div>
+
+          <div className="leads365-form-row">
+            <div className="leads365-form-group">
+              <label htmlFor="lead-email">Email Address *</label>
+              <input id="lead-email" type="email" required value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} placeholder="alex@company.com" />
+            </div>
+            <div className="leads365-form-group">
+              <label htmlFor="lead-phone">Phone Number *</label>
+              <input id="lead-phone" type="tel" required value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="+1 555 0199" />
+            </div>
+          </div>
+
+          <div className="leads365-form-group">
+            <label htmlFor="lead-company">Company</label>
+            <input id="lead-company" value={formData.company} onChange={e => setFormData({ ...formData, company: e.target.value })} placeholder="e.g. Acme Corp" />
+          </div>
+
+          <div className="leads365-form-row">
+            <div className="leads365-form-group">
+              <label htmlFor="lead-product">Product of Interest (Custom Field)</label>
+              <select id="lead-product" value={customValues.product_interest} onChange={e => setCustomValues({ ...customValues, product_interest: e.target.value })}>
+                <option value="Enterprise CRM">Enterprise CRM</option>
+                <option value="Starter Suite">Starter Suite</option>
+                <option value="Custom API Ingestion">Custom API Ingestion</option>
+              </select>
+            </div>
+            <div className="leads365-form-group">
+              <label htmlFor="lead-budget">Estimated Budget ($)</label>
+              <input id="lead-budget" type="number" value={customValues.budget} onChange={e => setCustomValues({ ...customValues, budget: e.target.value })} placeholder="75000" />
+            </div>
+          </div>
+
+          <div className="leads365-form-group">
+            <label htmlFor="lead-message">Message</label>
+            <textarea id="lead-message" rows="3" value={formData.message} onChange={e => setFormData({ ...formData, message: e.target.value })} placeholder="Tell us about your team's requirements..." />
+          </div>
+
+          <button type="submit" id="submit-lead-btn" className="leads365-btn-primary" disabled={submitting}>
+            {submitting ? "Submitting..." : "Send Sales Enquiry"}
+          </button>
+        </form>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('react-root'));
+    root.render(<LeadEnquiryForm siteKey={window.LEADS365_SITE_KEY} webhookUrl={window.LEADS365_WEBHOOK_URL} />);
+  </script>
+</body>
+</html>

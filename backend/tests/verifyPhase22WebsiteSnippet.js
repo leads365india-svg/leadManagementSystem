@@ -358,13 +358,14 @@ async function runTests() {
 
     // Test 11: Idempotency check prevents duplicate lead creation
     const idempotencyKey = `idem_${Date.now()}`
+    const charlieEmail = `charlie_${Date.now()}@example.com`
     const res11a = await integrationService.intakeWebhookPayload({
       rawSiteKey: siteKeyA,
       incomingOrigin: "https://landing.tenant-a.com",
       headers: { "x-idempotency-key": idempotencyKey },
       body: {
         name: "Charlie Idempotent",
-        email: `charlie_${Date.now()}@example.com`,
+        email: charlieEmail,
         phone: "+91 98765 99999",
       },
     })
@@ -374,7 +375,7 @@ async function runTests() {
       headers: { "x-idempotency-key": idempotencyKey },
       body: {
         name: "Charlie Idempotent",
-        email: `charlie_${Date.now()}@example.com`,
+        email: charlieEmail,
         phone: "+91 98765 99999",
       },
     })

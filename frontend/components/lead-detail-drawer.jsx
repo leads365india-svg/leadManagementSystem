@@ -41,6 +41,7 @@ import {
   PhoneIncoming,
   PhoneOutgoing,
   Mic,
+  Sliders,
 } from "lucide-react"
 
 // Status styling configuration
@@ -97,6 +98,43 @@ export default function LeadDetailDrawer({
   const [savingNote, setSavingNote] = useState("")
   const [timelineFilter, setTimelineFilter] = useState("all") // "all" | "status" | "assignment" | "followup" | "notes"
   const [playingCallId, setPlayingCallId] = useState(null)
+  const [customFieldDefinitions, setCustomFieldDefinitions] = useState({})
+  const [loadingCustomFields, setLoadingCustomFields] = useState(false)
+
+  // Fetch tenant custom fields to enrich labels & formatters
+  useEffect(() => {
+    if (!isOpen) return
+    let isMounted = true
+    setLoadingCustomFields(true)
+    apiClient
+      .getCustomFields({ status: "all" })
+      .then((res) => {
+        if (isMounted && res && res.success && Array.isArray(res.data)) {
+          const map = {}
+          res.data.forEach((cf) => {
+            if (cf && cf.name) map[cf.name.toLowerCase()] = cf
+          })
+          setCustomFieldDefinitions(map)
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to load custom field definitions:", err)
+      })
+      .finally(() => {
+        if (isMounted) setLoadingCustomFields(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [isOpen])
+
+  // Extract custom fields from lead metadata
+  const customFieldEntries = useMemo(() => {
+    const raw = lead?.metadata?.customFields
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return []
+    return Object.entries(raw).filter(([_, val]) => val !== undefined && val !== null && val !== "")
+  }, [lead?.metadata?.customFields])
 
   const onLeadUpdatedRef = useRef(onLeadUpdated)
   useEffect(() => {
@@ -1324,6 +1362,79 @@ export default function LeadDetailDrawer({
                       <span className="font-semibold text-slate-800">{lead?.city || "—"}</span>
                     </div>
                   </div>
+                </div>
+
+                {/* 1.5 Custom Lead Attributes Card (Phase 5) */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Custom Lead Attributes</span>
+                    </h4>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {customFieldEntries.length} recorded
+                    </span>
+                  </div>
+
+                  {customFieldEntries.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {customFieldEntries.map(([key, value]) => {
+                        const def = customFieldDefinitions[key.toLowerCase()]
+                        const label = def?.label || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+                        const type = def?.type || (typeof value === "boolean" ? "checkbox" : "text")
+                        const isDeleted = !def && key
+
+                        return (
+                          <div
+                            key={key}
+                            className="p-2.5 bg-white rounded-lg border border-slate-200 shadow-2xs space-y-1"
+                          >
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-slate-700 truncate">{label}</span>
+                              <span className="font-mono text-[9px] text-slate-400">
+                                {def?.type || (isDeleted ? "custom" : "attribute")}
+                              </span>
+                            </div>
+
+                            {/* Format according to field type */}
+                            <div className="text-xs text-slate-900 font-medium">
+                              {type === "checkbox" || typeof value === "boolean" ? (
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    value === true || String(value).toLowerCase() === "true"
+                                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      : "bg-slate-100 text-slate-600 border border-slate-200"
+                                  }`}
+                                >
+                                  {value === true || String(value).toLowerCase() === "true" ? "Yes" : "No"}
+                                </span>
+                              ) : type === "date" ? (
+                                <span className="font-mono text-slate-800">
+                                  {isNaN(Date.parse(value)) ? String(value) : new Date(value).toLocaleDateString()}
+                                </span>
+                              ) : type === "dropdown" ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                  {String(value)}
+                                </span>
+                              ) : type === "number" ? (
+                                <span className="font-mono font-bold text-slate-800">
+                                  {String(value)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-800 break-words leading-relaxed">
+                                  {String(value)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-white rounded-lg border border-dashed border-slate-200 text-center text-slate-400 text-[11px] italic">
+                      No custom attributes recorded for this lead record.
+                    </div>
+                  )}
                 </div>
 
                 {/* 2. Marketing Attribution (Multi-touch) */}

@@ -12,9 +12,42 @@ This guide provides a secure, lightweight implementation for static HTML and cli
 - **Submission Debounce:** Client-side button disabling prevents accidental double-clicks.
 - **CORS Handling:** Server responds with `Access-Control-Allow-Origin` matching authorized domains.
 
+> 💡 **Ready-to-Use Standalone Example:** A complete, beautifully styled, responsive single-file lead enquiry page is available at [examples/plain-html/index.html](examples/plain-html/index.html) with companion setup guide [examples/plain-html/README.md](examples/plain-html/README.md).
+
 ---
 
-## 2. Copyable HTML Form Markup
+## 2. Integration Studio Setup Workflow
+
+Before embedding the HTML form on your website:
+
+1. **Obtain the Public Site Key:**
+   - In Leads-365 CRM, navigate to **Settings** > **Lead Feeds** (or **Integration Studio**).
+   - Under the Website integration card, locate the **Public Site Key** (formatted as `lf_site_...`).
+   - Copy this key. *(Never use your private `lf_live_...` API key in browser HTML).*
+
+2. **Allowlist Your Website Domain:**
+   - In the **Allowed Origins** section of the website integration settings, click **Add Origin**.
+   - Enter your website's origin:
+     - Production: `https://www.yourdomain.com`
+     - Wildcard: `https://*.yourdomain.com`
+     - Local dev/testing: `http://localhost:3000` or `http://localhost:8088`
+   - Save the integration settings.
+
+3. **Configure the HTML Form:**
+   - In the HTML form script, set `CRM_ENDPOINT` to `https://your-crm-domain.com/api/integrations/leads/website`.
+   - Set `PUBLIC_SITE_KEY` to your copied `lf_site_...` key.
+
+4. **Submit a Test Enquiry:**
+   - Open your website page in a browser and fill in the test details.
+   - Click **Send Enquiry**. Verify the success alert or Thank You state appears.
+
+5. **Verify the Lead in Leads365 CRM:**
+   - Go to your CRM **Leads** dashboard.
+   - Confirm that the test lead appears with source `Website`, your contact information, and any captured UTM parameters.
+
+---
+
+## 3. Copyable HTML Form Markup
 
 ```html
 <!-- Leads-365 HTML Lead Capture Form -->

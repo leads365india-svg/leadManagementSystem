@@ -12,6 +12,11 @@ const audit = require("./auditService")
 const { hashApiKey } = require("../utils/cryptoUtils")
 const { runWithTenantContext } = require("../middleware/tenantContext")
 const { normalizeOrigin, validateOrigin } = require("../utils/originValidator")
+const {
+  claimIdempotency,
+  completeIdempotency,
+  failIdempotency,
+} = require("./idempotencyService")
 
 /**
  * Leads-365 CRM - Central Integration Service (Phase 11)
@@ -322,7 +327,17 @@ async function syncLegacyToIntegration(legacyConfig) {
     if (Array.isArray(ws.allowedOrigins)) {
       integration.settings.allowedOrigins = ws.allowedOrigins
     }
-    await integration.save()
+    if (integration.isModified()) {
+      try {
+        await integration.save()
+      } catch (saveErr) {
+        if (saveErr.name === "VersionError") {
+          integration = await Integration.findById(integration._id).setOptions({ skipTenantFilter: true })
+        } else {
+          throw saveErr
+        }
+      }
+    }
   }
 
   return integration
@@ -423,14 +438,25 @@ async function intakeWebhookPayload({
     }
   }
 
-  // Allowed Origin validation for public site key requests
+  // Allowed Origin validation for public site key requests (P0 Security Hardening)
   let permittedOrigin = null
   if (isSiteKeyAuth) {
-    if (!incomingOrigin) {
-      // Permitted fallback for server-to-server or test requests without browser Origin header
-      permittedOrigin = "http://localhost:3000"
+    const isExplicitlyAllowedTestFallback =
+      process.env.NODE_ENV !== "production" &&
+      process.env.ALLOW_TEST_ORIGINLESS_SITE_KEY === "true"
+
+    if (!incomingOrigin || typeof incomingOrigin !== "string" || incomingOrigin.trim() === "" || incomingOrigin.trim().toLowerCase() === "null") {
+      if (isExplicitlyAllowedTestFallback) {
+        permittedOrigin = "http://localhost:3000"
+      } else {
+        return {
+          success: false,
+          status: 403,
+          error: "Forbidden: Browser Site Key requests require a valid HTTP Origin header matching configured allowed origins",
+        }
+      }
     } else {
-      const originCheck = validateOrigin(incomingOrigin, allowedOrigins || [])
+      const originCheck = validateOrigin(incomingOrigin.trim(), allowedOrigins || [])
       if (!originCheck.allowed) {
         return {
           success: false,
@@ -490,7 +516,7 @@ async function intakeWebhookPayload({
       }
     }
 
-    // 4. Idempotency Check (Fast return on duplicate delivery)
+    // 4. Idempotency Check & Atomic Claim (Phase 2: Reliable Idempotency)
     const idempotencyKey = (
       headers["x-idempotency-key"] ||
       headers["idempotency-key"] ||
@@ -499,7 +525,45 @@ async function intakeWebhookPayload({
       ""
     ).toString().trim()
 
+    let idempotencyReservationId = null
+
     if (idempotencyKey) {
+      // 4a. Atomic MongoDB reservation claim & conflict validation (Phase 2 & Phase 3A)
+      const claimResult = await claimIdempotency({
+        tenantId,
+        integrationId: integration?._id ? integration._id.toString() : null,
+        idempotencyKey,
+        payload: body,
+      })
+
+      if (claimResult.action === "conflict") {
+        return {
+          success: false,
+          status: 409,
+          error: claimResult.error,
+        }
+      }
+
+      if (claimResult.action === "cached") {
+        return {
+          ...claimResult.response,
+          idempotent: true,
+        }
+      }
+
+      if (claimResult.action === "in_progress") {
+        return {
+          success: false,
+          status: 409,
+          error: claimResult.error,
+        }
+      }
+
+      if (claimResult.action === "claimed") {
+        idempotencyReservationId = claimResult.reservationId
+      }
+
+      // 4b. Backwards compatibility fallback for pre-Phase 2 legacy leads
       const existingIdempotentLead = await Lead.findOne({
         tenantId,
         "metadata.idempotencyKey": idempotencyKey,
@@ -589,6 +653,7 @@ async function intakeWebhookPayload({
       ip,
       rawApiKey,
       idempotencyKey,
+      idempotencyReservationId,
     })
   })
 
@@ -612,8 +677,14 @@ async function processIntakePayload({
   ip = "unknown",
   rawApiKey,
   idempotencyKey,
+  idempotencyReservationId = null,
+  options = {},
 }) {
   try {
+    if (event && event.status === "received") {
+      event.status = "processing"
+      await event.save().catch(() => {})
+    }
     // 1. Source Normalization
     const settings = integration.settings || {}
     const defaultSource = settings.leadSource || (integration.type === "website" ? "Website" : integration.type)
@@ -646,7 +717,9 @@ async function processIntakePayload({
     ).slice(0, 500).trim()
     const isTest = Boolean(body.isTest || body.is_test || query?.isTest === "true")
     const verificationToken = (body.verificationToken || body.token || body.verification_token || "").trim()
-    const customFields = {}
+    const customFields = {
+      ...(body.customFields && typeof body.customFields === "object" ? body.customFields : {}),
+    }
 
     // Apply custom field mappings if configured
     if (Array.isArray(integration.fieldMapping) && integration.fieldMapping.length > 0) {
@@ -656,6 +729,22 @@ async function processIntakePayload({
         if ((val === undefined || val === null || val === "") && map.defaultValue) {
           val = map.defaultValue
         }
+
+        // Validate required mapped field
+        if (map.required && (val === undefined || val === null || String(val).trim() === "")) {
+          if (event) {
+            event.status = "failed"
+            event.httpStatus = 400
+            event.errorMessage = `Missing required field: ${map.sourceField}`
+            await event.save()
+          }
+          return {
+            success: false,
+            status: 400,
+            error: `Missing required field: ${map.sourceField}`,
+          }
+        }
+
         if (val !== undefined && val !== null && val !== "") {
           let processedVal = String(val)
           if (map.transform === "lowercase") processedVal = processedVal.toLowerCase()
@@ -672,7 +761,10 @@ async function processIntakePayload({
           else if (map.targetField === "landingPage") landingPage = processedVal
           else if (map.targetField === "source") rawSource = processedVal
           else {
-            customFields[map.targetField] = processedVal
+            const cleanKey = map.targetField.startsWith("customFields.")
+              ? map.targetField.slice(13)
+              : map.targetField
+            customFields[cleanKey] = processedVal
           }
         }
       }
@@ -959,6 +1051,7 @@ async function processIntakePayload({
       },
       options: {
         duplicateHandling,
+        isReplay: Boolean(options?.isReplay),
       },
       actor: {
         role: "system",
@@ -981,19 +1074,29 @@ async function processIntakePayload({
       }
 
       if (event) {
-        event.status = "failed"
+        event.status = "rejected"
         event.httpStatus = 409
         event.errorMessage = "Duplicate lead detected"
         event.result = { action: "duplicate_rejected" }
         await event.save()
       }
 
-      return {
+      const duplicateRejectedResponse = {
         success: false,
         status: 409,
         duplicate: true,
         error: "Duplicate lead detected: A lead with this email or phone number already exists in this account.",
       }
+
+      if (idempotencyReservationId) {
+        await completeIdempotency({
+          reservationId: idempotencyReservationId,
+          response: duplicateRejectedResponse,
+          leadId: serviceResult.lead?._id,
+        })
+      }
+
+      return duplicateRejectedResponse
     }
 
     // Success: Either merged or created
@@ -1023,16 +1126,26 @@ async function processIntakePayload({
     }
 
     if (serviceResult.action === "merged") {
-      return {
+      const mergedResponse = {
         success: true,
         status: 200,
         message: "Existing lead record updated successfully",
         leadId: serviceResult.lead._id.toString(),
         updated: true,
       }
+
+      if (idempotencyReservationId) {
+        await completeIdempotency({
+          reservationId: idempotencyReservationId,
+          response: mergedResponse,
+          leadId: serviceResult.lead._id,
+        })
+      }
+
+      return mergedResponse
     }
 
-    return {
+    const createdResponse = {
       success: true,
       status: 201,
       message: "Lead received and created successfully",
@@ -1046,7 +1159,23 @@ async function processIntakePayload({
         createdAt: serviceResult.lead.createdAt,
       },
     }
+
+    if (idempotencyReservationId) {
+      await completeIdempotency({
+        reservationId: idempotencyReservationId,
+        response: createdResponse,
+        leadId: serviceResult.lead._id,
+      })
+    }
+
+    return createdResponse
   } catch (error) {
+    if (idempotencyReservationId) {
+      await failIdempotency({
+        reservationId: idempotencyReservationId,
+        error,
+      })
+    }
     if (error.code === 11000 && idempotencyKey) {
       const recheckLead = await Lead.findOne({
         tenantId,
@@ -1137,7 +1266,7 @@ async function replayEvent(eventId, { tenantId, actor }) {
     throw new Error("Associated integration configuration not found for replay")
   }
 
-  // Execute intake with rawPayload
+  // Execute intake with rawPayload (pass options.isReplay to suppress duplicate notifications)
   const result = await processIntakePayload({
     event,
     integration,
@@ -1145,6 +1274,7 @@ async function replayEvent(eventId, { tenantId, actor }) {
     body: event.rawPayload || {},
     headers: event.headers || {},
     idempotencyKey: event.idempotencyKey,
+    options: { isReplay: true },
   })
 
   // Update replay tracking fields (never modify original createdAt)

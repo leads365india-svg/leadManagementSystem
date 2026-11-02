@@ -905,6 +905,45 @@ class ApiClient {
     return this.request(`/media/lead/${leadId}`)
   }
 
+  // ==============================================================================
+  // Custom Fields Endpoints (Phase 5)
+  // ==============================================================================
+
+  async getCustomFields(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/custom-fields${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getCustomFieldById(id) {
+    return this.request(`/custom-fields/${id}`)
+  }
+
+  async createCustomField(payload) {
+    return this.request("/custom-fields", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async updateCustomField(id, payload) {
+    return this.request(`/custom-fields/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async deleteCustomField(id) {
+    return this.request(`/custom-fields/${id}`, {
+      method: "DELETE",
+    })
+  }
+
 }
 
 export const apiClient = new ApiClient()

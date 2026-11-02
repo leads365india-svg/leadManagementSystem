@@ -1,0 +1,233 @@
+/**
+ * Leads365 React Form Styling
+ */
+
+.lead365-form-card {
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  box-sizing: border-box;
+}
+
+.lead365-form-card * {
+  box-sizing: border-box;
+}
+
+.lead365-header {
+  margin-bottom: 20px;
+}
+
+.lead365-title {
+  margin: 0 0 6px 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.lead365-subtitle {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.lead365-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lead365-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lead365-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 480px) {
+  .lead365-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lead365-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.lead365-required {
+  color: #e11d48;
+}
+
+.lead365-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 0.8125rem;
+  color: #0f172a;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  outline: none;
+  transition: all 0.15s ease-in-out;
+}
+
+.lead365-input:focus {
+  background: #ffffff;
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.lead365-input-error {
+  border-color: #f43f5e;
+  background: #fff1f2;
+}
+
+.lead365-input-error:focus {
+  border-color: #f43f5e;
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.12);
+}
+
+.lead365-textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.lead365-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: #334155;
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.lead365-error-text {
+  font-size: 0.6875rem;
+  color: #e11d48;
+  font-weight: 500;
+}
+
+.lead365-alert {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.lead365-alert-error {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #9f1239;
+}
+
+.lead365-submit-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 16px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: #4f46e5;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease-in-out, transform 0.05s ease-in-out;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lead365-submit-btn:hover:not(:disabled) {
+  background: #4338ca;
+}
+
+.lead365-submit-btn:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.lead365-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lead365-btn-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lead365-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: lead365-spin 0.6s linear infinite;
+}
+
+@keyframes lead365-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lead365-success-banner {
+  text-align: center;
+  padding: 32px 16px;
+}
+
+.lead365-success-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px auto;
+  border-radius: 50%;
+  background: #ecfdf5;
+  color: #059669;
+  font-size: 24px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lead365-success-banner h4 {
+  margin: 0 0 6px 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.lead365-success-banner p {
+  margin: 0 0 16px 0;
+  font-size: 0.8125rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.lead365-reset-btn {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.lead365-reset-btn:hover {
+  background: #e2e8f0;
+}

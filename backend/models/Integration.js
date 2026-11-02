@@ -27,6 +27,7 @@ const ALLOWED_INTEGRATION_TYPES = [
   "zapier",
   "indiamart",
   "wix",
+  "shopify",
 ]
 
 const fieldMappingSchema = new mongoose.Schema(
@@ -49,6 +50,10 @@ const fieldMappingSchema = new mongoose.Schema(
       type: String,
       enum: ["none", "lowercase", "uppercase", "trim", "phone_e164"],
       default: "none",
+    },
+    required: {
+      type: Boolean,
+      default: false,
     },
   },
   { _id: false },
@@ -125,6 +130,17 @@ const integrationSchema = new mongoose.Schema(
     },
     settings: {
       websiteDomain: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      shopifyShopDomain: {
+        type: String,
+        default: "",
+        trim: true,
+        index: true,
+      },
+      shopifySharedSecret: {
         type: String,
         default: "",
         trim: true,

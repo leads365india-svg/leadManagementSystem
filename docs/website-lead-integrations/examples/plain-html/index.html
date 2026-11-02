@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Leads-365 CRM - Verified Plain HTML Lead Capture Integration Form" />
+  <title>Leads-365 CRM | Website Lead Capture Form</title>
+  
+  <!-- Modern Google Font: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --primary-light: #eef2ff;
+      --success: #10b981;
+      --success-bg: #ecfdf5;
+      --success-border: #a7f3d0;
+      --error: #ef4444;
+      --error-bg: #fef2f2;
+      --error-border: #fecaca;
+      --warning: #f59e0b;
+      --warning-bg: #fffbeb;
+      --warning-border: #fde68a;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --border-color: #e2e8f0;
+      --bg-gradient: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%);
+      --card-bg: #ffffff;
+      --card-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04);
+      --radius: 12px;
+      --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      line-height: 1.5;
+    }
+
+    .form-container {
+      width: 100%;
+      max-width: 540px;
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--card-shadow);
+      border: 1px solid rgba(226, 232, 240, 0.8);
+      overflow: hidden;
+      animation: fadeIn 0.4s ease-out;
+      position: relative;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .form-header {
+      background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+      color: #ffffff;
+      padding: 32px 28px;
+      text-align: left;
+      position: relative;
+    }
+
+    .form-header .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(8px);
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.025em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .form-header .badge::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #34d399;
+    }
+
+    .form-header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      letter-spacing: -0.02em;
+    }
+
+    .form-header p {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .form-body {
+      padding: 28px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 480px) {
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 6px;
+    }
+
+    .required-star {
+      color: var(--error);
+      margin-left: 2px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="tel"],
+    textarea {
+      width: 100%;
+      padding: 11px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text-main);
+      background-color: #f8fafc;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      transition: var(--transition);
+      outline: none;
+    }
+
+    input:focus,
+    textarea:focus {
+      background-color: #ffffff;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: #94a3b8;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 90px;
+    }
+
+    /* Submit Button */
+    .submit-btn {
+      width: 100%;
+      padding: 13px 20px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #ffffff;
+      background: var(--primary);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: var(--transition);
+      box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
+    }
+
+    .submit-btn:hover:not(:disabled) {
+      background: var(--primary-hover);
+      box-shadow: 0 6px 10px -1px rgba(79, 70, 229, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .submit-btn:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .submit-btn:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Spinner */
+    .spinner {
+      display: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: #ffffff;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Status Notifications */
+    .alert-banner {
+      display: none;
+      padding: 14px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 20px;
+      align-items: flex-start;
+      gap: 12px;
+      line-height: 1.45;
+      animation: slideDown 0.3s ease-out;
+    }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .alert-banner.error {
+      display: flex;
+      background-color: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: #991b1b;
+    }
+
+    .alert-banner.warning {
+      display: flex;
+      background-color: var(--warning-bg);
+      border: 1px solid var(--warning-border);
+      color: #92400e;
+    }
+
+    .alert-banner.success {
+      display: flex;
+      background-color: var(--success-bg);
+      border: 1px solid var(--success-border);
+      color: #065f46;
+    }
+
+    .alert-icon {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+    }
+
+    /* Thank You / Success State Screen */
+    .thank-you-view {
+      display: none;
+      text-align: center;
+      padding: 40px 24px;
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .success-icon-wrap {
+      width: 68px;
+      height: 68px;
+      background: var(--success-bg);
+      border: 2px solid var(--success-border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      color: var(--success);
+    }
+
+    .thank-you-view h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 8px;
+    }
+
+    .thank-you-view p {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      max-width: 380px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .receipt-card {
+      background: #f8fafc;
+      border: 1px dashed var(--border-color);
+      border-radius: 8px;
+      padding: 14px 16px;
+      text-align: left;
+      font-size: 13px;
+      color: #475569;
+      margin-bottom: 24px;
+    }
+
+    .receipt-card div {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .receipt-card div:last-child {
+      margin-bottom: 0;
+    }
+
+    .reset-btn {
+      padding: 10px 20px;
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 600;
+      font-size: 14px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .reset-btn:hover {
+      background: #e2e8f0;
+      color: #0f172a;
+    }
+
+    /* Configuration Inspector Drawer (for testing) */
+    .config-footer {
+      border-top: 1px solid var(--border-color);
+      background: #f8fafc;
+      padding: 12px 28px;
+      font-size: 12px;
+      color: #64748b;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .config-footer a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .config-footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="form-container">
+    <!-- Form Header -->
+    <div class="form-header">
+      <div class="badge">Leads365 CRM Integration</div>
+      <h1>Request a Callback</h1>
+      <p>Submit your details and our team will get in touch with you shortly.</p>
+    </div>
+
+    <!-- Main Form View -->
+    <div class="form-body" id="form-view">
+      <!-- Status Alert Banner -->
+      <div id="alert-banner" class="alert-banner" role="alert">
+        <svg class="alert-icon" id="alert-icon" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+        </svg>
+        <span id="alert-message"></span>
+      </div>
+
+      <form id="leads365-lead-form" novalidate>
+        <!-- Anti-Spam Honeypot: Hidden from genuine human visitors -->
+        <input 
+          type="text" 
+          name="_hp_trap" 
+          id="_hp_trap" 
+          style="display:none !important;" 
+          tabindex="-1" 
+          autocomplete="off" 
+          aria-hidden="true" 
+        />
+
+        <!-- Full Name -->
+        <div class="form-group">
+          <label for="fullName">Full Name <span class="required-star">*</span></label>
+          <div class="input-wrapper">
+            <input 
+              type="text" 
+              id="fullName" 
+              name="name" 
+              placeholder="e.g. Ramesh Sharma" 
+              required 
+              autocomplete="name"
+            />
+          </div>
+        </div>
+
+        <!-- Contact Row: Phone & Email -->
+        <div class="form-row">
+          <div class="form-group">
+            <label for="mobileNumber">Mobile Number <span class="required-star">*</span></label>
+            <div class="input-wrapper">
+              <input 
+                type="tel" 
+                id="mobileNumber" 
+                name="phone" 
+                placeholder="+91 98765 43210" 
+                required 
+                autocomplete="tel"
+              />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="emailAddress">Email Address <span class="required-star">*</span></label>
+            <div class="input-wrapper">
+              <input 
+                type="email" 
+                id="emailAddress" 
+                name="email" 
+                placeholder="ramesh@example.com" 
+                required 
+                autocomplete="email"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- Message -->
+        <div class="form-group">
+          <label for="enquiryMessage">Enquiry Requirement / Message</label>
+          <div class="input-wrapper">
+            <textarea 
+              id="enquiryMessage" 
+              name="message" 
+              rows="3" 
+              placeholder="Tell us what you are looking for..."
+            ></textarea>
+          </div>
+        </div>
+
+        <!-- Submit Button -->
+        <button type="submit" id="submit-btn" class="submit-btn">
+          <span class="spinner" id="btn-spinner"></span>
+          <span id="btn-text">Submit Enquiry</span>
+        </button>
+      </form>
+    </div>
+
+    <!-- Thank You / Success View -->
+    <div class="thank-you-view" id="thank-you-view">
+      <div class="success-icon-wrap">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 6L9 17l-5-5"></path>
+        </svg>
+      </div>
+      <h2>Enquiry Received!</h2>
+      <p>Thank you for reaching out. Your enquiry has been securely logged into our CRM and assigned to an agent.</p>
+      
+      <div class="receipt-card">
+        <div>
+          <span>Status:</span>
+          <strong style="color: var(--success);" id="receipt-status">Verified & Ingested</strong>
+        </div>
+        <div>
+          <span>Reference / Lead ID:</span>
+          <strong id="receipt-lead-id">LD-PENDING</strong>
+        </div>
+        <div>
+          <span>Submitted At:</span>
+          <span id="receipt-time">Just now</span>
+        </div>
+      </div>
+
+      <button type="button" class="reset-btn" id="reset-form-btn">
+        Submit Another Enquiry
+      </button>
+    </div>
+
+    <!-- Configuration Details & Help Links -->
+    <div class="config-footer">
+      <span>Powered by <strong>Leads365 Engine</strong></span>
+      <a href="javascript:void(0)" id="toggle-config-view">Configuration Info</a>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      /**
+       * LEADS365 INTEGRATION CONFIGURATION
+       * Replace with your CRM backend endpoint and public Site Key from Integration Studio.
+       */
+      const DEFAULT_CONFIG = {
+        apiEndpoint: "http://localhost:5000/api/integrations/leads/website",
+        siteKey: "lf_site_REPLACE_WITH_YOUR_SITE_KEY",
+      };
+
+      // Support runtime configuration override via URL params or window object
+      const urlParams = new URLSearchParams(window.location.search);
+      const CONFIG = {
+        apiEndpoint: urlParams.get('api_endpoint') || (window.LEADS365_CONFIG && window.LEADS365_CONFIG.apiEndpoint) || DEFAULT_CONFIG.apiEndpoint,
+        siteKey: urlParams.get('site_key') || (window.LEADS365_CONFIG && window.LEADS365_CONFIG.siteKey) || DEFAULT_CONFIG.siteKey,
+      };
+
+      // Elements
+      const form = document.getElementById('leads365-lead-form');
+      const submitBtn = document.getElementById('submit-btn');
+      const btnText = document.getElementById('btn-text');
+      const btnSpinner = document.getElementById('btn-spinner');
+      const alertBanner = document.getElementById('alert-banner');
+      const alertMessage = document.getElementById('alert-message');
+      const formView = document.getElementById('form-view');
+      const thankYouView = document.getElementById('thank-you-view');
+      const receiptLeadId = document.getElementById('receipt-lead-id');
+      const receiptTime = document.getElementById('receipt-time');
+      const receiptStatus = document.getElementById('receipt-status');
+      const resetBtn = document.getElementById('reset-form-btn');
+      const toggleConfigView = document.getElementById('toggle-config-view');
+
+      let isSubmitting = false;
+
+      // Extract UTM and Attribution parameters from current URL
+      function getAttributionParams() {
+        const params = {};
+        const keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'fbclid'];
+        keys.forEach(key => {
+          const val = urlParams.get(key);
+          if (val) params[key] = val;
+        });
+        return params;
+      }
+
+      // Generate client-side idempotency UUID to prevent duplicate double-click submissions
+      function generateIdempotencyKey() {
+        return 'html_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+      }
+
+      // Show alert helper
+      function showAlert(type, message) {
+        alertBanner.className = 'alert-banner ' + type;
+        alertMessage.textContent = message;
+      }
+
+      function clearAlert() {
+        alertBanner.className = 'alert-banner';
+        alertMessage.textContent = '';
+      }
+
+      // Toggle configuration view
+      toggleConfigView.addEventListener('click', function () {
+        alert(
+          "Leads365 Plain HTML Integration:\n" +
+          "• Endpoint: " + CONFIG.apiEndpoint + "\n" +
+          "• Site Key: " + (CONFIG.siteKey ? CONFIG.siteKey.substring(0, 15) + "..." : "Not configured") + "\n" +
+          "• Origin: " + window.location.origin + "\n\n" +
+          "You can pass '?site_key=lf_site_xxx&api_endpoint=http://...' in the URL for instant live testing."
+        );
+      });
+
+      // Reset form view
+      resetBtn.addEventListener('click', function () {
+        form.reset();
+        clearAlert();
+        thankYouView.style.display = 'none';
+        formView.style.display = 'block';
+      });
+
+      // Submit Handler
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        if (isSubmitting) return;
+
+        clearAlert();
+
+        // Validate basic inputs
+        const nameInput = document.getElementById('fullName');
+        const phoneInput = document.getElementById('mobileNumber');
+        const emailInput = document.getElementById('emailAddress');
+        const messageInput = document.getElementById('enquiryMessage');
+        const honeypotInput = document.getElementById('_hp_trap');
+
+        const name = nameInput.value.trim();
+        const phone = phoneInput.value.trim();
+        const email = emailInput.value.trim();
+        const message = messageInput.value.trim();
+        const hpTrap = honeypotInput.value;
+
+        if (!name) {
+          showAlert('error', 'Please enter your full name.');
+          nameInput.focus();
+          return;
+        }
+
+        if (!phone) {
+          showAlert('error', 'Please enter your mobile number.');
+          phoneInput.focus();
+          return;
+        }
+
+        if (!email) {
+          showAlert('error', 'Please enter a valid email address.');
+          emailInput.focus();
+          return;
+        }
+
+        // Basic email syntax check
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          showAlert('error', 'Please enter a valid email address format (e.g. name@example.com).');
+          emailInput.focus();
+          return;
+        }
+
+        // Build payload
+        const attribution = getAttributionParams();
+        const payload = Object.assign({
+          name: name,
+          phone: phone,
+          email: email,
+          message: message,
+          _hp_trap: hpTrap, // Honeypot
+          landingPage: window.location.href,
+          referrer: document.referrer || '',
+          source: 'Website Form (Plain HTML)',
+          formId: 'plain_html_callback_form'
+        }, attribution);
+
+        // Lock form state
+        isSubmitting = true;
+        submitBtn.disabled = true;
+        btnText.textContent = 'Submitting Enquiry...';
+        btnSpinner.style.display = 'inline-block';
+
+        const idempotencyKey = generateIdempotencyKey();
+
+        try {
+          const response = await fetch(CONFIG.apiEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Site-Key': CONFIG.siteKey,
+              'X-Idempotency-Key': idempotencyKey
+            },
+            body: JSON.stringify(payload)
+          });
+
+          let data = {};
+          try {
+            data = await response.json();
+          } catch (jsonErr) {
+            data = { error: 'Non-JSON server response (' + response.status + ')' };
+          }
+
+          // Handle response status codes
+          if (response.ok && data.success) {
+            // Success: Switch to Thank You screen
+            formView.style.display = 'none';
+            thankYouView.style.display = 'block';
+
+            const leadId = (data.data && (data.data._id || data.data.id)) || (data.lead && data.lead._id) || 'LD-' + Math.floor(100000 + Math.random() * 900000);
+            receiptLeadId.textContent = leadId;
+            receiptTime.textContent = new Date().toLocaleTimeString();
+            receiptStatus.textContent = data.action === 'merged' ? 'Updated Existing Lead' : 'New Lead Created';
+          } else {
+            // Error handling according to HTTP status
+            if (response.status === 403) {
+              showAlert('error', 'Security Error 403: Origin (' + window.location.origin + ') is not authorized for this Site Key. Please add it to Allowed Origins in Leads365 Integration Studio.');
+            } else if (response.status === 409) {
+              showAlert('warning', 'Notice: An enquiry with these contact details was already recorded recently.');
+            } else if (response.status === 429) {
+              showAlert('error', 'Rate limit exceeded: Too many enquiries submitted from this location. Please wait 60 seconds.');
+            } else if (response.status === 401) {
+              showAlert('error', 'Authentication Error 401: Invalid or revoked Site Key. Please verify your Leads365 Site Key.');
+            } else if (response.status === 400) {
+              showAlert('error', 'Validation Error: ' + (data.error || 'Please check your form inputs.'));
+            } else {
+              showAlert('error', data.error || 'Failed to submit enquiry. Server error (' + response.status + ').');
+            }
+          }
+        } catch (netErr) {
+          showAlert('error', 'Network Connection Error: Could not connect to the Leads365 CRM endpoint at ' + CONFIG.apiEndpoint + '. Ensure the backend server is running and CORS is enabled.');
+        } finally {
+          isSubmitting = false;
+          submitBtn.disabled = false;
+          btnText.textContent = 'Submit Enquiry';
+          btnSpinner.style.display = 'none';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
