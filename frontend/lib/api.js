@@ -13,8 +13,9 @@ class ApiClient {
     const url = `${API_BASE_URL}${finalEndpoint}`
 
     // Include credentials so HTTP-only session cookies are sent across origins
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData
     const headers = {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...options.headers,
     }
 
@@ -905,6 +906,176 @@ class ApiClient {
     return this.request(`/media/lead/${leadId}`)
   }
 
+  // ========================================================
+  // AI Call Intelligence: Business Profile, Products & Knowledge (Phase 1)
+  // ========================================================
+  async getBusinessProfile() {
+    return this.request("/ai-knowledge/profile")
+  }
+
+  async updateBusinessProfile(payload) {
+    return this.request("/ai-knowledge/profile", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getBusinessProducts(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-knowledge/products${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async createBusinessProduct(payload) {
+    return this.request("/ai-knowledge/products", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getBusinessProductById(id) {
+    return this.request(`/ai-knowledge/products/${id}`)
+  }
+
+  async updateBusinessProduct(id, payload) {
+    return this.request(`/ai-knowledge/products/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async toggleBusinessProductStatus(id) {
+    return this.request(`/ai-knowledge/products/${id}/status`, {
+      method: "PATCH",
+    })
+  }
+
+  async deleteBusinessProduct(id, hardDelete = false) {
+    return this.request(`/ai-knowledge/products/${id}${hardDelete ? "?hardDelete=true" : ""}`, {
+      method: "DELETE",
+    })
+  }
+
+  async getKnowledgeSources(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-knowledge/sources${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getKnowledgeSourceById(id) {
+    return this.request(`/ai-knowledge/sources/${id}`)
+  }
+
+  async getKnowledgeSourcePreview(id, maxLength = 500) {
+    return this.request(`/ai-knowledge/sources/${id}/preview?maxLength=${maxLength}`)
+  }
+
+  async uploadKnowledgeDocument(formData) {
+    return this.request("/ai-knowledge/sources/upload", {
+      method: "POST",
+      body: formData,
+    })
+  }
+
+  async addKnowledgeWebsite(payload) {
+    return this.request("/ai-knowledge/sources/website", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async addKnowledgeManual(payload) {
+    return this.request("/ai-knowledge/sources/manual", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async retryKnowledgeSource(id) {
+    return this.request(`/ai-knowledge/sources/${id}/retry`, {
+      method: "POST",
+    })
+  }
+
+  async deleteKnowledgeSource(id) {
+    return this.request(`/ai-knowledge/sources/${id}`, {
+      method: "DELETE",
+    })
+  }
+
+  // ========================================================
+  // AI Call Intelligence: Keyword Generation & Admin Approval (Phase 2)
+  // ========================================================
+  async generateAIKeywords(payload = {}) {
+    return this.request("/ai-keywords/generate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getAIKeywords(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/ai-keywords${queryString ? `?${queryString}` : ""}`)
+  }
+
+  async getAIKeywordById(id) {
+    return this.request(`/ai-keywords/${id}`)
+  }
+
+  async updateAIKeyword(id, payload) {
+    return this.request(`/ai-keywords/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async approveAIKeyword(id) {
+    return this.request(`/ai-keywords/${id}/approve`, {
+      method: "PATCH",
+    })
+  }
+
+  async rejectAIKeyword(id, reason = "") {
+    return this.request(`/ai-keywords/${id}/reject`, {
+      method: "PATCH",
+      body: JSON.stringify({ reason }),
+    })
+  }
+
+  async bulkApproveAIKeywords(ids = []) {
+    return this.request("/ai-keywords/bulk-approve", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    })
+  }
+
+  async archiveAIKeyword(id) {
+    return this.request(`/ai-keywords/${id}/archive`, {
+      method: "PATCH",
+    })
+  }
+
+  async deleteAIKeyword(id) {
+    return this.request(`/ai-keywords/${id}`, {
+      method: "DELETE",
+    })
+  }
 }
 
 export const apiClient = new ApiClient()

@@ -998,7 +998,7 @@ export default function RolesClient() {
             </div>
 
             <p className="text-sm text-slate-600 dark:text-slate-300">
-              Are you sure you want to delete role <strong>"{roleToDelete.name}"</strong> (
+              Are you sure you want to delete role <strong>&ldquo;{roleToDelete.name}&rdquo;</strong> (
               <code>{roleToDelete.slug}</code>)? Any staff members previously assigned to this role must have a
               different role assigned.
             </p>

@@ -254,6 +254,13 @@ const NAV_CATEGORIES = [
         description: "Compliance list and restricted numbers",
         icon: PhoneOff,
       },
+      {
+        id: "settings-ai-knowledge",
+        label: "AI Knowledge & Profile",
+        href: "/settings/ai-knowledge",
+        description: "Business profile, products & AI knowledge base",
+        icon: Sparkles,
+      },
     ],
   },
 ]

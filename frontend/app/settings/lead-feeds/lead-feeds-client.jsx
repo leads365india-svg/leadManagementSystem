@@ -2613,7 +2613,7 @@ export default function LeadFeedsClient() {
                     <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                       <div>
-                        <strong>No allowed origins configured.</strong> Public browser snippet submissions will be rejected with HTTP 403 until you add your website's origin. Server-to-server submissions using your private API key are unaffected.
+                        <strong>No allowed origins configured.</strong> Public browser snippet submissions will be rejected with HTTP 403 until you add your website&apos;s origin. Server-to-server submissions using your private API key are unaffected.
                       </div>
                     </div>
                   )}
@@ -2655,7 +2655,7 @@ export default function LeadFeedsClient() {
                       <li><strong>Zero Dependencies:</strong> 2.5 KB lightweight script; runs non-blocking with async/defer.</li>
                       <li><strong>Form Tagging:</strong> Auto-detects forms containing contact inputs or marked with <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">&lt;form data-leads365-form&gt;</code>.</li>
                       <li><strong>Programmatic Submission:</strong> Use <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">{'window.Leads365.capture({ name, email, phone, message })'}</code> in custom SPAs / React / Vue.</li>
-                      <li><strong>Anti-Spam Honeypot:</strong> Add <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">&lt;input type="text" name="_hp_trap" style="display:none" tabIndex="-1" /&gt;</code> to silently reject bots.</li>
+                      <li><strong>Anti-Spam Honeypot:</strong> Add <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">{'<input type="text" name="_hp_trap" style="display:none" tabIndex="-1" />'}</code> to silently reject bots.</li>
                     </ul>
                   </div>
                 </div>

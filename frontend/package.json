@@ -7,6 +7,7 @@
     "build": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build",
     "start": "next start",
     "lint": "next lint",
+    "postinstall": "node scripts/patch-eslint.js",
     "test": "node tests/verifyAuthRouting.js"
   },
   "dependencies": {
@@ -62,10 +63,14 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "eslint": "^8.57.1",
+    "eslint-config-next": "15.5.28",
     "postcss": "^8.5.31",
-    "tailwindcss": "^3.4.17"
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.9.3"
   },
   "overrides": {
-    "postcss-selector-parser": "^7.1.7"
+    "postcss-selector-parser": "^7.1.7",
+    "eslint-plugin-react": "7.36.1"
   }
 }
