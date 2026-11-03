@@ -429,13 +429,7 @@ function PortalLoginForm() {
               </p>
             </div>
 
-            <div className="flex items-center justify-between text-xs pt-2">
-              <Link
-                href="/super-admin/login"
-                className="text-slate-500 hover:text-indigo-600 transition-colors font-medium text-[11px]"
-              >
-                Super Admin Login →
-              </Link>
+            <div className="flex items-center justify-center text-xs pt-2">
               <Link
                 href="/"
                 className="text-slate-400 hover:text-slate-600 transition-colors text-[11px]"

@@ -304,16 +304,10 @@ export default function SuperAdminLoginPage() {
             </div>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-slate-100 flex flex-col items-center space-y-2">
-            <Link
-              href="/portal/login"
-              className="w-full text-center py-2 px-3 rounded-lg text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors border border-indigo-200"
-            >
-              Client / Leads Account Login Portal →
-            </Link>
+          <div className="mt-5 pt-4 border-t border-slate-100 flex justify-center">
             <Link
               href="/"
-              className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors pt-1"
+              className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors"
             >
               ← Back to Lead Management Home
             </Link>
