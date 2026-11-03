@@ -18,7 +18,24 @@ const AuthContext = createContext({
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [status, setStatus] = useState("loading")
+  const [activeTenant, setActiveTenantState] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("leadflow_active_tenant") || null
+    }
+    return null
+  })
   const router = useRouter()
+
+  const setActiveTenant = useCallback((tenantId) => {
+    if (typeof window !== "undefined") {
+      if (tenantId) {
+        localStorage.setItem("leadflow_active_tenant", tenantId)
+      } else {
+        localStorage.removeItem("leadflow_active_tenant")
+      }
+    }
+    setActiveTenantState(tenantId || null)
+  }, [])
 
   const checkAuth = useCallback(async () => {
     try {
@@ -82,6 +99,11 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.error("Logout error:", err)
     } finally {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("leadflow_active_tenant")
+        localStorage.removeItem("leadflow_token")
+      }
+      setActiveTenantState(null)
       setUser(null)
       setStatus("unauthenticated")
       const destination =
@@ -95,6 +117,8 @@ export function AuthProvider({ children }) {
     user,
     status,
     loading: status === "loading",
+    activeTenant,
+    setActiveTenant,
     checkAuth,
     login,
     setSession,

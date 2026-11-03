@@ -1,11 +1,13 @@
+const path = require("path")
 const dotenv = require("dotenv")
+
+dotenv.config({ path: path.join(__dirname, ".env") })
+
 const mongoose = require("mongoose")
 const connectDB = require("./db/connection")
 const queue = require("./services/queueService")
 const scheduler = require("./services/schedulerService")
 const { registerAllHandlers } = require("./jobs")
-
-dotenv.config()
 
 /**
  * Worker Process - Phase 9: Background Jobs Infrastructure
@@ -111,10 +113,17 @@ async function shutdown(signal) {
   process.exit(0)
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"))
-process.on("SIGTERM", () => shutdown("SIGTERM"))
+function stopPolling() {
+  isShuttingDown = true
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
 
 if (require.main === module) {
+  process.on("SIGINT", () => shutdown("SIGINT"))
+  process.on("SIGTERM", () => shutdown("SIGTERM"))
   startWorker()
 }
 
@@ -122,5 +131,6 @@ module.exports = {
   startWorker,
   shutdown,
   processNext,
+  stopPolling,
   WORKER_ID,
 }

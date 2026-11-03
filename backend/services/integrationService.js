@@ -547,6 +547,7 @@ async function intakeWebhookPayload({
       if (claimResult.action === "cached") {
         return {
           ...claimResult.response,
+          status: 200,
           idempotent: true,
         }
       }

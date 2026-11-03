@@ -45,6 +45,15 @@ const getLeads = async (req, res) => {
       return
     }
 
+    // Super Admin must have an authorized tenant context selected to access CRM leads
+    if (isSuperAdmin && !effectiveTenantId) {
+      res.status(400).json({
+        success: false,
+        error: "Tenant context required. Please select an authorized tenant to view CRM leads.",
+      })
+      return
+    }
+
     // Security check: Unauthenticated or Account Admin attempting to access another tenant
     if (!isSuperAdmin && requestedTenantId && requestedTenantId !== effectiveTenantId) {
       res.status(403).json({
@@ -1036,10 +1045,14 @@ const getLeadStats = async (req, res) => {
     if (req.query?.includeTest !== "true") {
       matchQuery.isTest = { $ne: true }
     }
-    if (!isSuperAdmin && effectiveTenantId) {
+    if (effectiveTenantId) {
       matchQuery.tenantId = effectiveTenantId
-    } else if (isSuperAdmin && typeof req.query?.tenantId === "string") {
-      matchQuery.tenantId = req.query.tenantId.trim()
+    } else if (isSuperAdmin) {
+      res.status(400).json({
+        success: false,
+        error: "Tenant context required. Please select an authorized tenant to view lead statistics.",
+      })
+      return
     }
 
     const rbacQuery = await scopeFilter(req.user, "leads", "view")

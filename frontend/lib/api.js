@@ -29,6 +29,16 @@ class ApiClient {
       } catch (_) {}
     }
 
+    // Attach active tenant ID header if present
+    if (!headers["x-tenant-id"] && !headers["X-Tenant-Id"] && typeof window !== "undefined") {
+      try {
+        const activeTenant = localStorage.getItem("leadflow_active_tenant")
+        if (activeTenant && activeTenant.trim()) {
+          headers["x-tenant-id"] = activeTenant.trim()
+        }
+      } catch (_) {}
+    }
+
     const config = {
       method: options.method || "GET",
       credentials: "include",
@@ -234,6 +244,13 @@ class ApiClient {
   }
 
   // --- Super Admin Endpoints ---
+  async switchTenant(tenantId) {
+    return this.request("/super-admin/switch-tenant", {
+      method: "POST",
+      body: JSON.stringify({ tenantId }),
+    })
+  }
+
   async getSuperAdminStats() {
     return this.request("/super-admin/stats")
   }
@@ -271,6 +288,13 @@ class ApiClient {
     return this.request(`/super-admin/accounts/${accountId}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
+    })
+  }
+
+  async deleteSuperAdminAccount(accountId, payload = {}) {
+    return this.request(`/super-admin/accounts/${accountId}`, {
+      method: "DELETE",
+      body: JSON.stringify(payload),
     })
   }
 

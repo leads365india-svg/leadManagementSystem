@@ -122,8 +122,12 @@ auditLogSchema.pre("save", function (next) {
   next()
 })
 
-// Immutability Guards: Block any update or delete operations on audit collection
+// Immutability Guards: Block any update or delete operations on audit collection unless explicitly purging tenant
 const blockMutation = function (next) {
+  const options = typeof this.getOptions === "function" ? this.getOptions() : {}
+  if (options.allowTenantPurge === true) {
+    return next()
+  }
   const error = new Error("Audit log entries are strictly immutable and cannot be updated or deleted through the API.")
   error.statusCode = 403
   next(error)

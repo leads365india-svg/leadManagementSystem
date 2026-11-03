@@ -1,9 +1,14 @@
+const path = require("path")
+const dotenv = require("dotenv")
+
+// Load environment variables immediately before any internal module or route is required
+dotenv.config({ path: path.join(__dirname, ".env") })
+
 const express = require("express")
 const cors = require("cors")
 const helmet = require("helmet")
 const rateLimit = require("express-rate-limit")
 const cookieParser = require("cookie-parser")
-const dotenv = require("dotenv")
 const mongoose = require("mongoose")
 const connectDB = require("./db/connection")
 const { checkDbConnection } = require("./db/connection")
@@ -12,7 +17,6 @@ const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
 const integrationRoutes = require("./routes/integrationRoutes")
 const followUpRoutes = require("./routes/followUpRoutes")
-const path = require("path")
 const staffRoutes = require("./routes/staffRoutes")
 const teamRoutes = require("./routes/teamRoutes")
 const roleRoutes = require("./routes/roleRoutes")
@@ -32,9 +36,6 @@ const aiSalesIntelligenceRoutes = require("./routes/aiSalesIntelligenceRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
-
-// Load environment variables
-dotenv.config()
 
 // Validate critical security environment variables on startup
 try {
@@ -196,13 +197,17 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }))
 app.use(cookieParser())
 app.use(verifyCSRF(allowedOrigins))
 
-// Health check route - accurately reports service and database readiness without leaking details
-app.get("/health", (_req, res) => {
+// Health check route - accurately reports service, database readiness, dbName, and worker status
+const healthCheckHandler = (_req, res) => {
   const isDbReady = mongoose.connection && mongoose.connection.readyState === 1
+  const workerStatus = process.env.DISABLE_EMBEDDED_WORKER === "true" ? "disabled" : "active"
+
   if (!isDbReady) {
     return res.status(503).json({
       status: "degraded",
       database: "disconnected",
+      databaseName: mongoose.connection?.name || null,
+      worker: workerStatus,
       message: "Database service unavailable",
       timestamp: new Date().toISOString(),
     })
@@ -211,10 +216,15 @@ app.get("/health", (_req, res) => {
   res.status(200).json({
     status: "healthy",
     database: "connected",
+    databaseName: mongoose.connection.name,
+    worker: workerStatus,
     message: "Service is operational",
     timestamp: new Date().toISOString(),
   })
-})
+}
+
+app.get("/health", healthCheckHandler)
+app.get("/api/health", healthCheckHandler)
 
 // Ensure DB is ready for API calls
 app.use("/api", checkDbConnection)
@@ -288,6 +298,14 @@ const setupGracefulShutdown = (httpServer) => {
     }
 
     try {
+      // 0. Stop embedded worker polling loop if active
+      try {
+        const worker = require("./worker")
+        if (worker.stopPolling) {
+          worker.stopPolling()
+        }
+      } catch (_e) {}
+
       // 1. Stop accepting new HTTP requests
       if (httpServer && httpServer.close) {
         await new Promise((resolve) => {
@@ -340,6 +358,16 @@ const startServer = async () => {
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server is running on port ${PORT}`)
       console.log(`Environment: ${process.env.NODE_ENV || "development"}`)
+    })
+
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(`❌ Port ${PORT} is already in use by another process.`)
+        console.error("💡 Check running node processes or specify a different PORT in .env")
+      } else {
+        console.error("❌ HTTP server error:", err.message)
+      }
+      process.exit(1)
     })
 
     setupGracefulShutdown(server)

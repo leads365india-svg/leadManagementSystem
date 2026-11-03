@@ -685,6 +685,24 @@ export default function Header() {
               RIGHT SECTION: Fullscreen & User Profile
           ========================================================================= */}
           <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+            {/* Super Admin Active Tenant Indicator */}
+            {user?.role === "super_admin" && (
+              <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200/80 text-xs shadow-2xs">
+                <span className="font-bold text-indigo-700">Super Admin</span>
+                <span className="text-slate-400">/</span>
+                <span className="text-slate-800 font-semibold truncate max-w-[140px]" title={companyName}>
+                  {companyName || user?.tenantId || "Tenant"}
+                </span>
+                <Link
+                  href="/super-admin"
+                  className="text-indigo-600 hover:text-indigo-900 font-bold ml-1 hover:underline text-[11px]"
+                  title="Exit to Super Admin Console"
+                >
+                  Console
+                </Link>
+              </div>
+            )}
+
             {/* Fullscreen Toggle */}
             <button
               type="button"
@@ -734,6 +752,16 @@ export default function Header() {
                   </div>
 
                   <div className="py-1 text-xs text-slate-700">
+                    {user?.role === "super_admin" && (
+                      <Link
+                        href="/super-admin"
+                        onClick={() => setUserDropdownOpen(false)}
+                        className="flex items-center space-x-2.5 px-4 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100"
+                      >
+                        <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Super Admin Console</span>
+                      </Link>
+                    )}
                     <Link
                       href="/settings/staff"
                       onClick={() => setUserDropdownOpen(false)}

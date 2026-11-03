@@ -102,6 +102,15 @@ const getFollowUps = async (req, res) => {
       return
     }
 
+    // Super Admin must have an authorized tenant context selected to access CRM follow-ups
+    if (isSuperAdmin && !effectiveTenantId) {
+      res.status(400).json({
+        success: false,
+        error: "Tenant context required. Please select an authorized tenant to view follow-ups.",
+      })
+      return
+    }
+
     // Cross-tenant security check
     if (!isSuperAdmin && requestedTenantId && requestedTenantId !== effectiveTenantId) {
       res.status(403).json({
@@ -271,11 +280,17 @@ const getFollowUpStats = async (req, res) => {
       return
     }
 
+    if (isSuperAdmin && !effectiveTenantId) {
+      res.status(400).json({
+        success: false,
+        error: "Tenant context required. Please select an authorized tenant to view follow-up statistics.",
+      })
+      return
+    }
+
     const baseQuery = {}
-    if (!isSuperAdmin && effectiveTenantId) {
+    if (effectiveTenantId) {
       baseQuery.tenantId = effectiveTenantId
-    } else if (isSuperAdmin && typeof req.query?.tenantId === "string") {
-      baseQuery.tenantId = req.query.tenantId.trim()
     }
 
     const rbacQuery = await scopeFilter(req.user, "followups", "view")

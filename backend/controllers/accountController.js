@@ -741,6 +741,296 @@ const updateAccountStatus = async (req, res) => {
   }
 }
 
+const switchTenantContext = async (req, res) => {
+  try {
+    const { tenantId } = req.body
+    const isProduction = process.env.NODE_ENV === "production"
+    if (!tenantId) {
+      res.clearCookie("active_tenant_id", {
+        path: "/",
+        sameSite: isProduction ? "none" : "lax",
+        secure: isProduction,
+      })
+      return res.status(200).json({
+        success: true,
+        data: null,
+        message: "Active tenant context cleared.",
+      })
+    }
+
+    const cleanId = String(tenantId).trim()
+    const account = await Account.findOne({ accountId: cleanId }).lean()
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: `Tenant account '${cleanId}' does not exist or is invalid.`,
+      })
+    }
+
+    if (account.status === "suspended") {
+      return res.status(403).json({
+        success: false,
+        error: `Account '${account.companyName}' (${account.accountId}) is suspended.`,
+      })
+    }
+
+    res.cookie("active_tenant_id", account.accountId, {
+      httpOnly: false,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+      path: "/",
+    })
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        tenantId: account.accountId,
+        account: {
+          id: account._id.toString(),
+          accountId: account.accountId,
+          companyName: account.companyName,
+          displayName: account.displayName,
+          status: account.status,
+        },
+      },
+      message: `Switched active tenant context to ${account.companyName} (${account.accountId})`,
+    })
+  } catch (error) {
+    console.error("switchTenantContext error:", error)
+    return res.status(500).json({
+      success: false,
+      error: "Failed to switch tenant context",
+    })
+  }
+}
+
+
+// DELETE /api/super-admin/accounts/:id - Permanently delete tenant account and all associated data
+const deleteAccount = async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!id || typeof id !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "Account ID is required",
+      })
+    }
+
+    const cleanId = id.trim()
+    let account = null
+    if (mongoose.Types.ObjectId.isValid(cleanId)) {
+      account = await Account.findById(cleanId)
+    }
+    if (!account) {
+      account = await Account.findOne({ accountId: cleanId })
+    }
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: "Leads Account not found or already deleted",
+      })
+    }
+
+    // Never allow deleting system reserved or protected account
+    if (account.accountId === "__system__" || account.accountId === "system") {
+      return res.status(403).json({
+        success: false,
+        error: "Cannot delete protected system account",
+      })
+    }
+
+    // Optional confirmation Account ID check if sent in request body
+    const { confirmAccountId } = req.body || {}
+    if (confirmAccountId && confirmAccountId.trim() !== account.accountId) {
+      return res.status(400).json({
+        success: false,
+        error: `Confirmation mismatch. You typed '${confirmAccountId}', but '${account.accountId}' was expected.`,
+      })
+    }
+
+    const tenantId = account.accountId
+
+    // Query any MediaFile records before transactional deletion to permit ImageKit cleanup
+    const MediaFile = require("../models/MediaFile")
+    let mediaFiles = []
+    try {
+      mediaFiles = await MediaFile.find({ tenantId }).setOptions({ skipTenantFilter: true }).lean()
+    } catch (_e) {}
+
+    // Models to cascade delete (supporting both default and named exports)
+    const Lead = require("../models/Lead")
+    const Activity = require("../models/Activity").Activity || require("../models/Activity")
+    const Call = require("../models/Call")
+    const FollowUp = require("../models/FollowUp")
+    const Team = require("../models/Team")
+    const Role = require("../models/Role")
+    const AssignmentRule = require("../models/AssignmentRule")
+    const DnrRule = require("../models/DnrRule")
+    const CustomField = require("../models/CustomField").CustomField || require("../models/CustomField")
+    const Device = require("../models/Device")
+    const MobileSyncTombstone = require("../models/MobileSyncTombstone")
+    const Integration = require("../models/Integration").Integration || require("../models/Integration")
+    const IntegrationEvent = require("../models/IntegrationEvent").IntegrationEvent || require("../models/IntegrationEvent")
+    const LeadSource = require("../models/LeadSource").LeadSource || require("../models/LeadSource")
+    const LeadFeedConfig = require("../models/LeadFeedConfig")
+    const IdempotencyReservation = require("../models/IdempotencyReservation").IdempotencyReservation || require("../models/IdempotencyReservation")
+    const LeadConcurrencyLock = require("../models/LeadConcurrencyLock").LeadConcurrencyLock || require("../models/LeadConcurrencyLock")
+    const Job = require("../models/Job")
+    const DeadLetterJob = require("../models/DeadLetterJob")
+    const AuditLog = require("../models/AuditLog")
+    const BusinessProduct = require("../models/BusinessProduct")
+    const TenantBusinessProfile = require("../models/TenantBusinessProfile").TenantBusinessProfile || require("../models/TenantBusinessProfile")
+    const AIAgentScorecard = require("../models/AIAgentScorecard")
+    const AICallAnalysis = require("../models/AICallAnalysis")
+    const AICoachingReview = require("../models/AICoachingReview")
+    const AIKeywordTopic = require("../models/AIKeywordTopic")
+    const AIKnowledgeSource = require("../models/AIKnowledgeSource").AIKnowledgeSource || require("../models/AIKnowledgeSource")
+    const AILeadPriority = require("../models/AILeadPriority")
+    const AIManagerRecommendation = require("../models/AIManagerRecommendation")
+    const AITranscript = require("../models/AITranscript")
+    const AIUsageLedger = require("../models/AIUsageLedger").AIUsageLedger || require("../models/AIUsageLedger")
+
+    const session = await mongoose.startSession()
+    let deletionSummary = {}
+
+    try {
+      session.startTransaction()
+
+      // Cascade delete across all tenant-isolated collections sequentially on session
+      const modelsToDelete = [
+        { name: "leads", model: Lead, filter: { tenantId } },
+        { name: "activities", model: Activity, filter: { tenantId } },
+        { name: "calls", model: Call, filter: { tenantId } },
+        { name: "followUps", model: FollowUp, filter: { tenantId } },
+        { name: "teams", model: Team, filter: { tenantId } },
+        { name: "roles", model: Role, filter: { tenantId } },
+        { name: "assignmentRules", model: AssignmentRule, filter: { tenantId } },
+        { name: "dnrRules", model: DnrRule, filter: { tenantId } },
+        { name: "customFields", model: CustomField, filter: { tenantId } },
+        { name: "devices", model: Device, filter: { tenantId } },
+        { name: "tombstones", model: MobileSyncTombstone, filter: { tenantId } },
+        { name: "integrations", model: Integration, filter: { tenantId } },
+        { name: "integrationEvents", model: IntegrationEvent, filter: { tenantId } },
+        { name: "leadSources", model: LeadSource, filter: { tenantId } },
+        { name: "leadFeedConfigs", model: LeadFeedConfig, filter: { $or: [{ tenantId }, { accountId: tenantId }] } },
+        { name: "idempotency", model: IdempotencyReservation, filter: { tenantId } },
+        { name: "locks", model: LeadConcurrencyLock, filter: { tenantId } },
+        { name: "jobs", model: Job, filter: { tenantId } },
+        { name: "deadJobs", model: DeadLetterJob, filter: { tenantId } },
+        { name: "auditLogs", model: AuditLog, filter: { tenantId }, options: { allowTenantPurge: true } },
+        { name: "products", model: BusinessProduct, filter: { tenantId } },
+        { name: "profiles", model: TenantBusinessProfile, filter: { tenantId } },
+        { name: "aiScorecards", model: AIAgentScorecard, filter: { tenantId } },
+        { name: "aiAnalyses", model: AICallAnalysis, filter: { tenantId } },
+        { name: "aiCoaching", model: AICoachingReview, filter: { tenantId } },
+        { name: "aiTopics", model: AIKeywordTopic, filter: { tenantId } },
+        { name: "aiKnowledge", model: AIKnowledgeSource, filter: { tenantId } },
+        { name: "aiPriorities", model: AILeadPriority, filter: { tenantId } },
+        { name: "aiRecs", model: AIManagerRecommendation, filter: { tenantId } },
+        { name: "aiTranscripts", model: AITranscript, filter: { tenantId } },
+        { name: "aiUsage", model: AIUsageLedger, filter: { tenantId } },
+        { name: "mediaFiles", model: MediaFile, filter: { tenantId } },
+      ]
+
+      for (const item of modelsToDelete) {
+        const delRes = await item.model.deleteMany(item.filter)
+          .setOptions({ skipTenantFilter: true, ...(item.options || {}) })
+          .session(session)
+        deletionSummary[item.name] = delRes.deletedCount || 0
+      }
+
+      // Delete tenant users & tenant admin, strictly excluding any super_admin user
+      const usersDel = await User.deleteMany({
+        $or: [{ tenantId }, { _id: account.adminUserId }],
+        role: { $ne: "super_admin" },
+      }).setOptions({ skipTenantFilter: true }).session(session)
+      deletionSummary.users = usersDel.deletedCount || 0
+
+      // Finally delete the Account document
+      const accountDel = await Account.deleteOne({ _id: account._id }).session(session)
+      deletionSummary.accountDeleted = accountDel.deletedCount === 1
+
+      await session.commitTransaction()
+    } catch (txError) {
+      await session.abortTransaction()
+      console.error(`[DeleteAccount Transaction Error for ${tenantId}]:`, txError)
+      return res.status(500).json({
+        success: false,
+        error: `Failed to delete tenant account transactionally: ${txError.message}`,
+      })
+    } finally {
+      session.endSession()
+    }
+
+    // Post-transaction external file cleanup (safe best-effort after atomic DB deletion)
+    // 1. GridFS recordings
+    try {
+      if (mongoose.connection && mongoose.connection.db) {
+        const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "recordings" })
+        const gridFiles = await bucket.find({ "metadata.tenantId": tenantId }).toArray()
+        for (const gf of gridFiles) {
+          await bucket.delete(gf._id).catch(() => {})
+        }
+      }
+    } catch (gErr) {
+      console.warn(`[GridFS cleanup warning for ${tenantId}]:`, gErr.message)
+    }
+
+    // 2. Local uploads folder
+    try {
+      const safeTenantId = tenantId.replace(/[^a-zA-Z0-9_-]/g, "")
+      const tenantDir = path.join(__dirname, "..", "uploads", "recordings", safeTenantId)
+      if (fs.existsSync(tenantDir)) {
+        fs.rmSync(tenantDir, { recursive: true, force: true })
+      }
+    } catch (fErr) {
+      console.warn(`[Disk cleanup warning for ${tenantId}]:`, fErr.message)
+    }
+
+    // 3. ImageKit cloud files
+    if (mediaFiles && mediaFiles.length > 0) {
+      try {
+        const { deleteFile } = require("../services/mediaStorage.service")
+        for (const mf of mediaFiles) {
+          if (mf.provider === "imagekit" && mf.fileId) {
+            await deleteFile(mf.fileId, tenantId).catch(() => {})
+          }
+        }
+      } catch (mErr) {
+        console.warn(`[ImageKit cleanup warning for ${tenantId}]:`, mErr.message)
+      }
+    }
+
+    // 4. Clear active tenant cookie if it was set to this deleted tenant
+    const isProduction = process.env.NODE_ENV === "production"
+    if (req.cookies && req.cookies.active_tenant_id === tenantId) {
+      res.clearCookie("active_tenant_id", {
+        path: "/",
+        sameSite: isProduction ? "none" : "lax",
+        secure: isProduction,
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Account '${account.companyName}' (${account.accountId}) and all associated records have been permanently deleted.`,
+      data: {
+        accountId: account.accountId,
+        companyName: account.companyName,
+        summary: deletionSummary,
+      },
+    })
+  } catch (error) {
+    console.error("Error deleting account:", error)
+    return res.status(500).json({
+      success: false,
+      error: "Failed to delete account",
+    })
+  }
+}
+
 module.exports = {
   getAccounts,
   getAccountStats,
@@ -748,4 +1038,6 @@ module.exports = {
   createAccount,
   updateAccount,
   updateAccountStatus,
+  switchTenantContext,
+  deleteAccount,
 }

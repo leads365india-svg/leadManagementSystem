@@ -1,9 +1,10 @@
+const path = require("path")
 const mongoose = require("mongoose")
 const dotenv = require("dotenv")
 const dns = require("dns")
-const { bootstrapSuperAdmin } = require("./seedSuperAdmin")
 
-dotenv.config()
+dotenv.config({ path: path.join(__dirname, "..", ".env") })
+const { bootstrapSuperAdmin } = require("./seedSuperAdmin")
 
 let isConnecting = false
 let retryTimer = null

@@ -39,12 +39,17 @@ const getEffectiveTenant = (req) => {
   const isSuperAdmin = req.user.role === "super_admin"
 
   if (isSuperAdmin) {
-    // Super admin can explicitly scope to a tenant via query param, header, or body
+    if (req.tenantId) {
+      return { tenantId: req.tenantId, isSuperAdmin: true }
+    }
+
+    // Super admin can explicitly scope to an authorized tenant via header, cookie, query, or body
     const requestedTenant =
-      (typeof req.query?.tenantId === "string" ? req.query.tenantId.trim() : null) ||
       (typeof req.headers?.["x-tenant-id"] === "string" ? req.headers["x-tenant-id"].trim() : null) ||
+      (typeof req.cookies?.active_tenant_id === "string" ? req.cookies.active_tenant_id.trim() : null) ||
+      (typeof req.query?.tenantId === "string" ? req.query.tenantId.trim() : null) ||
       (typeof req.body?.tenantId === "string" ? req.body.tenantId.trim() : null) ||
-      null
+      (req.user.tenantId || null)
 
     return { tenantId: requestedTenant, isSuperAdmin: true }
   }

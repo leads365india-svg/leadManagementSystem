@@ -122,8 +122,9 @@ const extractCandidateTokens = (req) => {
     if (isSuperAdminRoute) {
       if (req.cookies.superadmin_token) {
         tokens.push(req.cookies.superadmin_token)
+      } else if (req.cookies.client_token) {
+        tokens.push(req.cookies.client_token)
       }
-      // Strict Auth Isolation (Phase 27): Never accept client_token on Super Admin routes
     } else {
       if (req.cookies.client_token) {
         tokens.push(req.cookies.client_token)
@@ -241,8 +242,37 @@ const authenticate = async (req, res, next) => {
       permissions,
     }
 
-    if (user.tenantId) {
-      req.tenantId = user.tenantId
+    if (user.role === "super_admin") {
+      const requestedTenant =
+        (typeof req.headers?.["x-tenant-id"] === "string" ? req.headers["x-tenant-id"].trim() : null) ||
+        (typeof req.cookies?.active_tenant_id === "string" ? req.cookies.active_tenant_id.trim() : null) ||
+        (typeof req.query?.tenantId === "string" ? req.query.tenantId.trim() : null) ||
+        (typeof req.body?.tenantId === "string" ? req.body.tenantId.trim() : null) ||
+        user.tenantId ||
+        null
+
+      if (requestedTenant) {
+        // Validate against Account collection - DO NOT trust arbitrary tenant IDs from frontend!
+        const account = await Account.findOne({ accountId: requestedTenant }).lean()
+        if (!account) {
+          return res.status(404).json({
+            success: false,
+            error: `Tenant account '${requestedTenant}' does not exist or is invalid.`,
+          })
+        }
+        if (account.status === "suspended") {
+          return res.status(403).json({
+            success: false,
+            error: `Leads Account '${account.companyName}' (${account.accountId}) is suspended.`,
+          })
+        }
+        req.tenantId = account.accountId
+        req.tenantAccount = account
+      }
+    } else {
+      if (user.tenantId) {
+        req.tenantId = user.tenantId
+      }
     }
 
     // Check device revocation status if x-device-id header is provided

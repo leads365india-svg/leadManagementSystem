@@ -5,6 +5,7 @@ const callService = require("../services/callService")
 const recordingStorage = require("../services/recordingStorage")
 const { checkDirectObjectAccess } = require("../utils/rbacScope")
 const audit = require("../services/auditService")
+const { getEffectiveTenant } = require("../middleware/tenantContext")
 
 /**
  * Leads-365 CRM - Call & Device Controller (Phase 14)
@@ -107,7 +108,14 @@ const createCallLog = async (req, res) => {
  */
 const getCallLogs = async (req, res) => {
   try {
-    const result = await callService.listCalls(req.query, req.user)
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+    if (isSuperAdmin && !effectiveTenantId) {
+      return res.status(400).json({
+        success: false,
+        error: "Tenant context required. Please select an authorized tenant to view call logs.",
+      })
+    }
+    const result = await callService.listCalls(req.query, req.user, effectiveTenantId)
     const listData = result.data || { calls: result.calls, pagination: result.pagination }
     return res.status(200).json({
       success: true,
@@ -130,7 +138,14 @@ const getCallLogs = async (req, res) => {
  */
 const getCallReportMetrics = async (req, res) => {
   try {
-    const result = await callService.getCallMetrics(req.query, req.user?.tenantId)
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+    if (!effectiveTenantId) {
+      return res.status(400).json({
+        success: false,
+        error: "Tenant context required. Please select an authorized tenant to compute call metrics.",
+      })
+    }
+    const result = await callService.getCallMetrics(effectiveTenantId, req.query)
     const metricsData = result.data || result
     return res.status(200).json({
       success: true,

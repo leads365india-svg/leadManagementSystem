@@ -96,8 +96,18 @@ function PortalLoginForm() {
     if (isSubmittingRef.current) return
 
     if (authStatus === "authenticated" && authUser) {
-      const destination = authUser.role === "super_admin" ? "/super-admin" : "/portal"
-      router.replace(destination)
+      if (authUser.role === "super_admin") {
+        if (tenantParam) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("leadflow_active_tenant", tenantParam)
+          }
+          router.replace("/portal")
+          return
+        }
+        router.replace("/super-admin")
+        return
+      }
+      router.replace("/portal")
       return
     }
     if (authStatus === "unauthenticated") {
@@ -128,9 +138,21 @@ function PortalLoginForm() {
 
       if (response && response.success && response.data?.user) {
         setIsRedirecting(true)
-        const destination = response.data.user.role === "super_admin" ? "/super-admin" : "/portal"
+        if (response.data.user.role === "super_admin") {
+          if (tenantId && tenantId.trim()) {
+            if (typeof window !== "undefined") {
+              localStorage.setItem("leadflow_active_tenant", tenantId.trim())
+            }
+            toast.success(`Super Admin: Accessing tenant ${tenantId.trim()}`)
+            router.replace("/portal")
+            return
+          }
+          toast.success(`Welcome back, ${response.data.user.name}!`)
+          router.replace("/super-admin")
+          return
+        }
         toast.success(`Welcome back, ${response.data.user.name}!`)
-        router.replace(destination)
+        router.replace("/portal")
       } else {
         const errMsg = response?.error || "Invalid email or password"
         setError(errMsg)

@@ -46,10 +46,17 @@ export default function AuthGuard({ children }) {
       return
     }
 
-    // Role-specific enforcement: Super Admin sessions should not access Client CRM directly
+    // Role-specific enforcement: Super Admin sessions without active tenant should be guided to Super Admin console
     if (status === "authenticated" && user?.role === "super_admin") {
-      router.replace("/super-admin")
-      return
+      const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
+      const urlTenant = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tenant") : null
+      if (urlTenant && typeof window !== "undefined") {
+        localStorage.setItem("leadflow_active_tenant", urlTenant)
+      }
+      if (!activeTenant && !urlTenant && !user?.tenantId) {
+        router.replace("/super-admin")
+        return
+      }
     }
   }, [isExempt, status, user, router])
 
@@ -72,8 +79,14 @@ export default function AuthGuard({ children }) {
     )
   }
 
-  // If unauthenticated or Super Admin redirecting, hold rendering to prevent UI flash
-  if (status === "unauthenticated" || (status === "authenticated" && user?.role === "super_admin")) {
+  // If unauthenticated or Super Admin without active tenant redirecting, hold rendering to prevent UI flash
+  const hasSuperAdminTenant = Boolean(
+    typeof window !== "undefined" &&
+    (localStorage.getItem("leadflow_active_tenant") ||
+     new URLSearchParams(window.location.search).get("tenant") ||
+     user?.tenantId)
+  )
+  if (status === "unauthenticated" || (status === "authenticated" && user?.role === "super_admin" && !hasSuperAdminTenant)) {
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center bg-slate-50 text-slate-600">
         <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />

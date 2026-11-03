@@ -20,8 +20,15 @@ export default function PortalLayout({ children }) {
     }
 
     if (status === "authenticated" && user?.role === "super_admin") {
-      router.replace("/super-admin")
-      return
+      const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
+      const urlTenant = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tenant") : null
+      if (urlTenant && typeof window !== "undefined") {
+        localStorage.setItem("leadflow_active_tenant", urlTenant)
+      }
+      if (!activeTenant && !urlTenant && !user?.tenantId) {
+        router.replace("/super-admin")
+        return
+      }
     }
   }, [isLoginPage, status, user, router])
 
@@ -40,7 +47,13 @@ export default function PortalLayout({ children }) {
     )
   }
 
-  if (status === "unauthenticated" || (status === "authenticated" && user?.role === "super_admin")) {
+  const hasSuperAdminTenant = Boolean(
+    typeof window !== "undefined" &&
+    (localStorage.getItem("leadflow_active_tenant") ||
+     new URLSearchParams(window.location.search).get("tenant") ||
+     user?.tenantId)
+  )
+  if (status === "unauthenticated" || (status === "authenticated" && user?.role === "super_admin" && !hasSuperAdminTenant)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
