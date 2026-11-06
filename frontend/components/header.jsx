@@ -43,6 +43,7 @@ import {
   Menu,
   X,
   Plus,
+  Building2,
 } from "lucide-react"
 
 // Complete Six-Category CRM Navigation Structure (All 26 child items preserved)
@@ -274,6 +275,13 @@ const NAV_CATEGORIES = [
         href: "/settings/ai-knowledge",
         description: "Business profile, products & AI knowledge base",
         icon: Sparkles,
+      },
+      {
+        id: "settings-ai-receptionist",
+        label: "AI Receptionist & Telephony",
+        href: "/settings/ai-receptionist",
+        description: "Cloud telephony routing, virtual numbers & AI call answering",
+        icon: PhoneCall,
       },
     ],
   },

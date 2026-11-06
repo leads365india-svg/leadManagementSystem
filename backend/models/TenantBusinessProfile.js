@@ -14,6 +14,93 @@ const INDUSTRY_CATEGORIES = [
   "Other",
 ]
 
+const TELEPHONY_PROVIDERS = ["mock", "twilio", "exotel", "airtel_iq", "sip"]
+const TELEPHONY_CONNECTION_MODES = ["sim_forwarding", "cloud_number", "sip_pbx"]
+const TELEPHONY_ANSWER_MODES = ["unanswered_only"]
+const TELEPHONY_LANGUAGES = ["hindi", "english", "hinglish", "both"]
+const TELEPHONY_STATUSES = ["unconfigured", "active", "paused", "error"]
+
+const telephonyConfigSchema = new mongoose.Schema(
+  {
+    provider: {
+      type: String,
+      enum: TELEPHONY_PROVIDERS,
+      default: "mock",
+    },
+    connectionMode: {
+      type: String,
+      enum: TELEPHONY_CONNECTION_MODES,
+      default: "sim_forwarding",
+    },
+    businessPhoneNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    virtualNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    answerMode: {
+      type: String,
+      enum: TELEPHONY_ANSWER_MODES,
+      default: "unanswered_only",
+    },
+    noAnswerTimeoutSeconds: {
+      type: Number,
+      min: [10, "No-answer timeout must be at least 10 seconds"],
+      max: [60, "No-answer timeout cannot exceed 60 seconds"],
+      default: 20,
+    },
+    aiEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    aiLanguage: {
+      type: String,
+      enum: TELEPHONY_LANGUAGES,
+      default: "hinglish",
+    },
+    aiGreeting: {
+      type: String,
+      trim: true,
+      default: "Namaste, thank you for calling. How can I help you today?",
+    },
+    humanHandoverNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    recordingEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    status: {
+      type: String,
+      enum: TELEPHONY_STATUSES,
+      default: "unconfigured",
+    },
+    credentialsEncrypted: {
+      type: String,
+      default: null,
+    },
+    credentialsConfigured: {
+      type: Boolean,
+      default: false,
+    },
+    credentialsLastUpdated: {
+      type: Date,
+      default: null,
+    },
+    credentialsMasked: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
+    },
+  },
+  { _id: false }
+)
+
 const tenantBusinessProfileSchema = new mongoose.Schema(
   {
     tenantId: {
@@ -85,6 +172,10 @@ const tenantBusinessProfileSchema = new mongoose.Schema(
       default: "active",
       index: true,
     },
+    telephonyConfig: {
+      type: telephonyConfigSchema,
+      default: () => ({}),
+    },
   },
   {
     timestamps: true,
@@ -99,5 +190,9 @@ const TenantBusinessProfile = mongoose.model("TenantBusinessProfile", tenantBusi
 module.exports = {
   TenantBusinessProfile,
   INDUSTRY_CATEGORIES,
+  TELEPHONY_PROVIDERS,
+  TELEPHONY_CONNECTION_MODES,
+  TELEPHONY_ANSWER_MODES,
+  TELEPHONY_LANGUAGES,
+  TELEPHONY_STATUSES,
 }
-

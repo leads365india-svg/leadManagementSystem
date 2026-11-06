@@ -194,7 +194,9 @@ const reportMobileCall = async (req, res) => {
         }).lean()
       : null
 
-    const tenantAutoLeadEnabled = Boolean(tenantAccount?.metadata?.autoLeadCaptureEnabled)
+    const tenantAutoLeadEnabled = tenantAccount?.metadata?.autoLeadCaptureEnabled !== undefined
+      ? Boolean(tenantAccount.metadata.autoLeadCaptureEnabled)
+      : (tenantAccount ? true : false)
     const validDurations = [5, 10, 15, 30]
     const configuredMinDuration = validDurations.includes(Number(tenantAccount?.metadata?.autoLeadMinDurationSeconds))
       ? Number(tenantAccount.metadata.autoLeadMinDurationSeconds)
@@ -452,8 +454,37 @@ const reportMobileCall = async (req, res) => {
     const syncLeadState = async (targetLead) => {
       if (!targetLead) return
       const validCrmStatuses = ["New", "Engaged", "Proposal Sent", "Closed-Won", "Closed-Lost"]
+      const oldStatus = targetLead.status
       if (call_outcome && validCrmStatuses.includes(call_outcome)) {
-        targetLead.status = call_outcome
+        if (call_outcome !== oldStatus) {
+          targetLead.status = call_outcome
+          const historyEntry = {
+            fromStatus: oldStatus,
+            toStatus: call_outcome,
+            transitionedAt: new Date(),
+            transitionedBy: user?.name || user?.email || "Mobile Sync",
+            reason: `Mobile Call Outcome: ${call_outcome}`,
+          }
+          targetLead.metadata = targetLead.metadata || {}
+          targetLead.metadata.statusHistory = Array.isArray(targetLead.metadata.statusHistory)
+            ? [...targetLead.metadata.statusHistory, historyEntry]
+            : [historyEntry]
+
+          try {
+            const { activity } = require("../services/activityService")
+            activity.record({
+              tenantId: targetLead.tenantId,
+              leadId: targetLead._id,
+              type: "lead.status_changed",
+              actor: user || { name: "Mobile App", role: "mobile_agent" },
+              payload: {
+                fromStatus: oldStatus,
+                toStatus: call_outcome,
+                reason: `Mobile Call Outcome: ${call_outcome}`,
+              },
+            }).catch(() => {})
+          } catch (_) {}
+        }
       }
       targetLead.metadata = targetLead.metadata || {}
       targetLead.metadata.lastCallOutcome = call_outcome || "Connected"
@@ -670,14 +701,21 @@ const getMobileCalls = async (req, res) => {
       .limit(50)
       .lean()
 
-    const formattedCalls = calls.map((c) => ({
+    const formattedCalls = calls.map((c) => {
+      const isCloud = c.source === "ai_receptionist" || Boolean(c.metadata?.aiReceptionist)
+      const isRecReady = Boolean(c.hasRecording || (c.recording && (c.recording.status === "ready" || c.recording.status === "stored")))
+      return ({
       ...c,
       id: c._id.toString(),
       clientCallId: c.clientCallId || c._id.toString(),
       callOutcome: c.callOutcome || c.disposition || "Connected",
       outcome: c.callOutcome || c.disposition || "Connected",
-      hasRecording: Boolean(c.hasRecording || (c.recording && (c.recording.status === "ready" || c.recording.status === "stored"))),
-    }))
+      hasRecording: isRecReady,
+      recordingOrigin: isCloud ? "ai_receptionist" : "sim_call",
+      isCloudRecording: isCloud,
+      recordingReady: isRecReady,
+      remoteRecordingUrl: isRecReady ? `/api/mobile/v1/calls/${c._id}/recording` : null,
+    })})
 
     return res.status(200).json({
       success: true,
@@ -1406,7 +1444,7 @@ const getMobilePolicy = async (req, res) => {
       "In compliance with telecom regulations and agency policy, calls with assigned leads may be recorded for quality and training purposes. Calls with non-lead contacts and Do-Not-Record (DNR) designated leads are never recorded or uploaded."
     let allowRecordingPause = true
     let enforceStrictDnr = true
-    let autoLeadCaptureEnabled = false
+    let autoLeadCaptureEnabled = true
     let autoLeadMinDurationSeconds = 10
 
     if (user.tenantId) {

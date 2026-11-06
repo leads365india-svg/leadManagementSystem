@@ -33,6 +33,7 @@ const aiKnowledgeRoutes = require("./routes/aiKnowledgeRoutes")
 const aiKeywordRoutes = require("./routes/aiKeywordRoutes")
 const aiCallRoutes = require("./routes/aiCallRoutes")
 const aiSalesIntelligenceRoutes = require("./routes/aiSalesIntelligenceRoutes")
+const telephonyRoutes = require("./routes/telephonyRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
@@ -248,6 +249,7 @@ app.use("/api/ai-knowledge", aiKnowledgeRoutes)
 app.use("/api/ai-keywords", aiKeywordRoutes)
 app.use("/api/ai-calls", aiCallRoutes)
 app.use("/api/ai-sales-intelligence", aiSalesIntelligenceRoutes)
+app.use("/api/telephony", telephonyRoutes)
 
 // Secure Call Recording Streaming & Playback endpoints (Phase 8 + Final Integration)
 const {
@@ -306,6 +308,18 @@ const setupGracefulShutdown = (httpServer) => {
         }
       } catch (_e) {}
 
+      // 0.4 Shutdown Gemini Live sessions
+      try {
+        const { geminiLiveManager } = require("./services/telephony/geminiLiveClient.service")
+        geminiLiveManager.closeAll()
+      } catch (_e) {}
+
+      // 0.5 Shutdown Voice Gateway active streams
+      try {
+        const { voiceGateway } = require("./services/telephony/voiceGateway.service")
+        await voiceGateway.shutdown()
+      } catch (_e) {}
+
       // 1. Stop accepting new HTTP requests
       if (httpServer && httpServer.close) {
         await new Promise((resolve) => {
@@ -358,6 +372,14 @@ const startServer = async () => {
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server is running on port ${PORT}`)
       console.log(`Environment: ${process.env.NODE_ENV || "development"}`)
+      try {
+        const { voiceGateway } = require("./services/telephony/voiceGateway.service")
+        voiceGateway.attach(server)
+        const { geminiLiveManager } = require("./services/telephony/geminiLiveClient.service")
+        geminiLiveManager.attachToVoiceGateway(voiceGateway)
+      } catch (vgErr) {
+        console.error("⚠️ Failed to attach Voice Gateway:", vgErr.message)
+      }
     })
 
     server.on("error", (err) => {
@@ -379,6 +401,14 @@ const startServer = async () => {
       console.warn("⚠️ Starting HTTP server in degraded mode for development debugging...")
       server = app.listen(PORT, "0.0.0.0", () => {
         console.log(`Server is running in degraded mode on port ${PORT}`)
+        try {
+          const { voiceGateway } = require("./services/telephony/voiceGateway.service")
+          voiceGateway.attach(server)
+          const { geminiLiveManager } = require("./services/telephony/geminiLiveClient.service")
+          geminiLiveManager.attachToVoiceGateway(voiceGateway)
+        } catch (vgErr) {
+          console.error("⚠️ Failed to attach Voice Gateway in degraded mode:", vgErr.message)
+        }
       })
       setupGracefulShutdown(server)
     }
@@ -393,3 +423,5 @@ module.exports = app
 module.exports.webhookCors = webhookCors
 module.exports.startServer = startServer
 module.exports.setupGracefulShutdown = setupGracefulShutdown
+module.exports.voiceGateway = require("./services/telephony/voiceGateway.service").voiceGateway
+module.exports.geminiLiveManager = require("./services/telephony/geminiLiveClient.service").geminiLiveManager

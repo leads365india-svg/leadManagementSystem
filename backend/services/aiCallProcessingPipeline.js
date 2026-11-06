@@ -318,6 +318,24 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     call.markModified("metadata")
     await call.save().catch(() => {})
 
+    // Automatic CRM Lead Pipeline Status Synchronization
+    let syncResult = null
+    try {
+      const { syncLeadPipelineStatusFromAiCall } = require("./leadPipelineSync.service")
+      syncResult = await syncLeadPipelineStatusFromAiCall({
+        call,
+        analysis,
+        tenantId,
+        actor: { name: "AI Call Intelligence", role: "system" },
+      })
+      if (syncResult?.linkedLeadId && (!call.leadId || String(call.leadId._id || call.leadId) !== String(syncResult.linkedLeadId))) {
+        call.leadId = syncResult.linkedLeadId
+        await call.save().catch(() => {})
+      }
+    } catch (syncErr) {
+      console.warn(`[AIPipeline] Lead pipeline status sync notice for call ${callId}:`, sanitizeErrorMessage(syncErr.message))
+    }
+
     // 5. Audit Logging
     if (audit && typeof audit.log === "function") {
       await audit.log({
@@ -363,6 +381,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       sentiment: analysis.sentiment,
       matchedTopicsCount: matchedTopics.length,
       durationMs: Date.now() - startTime,
+      syncResult,
     }
   } catch (analysisErr) {
     const sanitized = sanitizeErrorMessage(analysisErr.message)

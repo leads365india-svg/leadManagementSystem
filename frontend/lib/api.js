@@ -1318,6 +1318,19 @@ class ApiClient {
       method: "PATCH",
     })
   }
+
+  // --- Telephony & AI Receptionist Endpoints (Phase 1) ---
+  async getTelephonyConfig() {
+    return this.request("/telephony/config")
+  }
+
+  async updateTelephonyConfig(payload = {}) {
+    return this.request("/telephony/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
 }
 
 export const apiClient = new ApiClient()
