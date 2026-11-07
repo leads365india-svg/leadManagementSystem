@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useAuth } from "@/lib/auth-context"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import {
@@ -31,6 +33,8 @@ import {
 } from "lucide-react"
 
 export default function SuperAdminDashboardPage() {
+  const router = useRouter()
+  const { setActiveTenant, checkAuth } = useAuth()
   const [stats, setStats] = useState({
     totalAccounts: 0,
     activeAccounts: 0,
@@ -68,16 +72,43 @@ export default function SuperAdminDashboardPage() {
 
   // Add Account Form Data
   const handleAccessTenant = async (account) => {
+    if (!account || !account.accountId) {
+      toast.error("Invalid account selected.")
+      return
+    }
+
+    if (account.status === "suspended") {
+      toast.error(`Cannot access CRM: Account '${account.companyName}' (${account.accountId}) is suspended.`)
+      return
+    }
+
+    const toastId = toast.loading(`Switching to ${account.companyName}...`)
     try {
+      const switchRes = await apiClient.switchTenant(account.accountId)
+      if (!switchRes || !switchRes.success) {
+        throw new Error(switchRes?.error || "Failed to switch tenant context")
+      }
+
       if (typeof window !== "undefined") {
         localStorage.setItem("leadflow_active_tenant", account.accountId)
       }
-      await apiClient.switchTenant(account.accountId).catch(() => {})
+      if (typeof setActiveTenant === "function") {
+        setActiveTenant(account.accountId)
+      }
+      if (typeof checkAuth === "function") {
+        await checkAuth()
+      }
+
+      toast.dismiss(toastId)
       toast.success(`Accessing CRM for ${account.companyName} (${account.accountId})`)
-      router.push(`/portal?tenant=${account.accountId}`)
+      router.push(`/portal?tenant=${encodeURIComponent(account.accountId)}`)
     } catch (err) {
+      toast.dismiss(toastId)
       console.error("Failed to access tenant CRM:", err)
-      router.push(`/portal?tenant=${account.accountId}`)
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("leadflow_active_tenant")
+      }
+      toast.error(err.message || "Failed to access tenant CRM. Please try again.")
     }
   }
 

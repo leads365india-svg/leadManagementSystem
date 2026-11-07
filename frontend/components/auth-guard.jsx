@@ -50,10 +50,21 @@ export default function AuthGuard({ children }) {
     if (status === "authenticated" && user?.role === "super_admin") {
       const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
       const urlTenant = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tenant") : null
+      const effectiveTenant = activeTenant || urlTenant || user?.tenantId
+
       if (urlTenant && typeof window !== "undefined") {
         localStorage.setItem("leadflow_active_tenant", urlTenant)
       }
-      if (!activeTenant && !urlTenant && !user?.tenantId) {
+
+      if (!effectiveTenant) {
+        router.replace("/super-admin")
+        return
+      }
+
+      if (user?.account && user.account.status === "suspended") {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("leadflow_active_tenant")
+        }
         router.replace("/super-admin")
         return
       }
@@ -84,7 +95,8 @@ export default function AuthGuard({ children }) {
     typeof window !== "undefined" &&
     (localStorage.getItem("leadflow_active_tenant") ||
      new URLSearchParams(window.location.search).get("tenant") ||
-     user?.tenantId)
+     user?.tenantId) &&
+    (!user?.account || user.account.status !== "suspended")
   )
   if (status === "unauthenticated" || (status === "authenticated" && user?.role === "super_admin" && !hasSuperAdminTenant)) {
     return (

@@ -124,6 +124,11 @@ const login = async (req, res) => {
     if (user.role === "super_admin") {
       res.cookie("superadmin_token", token, cookieOptions)
       res.clearCookie("client_token", clearOptions)
+    res.clearCookie("active_tenant_id", {
+      path: "/",
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction,
+    })
     } else {
       res.cookie("client_token", token, cookieOptions)
       // Clear any prior Super Admin session to prevent identity leakage
@@ -209,6 +214,11 @@ const logout = async (req, res) => {
     }
     res.clearCookie("superadmin_token", clearOptions)
     res.clearCookie("client_token", clearOptions)
+    res.clearCookie("active_tenant_id", {
+      path: "/",
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction,
+    })
 
     res.status(200).json({
       success: true,
@@ -278,8 +288,8 @@ const getMe = async (req, res) => {
       data: {
         user: {
           ...req.user,
-          tenantId: effectiveTenantId || req.user.tenantId || null,
-          effectiveTenantId: effectiveTenantId || null,
+          tenantId: req.user.role === "super_admin" ? (accountData ? accountData.accountId : null) : (req.user.tenantId || null),
+          effectiveTenantId: req.user.role === "super_admin" ? (accountData ? accountData.accountId : null) : (req.user.tenantId || null),
           roleTitle,
           account: accountData,
         },
@@ -488,6 +498,11 @@ const logoutAll = async (req, res) => {
     }
     res.clearCookie("superadmin_token", clearOptions)
     res.clearCookie("client_token", clearOptions)
+    res.clearCookie("active_tenant_id", {
+      path: "/",
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction,
+    })
 
     res.status(200).json({
       success: true,

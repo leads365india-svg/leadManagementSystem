@@ -5,6 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import {
   LayoutDashboard,
@@ -304,7 +305,7 @@ export default function Header() {
   useEffect(() => {
     setMounted(true)
   }, [])
-  const { user: authUser, logout } = useAuth()
+  const { user: authUser, logout, setActiveTenant, checkAuth } = useAuth()
   const user = authUser
 
   const dropdownTimeoutRef = useRef(null)
@@ -312,12 +313,23 @@ export default function Header() {
   const categoryButtonRefs = useRef({})
   const searchInputRef = useRef(null)
 
-  // Redirect Super Admin if they access Client CRM
-  useEffect(() => {
-    if (authUser?.role === "super_admin") {
-      router.replace("/super-admin")
-    }
-  }, [authUser, router])
+  // Explicit action to exit active tenant and return to Super Admin Console
+  const handleExitTenantContext = async () => {
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("leadflow_active_tenant")
+      }
+      await apiClient.switchTenant(null).catch(() => {})
+      if (typeof setActiveTenant === "function") {
+        setActiveTenant(null)
+      }
+      if (typeof checkAuth === "function") {
+        await checkAuth()
+      }
+      toast.success("Returned to Super Admin Console")
+    } catch (_) {}
+    router.push("/super-admin")
+  }
 
 
   // Fullscreen change listener
@@ -701,13 +713,14 @@ export default function Header() {
                 <span className="text-slate-800 font-semibold truncate max-w-[140px]" title={companyName}>
                   {companyName || user?.tenantId || "Tenant"}
                 </span>
-                <Link
-                  href="/super-admin"
-                  className="text-indigo-600 hover:text-indigo-900 font-bold ml-1 hover:underline text-[11px]"
+                <button
+                  type="button"
+                  onClick={handleExitTenantContext}
+                  className="text-indigo-600 hover:text-indigo-900 font-bold ml-1 hover:underline text-[11px] cursor-pointer"
                   title="Exit to Super Admin Console"
                 >
                   Console
-                </Link>
+                </button>
               </div>
             )}
 
@@ -761,14 +774,17 @@ export default function Header() {
 
                   <div className="py-1 text-xs text-slate-700">
                     {user?.role === "super_admin" && (
-                      <Link
-                        href="/super-admin"
-                        onClick={() => setUserDropdownOpen(false)}
-                        className="flex items-center space-x-2.5 px-4 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserDropdownOpen(false)
+                          handleExitTenantContext()
+                        }}
+                        className="w-full text-left flex items-center space-x-2.5 px-4 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100 cursor-pointer"
                       >
                         <Building2 className="w-3.5 h-3.5 text-indigo-600" />
                         <span>Super Admin Console</span>
-                      </Link>
+                      </button>
                     )}
                     <Link
                       href="/settings/staff"

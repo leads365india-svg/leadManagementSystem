@@ -172,10 +172,18 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       setLoadingScorecards(true)
       const res = await apiClient.listAgentScorecards()
       if (res && res.success) {
-        setScorecards(res.data || [])
+        const scorecardRows = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.scorecards)
+            ? res.data.scorecards
+            : []
+        setScorecards(scorecardRows)
+      } else {
+        setScorecards([])
       }
     } catch (err) {
       console.error("Error loading scorecards", err)
+      setScorecards([])
     } finally {
       setLoadingScorecards(false)
     }
@@ -188,10 +196,18 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       if (priorityFilter !== "ALL") q.priority = priorityFilter
       const res = await apiClient.listLeadPriorities(q)
       if (res && res.success) {
-        setLeadPriorities(res.data || [])
+        const priorityRows = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.priorities)
+            ? res.data.priorities
+            : []
+        setLeadPriorities(priorityRows)
+      } else {
+        setLeadPriorities([])
       }
     } catch (err) {
       console.error("Error loading lead priorities", err)
+      setLeadPriorities([])
     } finally {
       setLoadingPriorities(false)
     }
@@ -205,10 +221,18 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       if (recPriorityFilter !== "ALL") q.priority = recPriorityFilter
       const res = await apiClient.listManagerRecommendations(q)
       if (res && res.success) {
-        setRecommendations(res.data || [])
+        const recRows = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.recommendations)
+            ? res.data.recommendations
+            : []
+        setRecommendations(recRows)
+      } else {
+        setRecommendations([])
       }
     } catch (err) {
       console.error("Error loading manager recommendations", err)
+      setRecommendations([])
     } finally {
       setLoadingRecs(false)
     }
@@ -219,10 +243,18 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       setLoadingReviews(true)
       const res = await apiClient.listCoachingReviews()
       if (res && res.success) {
-        setCoachingReviews(res.data || [])
+        const reviewRows = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.reviews)
+            ? res.data.reviews
+            : []
+        setCoachingReviews(reviewRows)
+      } else {
+        setCoachingReviews([])
       }
     } catch (err) {
       console.error("Error loading coaching reviews", err)
+      setCoachingReviews([])
     } finally {
       setLoadingReviews(false)
     }
@@ -1062,7 +1094,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
 
             {loadingScorecards ? (
               <div className="p-12 text-center text-slate-400">Loading agent scorecards...</div>
-            ) : scorecards.length === 0 ? (
+            ) : !Array.isArray(scorecards) || scorecards.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
                 <Users className="w-10 h-10 text-slate-300 mx-auto mb-3" />
                 <h3 className="text-sm font-bold text-slate-800">No Agent Scorecards Yet</h3>
@@ -1703,13 +1735,13 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
                   required
                   value={selectedAgentForReview?._id || ""}
                   onChange={(e) => {
-                    const ag = scorecards.find((c) => (c.agentId?._id || c.agentId) === e.target.value)
+                    const ag = Array.isArray(scorecards) ? scorecards.find((c) => (c.agentId?._id || c.agentId) === e.target.value) : null
                     setSelectedAgentForReview(ag?.agentId || { _id: e.target.value })
                   }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white"
                 >
                   <option value="">Select an agent</option>
-                  {scorecards.map((c) => (
+                  {Array.isArray(scorecards) && scorecards.map((c) => (
                     <option key={c._id} value={c.agentId?._id || c.agentId}>
                       {c.agentId?.name || c.agentId?.email || "Agent"} ({c.sampleSize} calls)
                     </option>

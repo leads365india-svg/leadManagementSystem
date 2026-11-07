@@ -42,9 +42,37 @@ export function AuthProvider({ children }) {
       setStatus("loading")
       const response = await apiClient.getMe()
       if (response.success && response.data?.user) {
-        setUser(response.data.user)
+        const userData = response.data.user
+
+        // Validate active tenant context for Super Admin sessions
+        if (userData.role === "super_admin") {
+          const storedTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
+          if (storedTenant) {
+            if (!userData.account) {
+              console.warn(`Active tenant '${storedTenant}' not found on backend. Clearing invalid tenant context.`)
+              if (typeof window !== "undefined") {
+                localStorage.removeItem("leadflow_active_tenant")
+              }
+              setActiveTenantState(null)
+              apiClient.switchTenant(null).catch(() => {})
+              toast.error("The selected tenant account was not found or is no longer accessible.")
+            } else if (userData.account.status === "suspended") {
+              console.warn(`Active tenant '${userData.account.companyName}' is suspended. Clearing tenant context.`)
+              if (typeof window !== "undefined") {
+                localStorage.removeItem("leadflow_active_tenant")
+              }
+              setActiveTenantState(null)
+              apiClient.switchTenant(null).catch(() => {})
+              toast.error(`Tenant account '${userData.account.companyName}' is suspended.`)
+            } else {
+              setActiveTenantState(userData.account.accountId || storedTenant)
+            }
+          }
+        }
+
+        setUser(userData)
         setStatus("authenticated")
-        return response.data.user
+        return userData
       } else {
         setUser(null)
         setStatus("unauthenticated")
@@ -95,6 +123,7 @@ export function AuthProvider({ children }) {
     const roleAtLogout = user?.role
     try {
       await apiClient.logout()
+      await apiClient.switchTenant(null).catch(() => {})
       toast.success("Signed out successfully")
     } catch (err) {
       console.error("Logout error:", err)
