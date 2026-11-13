@@ -129,12 +129,115 @@ export default function LeadDetailDrawer({
     }
   }, [isOpen])
 
-  // Extract custom fields from lead metadata
-  const customFieldEntries = useMemo(() => {
-    const raw = lead?.metadata?.customFields
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return []
-    return Object.entries(raw).filter(([_, val]) => val !== undefined && val !== null && val !== "")
-  }, [lead?.metadata?.customFields])
+  // Universal Dynamic Custom Fields Extractor
+  // Handles:
+  // 1. Modern structured array in lead.customFields or lead.metadata.customFields
+  // 2. Legacy key-value object in lead.metadata.customFields
+  // 3. Omits empty/missing fields
+  // 4. Preserves labels, order, and data types (arrays, booleans, dropdowns, numbers, text)
+  const normalizedCustomFields = useMemo(() => {
+    // 1. Check for structured array in lead.customFields or lead.metadata.customFields
+    const arraySource =
+      Array.isArray(lead?.customFields) && lead.customFields.length > 0
+        ? lead.customFields
+        : Array.isArray(lead?.metadata?.customFields) && lead.metadata.customFields.length > 0
+        ? lead.metadata.customFields
+        : null
+
+    if (arraySource) {
+      return arraySource
+        .filter((f) => {
+          if (!f || typeof f !== "object") return false
+          const val = f.value
+          if (val === undefined || val === null || val === "") return false
+          if (Array.isArray(val) && val.length === 0) return false
+          const keyLower = String(f.key || "").toLowerCase()
+          if (
+            keyLower.includes("password") ||
+            keyLower.includes("captcha") ||
+            keyLower.startsWith("_hp") ||
+            keyLower.includes("token")
+          ) {
+            return false
+          }
+          return true
+        })
+        .map((f, idx) => {
+          const key = f.key || `field_${idx}`
+          const def = customFieldDefinitions[key.toLowerCase()]
+          const label =
+            f.label ||
+            def?.label ||
+            key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+          let type = f.type || def?.type
+          if (!type) {
+            if (Array.isArray(f.value)) type = "checkbox"
+            else if (typeof f.value === "boolean") type = "checkbox"
+            else if (typeof f.value === "number") type = "number"
+            else if (typeof f.value === "string" && f.value.includes("\n")) type = "textarea"
+            else type = "text"
+          }
+          return {
+            key,
+            label,
+            value: f.value,
+            type,
+            order:
+              typeof f.order === "number"
+                ? f.order
+                : def?.order !== undefined
+                ? def.order
+                : idx + 1,
+          }
+        })
+        .sort((a, b) => a.order - b.order)
+    }
+
+    // 2. Fallback: Legacy plain key-value object in lead.metadata.customFields
+    const rawObj = lead?.metadata?.customFields
+    if (rawObj && typeof rawObj === "object" && !Array.isArray(rawObj)) {
+      return Object.entries(rawObj)
+        .filter(([key, val]) => {
+          if (val === undefined || val === null || val === "") return false
+          if (Array.isArray(val) && val.length === 0) return false
+          const keyLower = key.toLowerCase()
+          if (
+            keyLower.includes("password") ||
+            keyLower.includes("captcha") ||
+            keyLower.startsWith("_hp") ||
+            keyLower.includes("token")
+          ) {
+            return false
+          }
+          return true
+        })
+        .map(([key, val], idx) => {
+          const def = customFieldDefinitions[key.toLowerCase()]
+          const label =
+            def?.label || key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+          let type = def?.type
+          if (!type) {
+            if (Array.isArray(val)) type = "checkbox"
+            else if (typeof val === "boolean") type = "checkbox"
+            else if (typeof val === "number") type = "number"
+            else if (typeof val === "string" && val.includes("\n")) type = "textarea"
+            else type = "text"
+          }
+          return {
+            key,
+            label,
+            value: val,
+            type,
+            order: def?.order !== undefined ? def.order : idx + 1,
+          }
+        })
+        .sort((a, b) => a.order - b.order)
+    }
+
+    return []
+  }, [lead?.customFields, lead?.metadata?.customFields, customFieldDefinitions])
+
+  const customFieldEntries = normalizedCustomFields
 
   const onLeadUpdatedRef = useRef(onLeadUpdated)
   useEffect(() => {
@@ -1346,6 +1449,14 @@ export default function LeadDetailDrawer({
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono">
                     <div>
+                      <span className="text-slate-400 block text-[11px]">Full Name</span>
+                      <span className="font-semibold text-slate-800">{lead?.name || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[11px]">Email Address</span>
+                      <span className="font-semibold text-slate-800">{lead?.email || "—"}</span>
+                    </div>
+                    <div>
                       <span className="text-slate-400 block text-[11px]">Primary Phone</span>
                       <span className="font-semibold text-slate-800">{lead?.phone || "—"}</span>
                     </div>
@@ -1358,72 +1469,141 @@ export default function LeadDetailDrawer({
                       <span className="font-semibold text-slate-800">{lead?.alternatePhone || "—"}</span>
                     </div>
                     <div>
+                      <span className="text-slate-400 block text-[11px]">Company / Organization</span>
+                      <span className="font-semibold text-slate-800">{lead?.company || lead?.metadata?.company || "—"}</span>
+                    </div>
+                    <div>
                       <span className="text-slate-400 block text-[11px]">City / Location</span>
                       <span className="font-semibold text-slate-800">{lead?.city || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[11px]">Assigned Staff</span>
+                      <span className="font-semibold text-slate-800">{lead?.assignedTo || "Unassigned"}</span>
+                    </div>
+                    {lead?.message && (
+                      <div className="col-span-1 sm:col-span-2 pt-2 border-t border-slate-200/80">
+                        <span className="text-slate-400 block text-[11px] mb-1">Message / Inquiry</span>
+                        <p className="font-sans text-xs text-slate-800 whitespace-pre-wrap break-words leading-relaxed bg-white p-2.5 rounded-lg border border-slate-200">
+                          {lead.message}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 1.2 Submitted Website Form Details Card */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Website Form Details</span>
+                    </h4>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {lead?.metadata?.receivedVia || "website_form"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-[11px]">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Form Identifier</span>
+                      <span className="font-semibold text-slate-800">{lead?.formId || "website_form"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Lead Source</span>
+                      <span className="font-semibold text-slate-800">{lead?.source || "Website"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Landing Page URL</span>
+                      <span className="text-slate-800 break-all block">{lead?.landingPage || lead?.attribution?.firstTouch?.landingPage || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Referrer</span>
+                      <span className="text-slate-800 break-all block">{lead?.attribution?.firstTouch?.referrer || lead?.metadata?.referrer || "Direct / None"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Submission Timestamp</span>
+                      <span className="text-slate-800">{lead?.createdAt ? new Date(lead.createdAt).toLocaleString() : "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Verification Status</span>
+                      <span className={lead?.isEmailVerified ? "text-emerald-700 font-semibold" : "text-slate-600"}>
+                        {lead?.verificationStatus || (lead?.isEmailVerified ? "Verified" : "Unverified")}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* 1.5 Custom Lead Attributes Card (Phase 5) */}
+                {/* 1.5 Custom Lead Attributes & Dynamic Form Fields */}
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
                       <Sliders className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Custom Lead Attributes</span>
+                      <span>Custom Form Fields</span>
                     </h4>
                     <span className="text-[10px] text-slate-400 font-mono">
-                      {customFieldEntries.length} recorded
+                      {normalizedCustomFields.length} {normalizedCustomFields.length === 1 ? "field" : "fields"} recorded
                     </span>
                   </div>
 
-                  {customFieldEntries.length > 0 ? (
+                  {normalizedCustomFields.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {customFieldEntries.map(([key, value]) => {
-                        const def = customFieldDefinitions[key.toLowerCase()]
-                        const label = def?.label || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-                        const type = def?.type || (typeof value === "boolean" ? "checkbox" : "text")
-                        const isDeleted = !def && key
+                      {normalizedCustomFields.map((field) => {
+                        const isArray = Array.isArray(field.value)
+                        const isBool = typeof field.value === "boolean"
+                        const isMultiline = typeof field.value === "string" && (field.value.includes("\n") || field.value.length > 80)
 
                         return (
                           <div
-                            key={key}
-                            className="p-2.5 bg-white rounded-lg border border-slate-200 shadow-2xs space-y-1"
+                            key={field.key}
+                            className={`p-3 bg-white rounded-lg border border-slate-200 shadow-2xs space-y-1.5 ${
+                              isMultiline ? "sm:col-span-2" : ""
+                            }`}
                           >
                             <div className="flex items-center justify-between text-[11px]">
-                              <span className="font-semibold text-slate-700 truncate">{label}</span>
-                              <span className="font-mono text-[9px] text-slate-400">
-                                {def?.type || (isDeleted ? "custom" : "attribute")}
+                              <span className="font-semibold text-slate-700 truncate">{field.label}</span>
+                              <span className="font-mono text-[9px] uppercase px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">
+                                {field.type}
                               </span>
                             </div>
 
-                            {/* Format according to field type */}
+                            {/* Format safely according to field type */}
                             <div className="text-xs text-slate-900 font-medium">
-                              {type === "checkbox" || typeof value === "boolean" ? (
+                              {isArray ? (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {field.value.map((item, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-100"
+                                    >
+                                      {String(item)}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : isBool || field.type === "checkbox" ? (
                                 <span
                                   className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    value === true || String(value).toLowerCase() === "true"
+                                    field.value === true || String(field.value).toLowerCase() === "true"
                                       ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                       : "bg-slate-100 text-slate-600 border border-slate-200"
                                   }`}
                                 >
-                                  {value === true || String(value).toLowerCase() === "true" ? "Yes" : "No"}
+                                  {field.value === true || String(field.value).toLowerCase() === "true" ? "Yes" : "No"}
                                 </span>
-                              ) : type === "date" ? (
+                              ) : field.type === "date" ? (
                                 <span className="font-mono text-slate-800">
-                                  {isNaN(Date.parse(value)) ? String(value) : new Date(value).toLocaleDateString()}
+                                  {isNaN(Date.parse(field.value)) ? String(field.value) : new Date(field.value).toLocaleDateString()}
                                 </span>
-                              ) : type === "dropdown" ? (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
-                                  {String(value)}
+                              ) : field.type === "select" || field.type === "dropdown" ? (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-100">
+                                  {String(field.value)}
                                 </span>
-                              ) : type === "number" ? (
+                              ) : field.type === "number" ? (
                                 <span className="font-mono font-bold text-slate-800">
-                                  {String(value)}
+                                  {String(field.value)}
                                 </span>
                               ) : (
-                                <span className="text-slate-800 break-words leading-relaxed">
-                                  {String(value)}
-                                </span>
+                                <p className="text-slate-800 break-words whitespace-pre-wrap leading-relaxed">
+                                  {String(field.value)}
+                                </p>
                               )}
                             </div>
                           </div>
@@ -1432,7 +1612,7 @@ export default function LeadDetailDrawer({
                     </div>
                   ) : (
                     <div className="p-3 bg-white rounded-lg border border-dashed border-slate-200 text-center text-slate-400 text-[11px] italic">
-                      No custom attributes recorded for this lead record.
+                      No custom form fields recorded for this lead record.
                     </div>
                   )}
                 </div>

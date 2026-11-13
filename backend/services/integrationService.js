@@ -12,6 +12,7 @@ const audit = require("./auditService")
 const { hashApiKey } = require("../utils/cryptoUtils")
 const { runWithTenantContext } = require("../middleware/tenantContext")
 const { normalizeOrigin, validateOrigin } = require("../utils/originValidator")
+const { normalizeCustomFields } = require("../utils/customFieldNormalizer")
 const {
   claimIdempotency,
   completeIdempotency,
@@ -701,13 +702,28 @@ async function processIntakePayload({
       body.fullName ||
       body.full_name ||
       body.contactName ||
+      body.contact_name ||
+      (body.firstName && body.lastName ? `${body.firstName} ${body.lastName}` : "") ||
+      (body.first_name && body.last_name ? `${body.first_name} ${body.last_name}` : "") ||
+      body.firstName ||
+      body.first_name ||
       "Website Lead"
     ).slice(0, 100).trim()
-    let rawEmail = (body.email || body.emailAddress || body.email_address || "").toLowerCase().trim()
+    let rawEmail = (body.email || body.emailAddress || body.email_address || body.workEmail || body.work_email || "").toLowerCase().trim()
     let rawPhone = (body.phone || body.phoneNumber || body.phone_number || body.tel || body.mobile || "").trim()
-    let message = (body.message || body.notes || body.comment || body.inquiry || "").slice(0, 2000).trim()
+    let message = (body.message || body.notes || body.comment || body.inquiry || body.enquiry || "").slice(0, 2000).trim()
     let formId = (body.formId || body.form_id || body.formName || body.form_name || "").slice(0, 100).trim()
-    let company = (body.company || body.organization || body.company_name || "").slice(0, 150).trim()
+    let company = (
+      body.company ||
+      body.organization ||
+      body.company_name ||
+      body.organization_name ||
+      body.org_name ||
+      body.hospital_name ||
+      body.clinic_name ||
+      body.business_name ||
+      ""
+    ).slice(0, 150).trim()
     let landingPage = (
       body.landingPage ||
       body.landing_page ||
@@ -718,8 +734,8 @@ async function processIntakePayload({
     ).slice(0, 500).trim()
     const isTest = Boolean(body.isTest || body.is_test || query?.isTest === "true")
     const verificationToken = (body.verificationToken || body.token || body.verification_token || "").trim()
-    const customFields = {
-      ...(body.customFields && typeof body.customFields === "object" ? body.customFields : {}),
+    const mappedCustomFields = {
+      ...(body.customFields && typeof body.customFields === "object" && !Array.isArray(body.customFields) ? body.customFields : {}),
     }
 
     // Apply custom field mappings if configured
@@ -765,11 +781,19 @@ async function processIntakePayload({
             const cleanKey = map.targetField.startsWith("customFields.")
               ? map.targetField.slice(13)
               : map.targetField
-            customFields[cleanKey] = processedVal
+            mappedCustomFields[cleanKey] = processedVal
           }
         }
       }
     }
+
+    // Universal custom fields normalization and sanitization
+    const { customFields: finalCustomFields } = normalizeCustomFields({
+      body: { ...body, company: company || body.company },
+      rawCustomFields: Array.isArray(body.customFields)
+        ? body.customFields
+        : (Object.keys(mappedCustomFields).length > 0 ? mappedCustomFields : body.customFields),
+    })
 
     const normalizedSource = await normalizeSource(tenantId, rawSource)
     if (event) event.source = normalizedSource
@@ -999,9 +1023,11 @@ async function processIntakePayload({
           name,
           email: rawEmail,
           phone: normalizedPhone,
+          company,
           status: leadStatus,
           assignedTo,
           tenantId,
+          customFields: finalCustomFields,
         },
       }
     }
@@ -1017,7 +1043,7 @@ async function processIntakePayload({
         : null,
       integrationId: integration._id,
       websiteDomain: settings.websiteDomain || null,
-      customFields: Object.keys(customFields).length > 0 ? customFields : undefined,
+      customFields: finalCustomFields.length > 0 ? finalCustomFields : undefined,
     }
 
     const duplicateHandling = settings.duplicateHandling || "reject"
@@ -1037,6 +1063,7 @@ async function processIntakePayload({
         message,
         formId,
         landingPage,
+        customFields: finalCustomFields,
         isEmailVerified: isVerified,
         verificationStatus,
         isTest: false,

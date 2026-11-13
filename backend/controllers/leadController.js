@@ -742,6 +742,16 @@ const updateLead = async (req, res) => {
     if (req.body.lastContactedAt !== undefined) {
       updates.lastContactedAt = req.body.lastContactedAt ? new Date(req.body.lastContactedAt) : null
     }
+    if (req.body.customFields !== undefined) {
+      const { normalizeCustomFields } = require("../utils/customFieldNormalizer")
+      const { customFields: normCfs } = normalizeCustomFields({
+        body: {},
+        rawCustomFields: req.body.customFields,
+      })
+      updates.customFields = normCfs
+      const meta = getMetadataObject()
+      meta.customFields = normCfs
+    }
     if (req.body.metadata !== undefined && typeof req.body.metadata === "object" && req.body.metadata !== null) {
       const meta = getMetadataObject()
       Object.assign(meta, req.body.metadata)

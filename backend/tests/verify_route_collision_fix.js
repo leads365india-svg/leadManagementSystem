@@ -1,13 +1,16 @@
+process.env.NODE_ENV = 'test';
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const http = require('http');
+const app = require('../start');
 const { getJwtSecret } = require('../middleware/authMiddleware');
 const Device = require('../models/Device');
 const User = require('../models/User');
 
-const PORT = process.env.PORT || 5000;
-const BASE_URL = `http://localhost:${PORT}`;
+let PORT = process.env.PORT || 5000;
+let BASE_URL = `http://127.0.0.1:${PORT}`;
+let testServer = null;
 
 function makeRequest(method, path, body = null, token = null) {
   return new Promise((resolve, reject) => {
@@ -66,18 +69,75 @@ function generateToken(user) {
 
 async function runTests() {
   console.log('====================================================');
-  console.log('  TEST SUITE: /api/devices ROUTE COLLISION FIX TEST ');
+  console.log('  TEST SUITE: ROUTE COLLISION & INTEGRATION FIX TEST ');
   console.log('====================================================\n');
 
-  await mongoose.connect(process.env.MONGODB_URI);
-  console.log('Connected to MongoDB for test verification.\n');
+  // Check if an existing server is running on BASE_URL; if not, spin up an ephemeral test server
+  const isServerRunning = await new Promise((resolve) => {
+    const testReq = http.get(BASE_URL, () => resolve(true));
+    testReq.on('error', () => resolve(false));
+    testReq.setTimeout(1000, () => {
+      testReq.destroy();
+      resolve(false);
+    });
+  });
 
-  const tenantAUser = await User.findOne({ email: 'anil@test.com' });
-  const tenantBUser = await User.findOne({ email: 'sara@test.com' });
+  if (!isServerRunning) {
+    testServer = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => {
+        const boundPort = s.address().port;
+        BASE_URL = `http://127.0.0.1:${boundPort}`;
+        console.log(`Started ephemeral test server on ${BASE_URL}\n`);
+        resolve(s);
+      });
+    });
+  }
+
+  if (mongoose.connection.readyState === 0) {
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('Connected to MongoDB for test verification.\n');
+  }
+
+  let tenantAUser = await User.findOne({ email: 'anil@test.com' });
+  let tenantBUser = await User.findOne({ email: 'sara@test.com' });
 
   if (!tenantAUser || !tenantBUser) {
-    throw new Error('Required test users (anil@test.com, sara@test.com) not found');
+    const activeTenantUsers = await User.find({
+      tenantId: { $ne: null },
+      status: { $ne: 'suspended' },
+      isActive: { $ne: false },
+    }).limit(20);
+
+    if (activeTenantUsers.length >= 2) {
+      tenantAUser = tenantAUser || activeTenantUsers[0];
+      tenantBUser =
+        tenantBUser ||
+        activeTenantUsers.find((u) => u.tenantId && u.tenantId !== tenantAUser.tenantId) ||
+        activeTenantUsers[1];
+    }
   }
+
+  if (!tenantAUser || !tenantBUser) {
+    const mockAId = new mongoose.Types.ObjectId();
+    const mockBId = new mongoose.Types.ObjectId();
+    tenantAUser = tenantAUser || {
+      _id: mockAId,
+      email: 'mock_tenant_a@test.com',
+      role: 'account_admin',
+      tenantId: 'ACC-MOCK-A',
+      tokenVersion: 1,
+    };
+    tenantBUser = tenantBUser || {
+      _id: mockBId,
+      email: 'mock_tenant_b@test.com',
+      role: 'account_admin',
+      tenantId: 'ACC-MOCK-B',
+      tokenVersion: 1,
+    };
+  }
+
+  console.log(`Using Tenant A user: ${tenantAUser.email} (tenantId: ${tenantAUser.tenantId})`);
+  console.log(`Using Tenant B user: ${tenantBUser.email} (tenantId: ${tenantBUser.tenantId})\n`);
 
   const tokenA = generateToken(tenantAUser);
   const tokenB = generateToken(tenantBUser);
@@ -275,9 +335,49 @@ async function runTests() {
     JSON.stringify(callsRes.data).substring(0, 150)
   );
 
+  // 9. Integration snippet route collision test
+  console.log('\n9. Testing Universal Form SDK Snippet Route Collision (/api/integrations/snippet.js vs /:id)...');
+  const snippetRes = await makeRequest('GET', '/api/integrations/snippet.js');
+  assert(
+    snippetRes.status === 200,
+    'GET /api/integrations/snippet.js returns 200 OK (not swallowed or errored by /:id)',
+    `Status: ${snippetRes.status}`
+  );
+  assert(
+    snippetRes.headers['content-type'] && snippetRes.headers['content-type'].includes('application/javascript'),
+    'GET /api/integrations/snippet.js returns Content-Type application/javascript',
+    `Content-Type: ${snippetRes.headers['content-type']}`
+  );
+  assert(
+    snippetRes.headers['content-type'] && snippetRes.headers['content-type'].includes('charset=utf-8'),
+    'GET /api/integrations/snippet.js specifies charset=utf-8',
+    `Content-Type: ${snippetRes.headers['content-type']}`
+  );
+  assert(
+    snippetRes.raw && snippetRes.raw.includes('Leads365 Universal Form SDK'),
+    'GET /api/integrations/snippet.js body contains "Leads365 Universal Form SDK"',
+    `Snippet preview: ${snippetRes.raw?.substring(0, 100)}`
+  );
+  assert(
+    snippetRes.headers['access-control-allow-origin'] === '*',
+    'GET /api/integrations/snippet.js allows cross-origin requests (Access-Control-Allow-Origin: *)'
+  );
+
+  // Check aliases
+  const sdkRes = await makeRequest('GET', '/api/integrations/universal-sdk.js');
+  assert(
+    sdkRes.status === 200 && sdkRes.headers['content-type'].includes('application/javascript'),
+    'GET /api/integrations/universal-sdk.js alias returns 200 OK with application/javascript'
+  );
+
   console.log('\n====================================================');
   console.log(`  SUMMARY: ${testPassed} Passed, ${testFailed} Failed`);
   console.log('====================================================\n');
+
+  if (testServer) {
+    await new Promise((resolve) => testServer.close(resolve));
+    console.log('Closed ephemeral test server.');
+  }
 
   await mongoose.disconnect();
   process.exit(testFailed > 0 ? 1 : 0);

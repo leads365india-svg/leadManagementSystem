@@ -12,6 +12,7 @@ const integrationService = require("../services/integrationService")
 const audit = require("../services/auditService")
 const { generateApiKey, hashApiKey, maskSecret } = require("../utils/cryptoUtils")
 const { normalizeOrigin, validateOrigin } = require("../utils/originValidator")
+const { generateUniversalFormSdkScript } = require("../utils/universalFormSdk")
 
 // Helper: Generate secure API credential
 const generateIntegrationKey = () => {
@@ -566,128 +567,7 @@ const serveWebsiteSnippet = (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*")
   res.setHeader("Cache-Control", "public, max-age=3600")
 
-  const snippetCode = `(function() {
-  'use strict';
-  try {
-    var currentScript = document.currentScript || (function() {
-      var scripts = document.getElementsByTagName('script');
-      return scripts[scripts.length - 1];
-    })();
-    var siteKey = currentScript ? currentScript.getAttribute('data-site-key') : null;
-    var defaultEndpoint = (currentScript && currentScript.src)
-      ? currentScript.src.replace(/\\/snippet\\.js.*$/, '/leads/website')
-      : '/api/integrations/leads/website';
-    var customEndpoint = currentScript ? currentScript.getAttribute('data-endpoint') : null;
-    var endpoint = customEndpoint || defaultEndpoint;
-
-    if (!siteKey) {
-      console.warn('[Leads365] Missing data-site-key attribute on integration script tag.');
-      return;
-    }
-
-    function getQueryParams() {
-      var params = {};
-      try {
-        var search = window.location.search.substring(1);
-        if (search) {
-          var pairs = search.split('&');
-          for (var i = 0; i < pairs.length; i++) {
-            var pair = pairs[i].split('=');
-            if (pair.length === 2) {
-              params[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1].replace(/\\+/g, ' '));
-            }
-          }
-        }
-      } catch (e) {}
-      return params;
-    }
-
-    function captureLead(formData, formElement) {
-      var q = getQueryParams();
-      var payload = {
-        name: formData.name || formData.fullName || formData.full_name || formData['your-name'] || '',
-        email: formData.email || formData.emailAddress || formData.email_address || formData['your-email'] || '',
-        phone: formData.phone || formData.phoneNumber || formData.phone_number || formData.tel || formData['your-phone'] || '',
-        message: formData.message || formData.notes || formData.comment || formData['your-message'] || '',
-        formId: (formElement && (formElement.getAttribute('data-form-id') || formElement.id || formElement.name)) || 'website_form',
-        landingPage: window.location.href,
-        referrer: document.referrer || '',
-        utm_source: q.utm_source || '',
-        utm_medium: q.utm_medium || '',
-        utm_campaign: q.utm_campaign || '',
-        utm_term: q.utm_term || '',
-        utm_content: q.utm_content || '',
-        gclid: q.gclid || '',
-        fbclid: q.fbclid || ''
-      };
-
-      if (formData._hp_trap || formData.hp_field || formData._lead_hp) {
-        payload._hp_trap = formData._hp_trap || formData.hp_field || formData._lead_hp;
-      }
-
-      for (var key in formData) {
-        if (formData.hasOwnProperty(key) && !payload.hasOwnProperty(key)) {
-          payload[key] = formData[key];
-        }
-      }
-
-      fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-site-key': siteKey
-        },
-        body: JSON.stringify(payload),
-        keepalive: true
-      }).then(function(res) {
-        if (!res.ok) {
-          return res.json().then(function(err) {
-            console.warn('[Leads365] Lead submission warning:', err.error || res.statusText);
-          });
-        }
-      }).catch(function(err) {
-        console.warn('[Leads365] Lead transmission error:', err.message);
-      });
-    }
-
-    function initFormListener() {
-      document.addEventListener('submit', function(e) {
-        var form = e.target;
-        if (!form || form.tagName !== 'FORM') return;
-        var isTarget = form.hasAttribute('data-leads365-form') || form.classList.contains('leads365-form');
-        if (!isTarget) {
-          var hasContactField = form.querySelector('input[type="email"], input[type="tel"], input[name*="email"], input[name*="phone"]');
-          if (!hasContactField) return;
-        }
-
-        var data = {};
-        var elements = form.elements;
-        for (var i = 0; i < elements.length; i++) {
-          var el = elements[i];
-          if (!el.name || el.disabled || el.type === 'submit' || el.type === 'button' || el.type === 'password') continue;
-          if ((el.type === 'radio' || el.type === 'checkbox') && !el.checked) continue;
-          data[el.name] = el.value;
-        }
-
-        captureLead(data, form);
-      }, true);
-    }
-
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', initFormListener);
-    } else {
-      initFormListener();
-    }
-
-    window.Leads365 = window.Leads365 || {};
-    window.Leads365.capture = function(customData) {
-      captureLead(customData || {}, null);
-    };
-  } catch (err) {
-    console.warn('[Leads365] Snippet init failed:', err);
-  }
-})();`
-
+  const snippetCode = generateUniversalFormSdkScript()
   return res.send(snippetCode)
 }
 
@@ -1262,6 +1142,18 @@ const generatePlatformSnippets = ({ integration, baseUrl, rawApiKey = null }) =>
   const apiKey = rawApiKey || "lf_live_YOUR_PRIVATE_API_KEY"
   const integrationName = integration.name || "Leads-365 Website Integration"
 
+  // 0. Universal Dynamic Form SDK (Recommended)
+  const universal = {
+    title: "Universal Dynamic Website Form SDK (Recommended)",
+    description: "Load a single lightweight script on your website. Automatically captures any form with standard or custom fields without hardcoding.",
+    siteKey,
+    webhookUrl,
+    scriptTag: `<script \n  src="${baseUrl}/api/integrations/snippet.js" \n  data-site-key="${siteKey}" \n  async defer>\n</script>`,
+    instructions: `1. Place the snippet before the closing </body> tag of your website.\n2. Mark your lead forms with data-leads365-form or class="leads365-form" (or pass data-form-selector on script tag).\n3. Leads365 automatically discovers all form fields, extracts human-readable labels, and supports text, email, phone, select, radio, and multi-checkboxes dynamically!`,
+    medicalExample: `<!-- Medical365 Multi-Field Form Example -->\n<form data-leads365-form id="consultation-form">\n  <input type="text" name="first_name" placeholder="First Name" required />\n  <input type="text" name="last_name" placeholder="Last Name" required />\n  <input type="email" name="work_email" placeholder="Work Email" required />\n  <input type="tel" name="phone" placeholder="Phone Number" required />\n  <input type="text" name="organization_name" placeholder="Organization Name" />\n  \n  <label for="facility_type">Facility Type</label>\n  <select id="facility_type" name="facility_type">\n    <option value="Multi-Specialty Hospital">Multi-Specialty Hospital</option>\n    <option value="Diagnostic Center">Diagnostic Center</option>\n  </select>\n\n  <label for="bed_count">No. of Beds / Doctors</label>\n  <select id="bed_count" name="bed_count">\n    <option value="1-50 Beds">1-50 Beds</option>\n    <option value="51-200 Beds">51-200 Beds</option>\n  </select>\n\n  <label>Key Challenges</label>\n  <input type="checkbox" name="challenges" value="Staff Shortage" /> Staff Shortage\n  <input type="checkbox" name="challenges" value="High Wait Times" /> High Wait Times\n\n  <button type="submit">Submit Request</button>\n</form>`,
+    simpleExample: `<!-- Simple Contact Form Example -->\n<form class="leads365-form">\n  <input type="text" name="name" placeholder="Your Name" required />\n  <input type="tel" name="phone" placeholder="Phone Number" required />\n  <textarea name="message" placeholder="How can we help you?"></textarea>\n  <button type="submit">Submit</button>\n</form>`,
+  }
+
   // 1. WordPress
   const wordpress = {
     title: "WordPress Integration",
@@ -1832,6 +1724,7 @@ export default function ContactForm() {
   }
 
   return {
+    universal,
     wordpress,
     html,
     php,

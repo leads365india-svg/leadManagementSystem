@@ -181,6 +181,55 @@ async function createOrMergeLead({
         existingLead.verificationStatus = payload.verificationStatus || "verified"
       }
 
+      // Update company if not set
+      if (payload.company && !existingLead.company) {
+        existingLead.company = String(payload.company).trim()
+        if (!existingLead.metadata) existingLead.metadata = {}
+        existingLead.metadata.company = existingLead.company
+      }
+
+      // Merge custom fields
+      const incomingCustomFields = Array.isArray(payload.customFields) && payload.customFields.length > 0
+        ? payload.customFields
+        : (Array.isArray(payload.metadata?.customFields) ? payload.metadata.customFields : null)
+
+      if (incomingCustomFields && incomingCustomFields.length > 0) {
+        const existingCustomFields = Array.isArray(existingLead.customFields)
+          ? [...existingLead.customFields]
+          : (Array.isArray(existingLead.metadata?.customFields) ? [...existingLead.metadata.customFields] : [])
+
+        const keyIndexMap = new Map()
+        existingCustomFields.forEach((cf, idx) => {
+          if (cf && cf.key) keyIndexMap.set(cf.key, idx)
+        })
+
+        for (const inc of incomingCustomFields) {
+          if (!inc || !inc.key) continue
+          if (keyIndexMap.has(inc.key)) {
+            const idx = keyIndexMap.get(inc.key)
+            existingCustomFields[idx] = {
+              ...existingCustomFields[idx],
+              value: inc.value,
+              label: inc.label || existingCustomFields[idx].label,
+              type: inc.type || existingCustomFields[idx].type,
+            }
+          } else {
+            existingCustomFields.push({
+              key: inc.key,
+              label: inc.label,
+              value: inc.value,
+              type: inc.type || "text",
+              order: existingCustomFields.length + 1,
+            })
+            keyIndexMap.set(inc.key, existingCustomFields.length - 1)
+          }
+        }
+
+        existingLead.customFields = existingCustomFields
+        if (!existingLead.metadata) existingLead.metadata = {}
+        existingLead.metadata.customFields = existingCustomFields
+      }
+
       existingLead.lastContactedAt = new Date()
 
       // Track transition history if status changed
@@ -321,6 +370,9 @@ async function createOrMergeLead({
     ownerId,
     teamId,
     tags,
+    customFields: Array.isArray(payload.customFields)
+      ? payload.customFields
+      : (Array.isArray(leadMetadata.customFields) ? leadMetadata.customFields : []),
     attribution: {
       firstTouch: attributionTouch,
       lastTouch: attributionTouch,

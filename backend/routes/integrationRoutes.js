@@ -70,8 +70,10 @@ const webhookLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-// 0. Public Embeddable Website Snippet (Phase 22)
+// 0. Public Embeddable Website Snippet & Universal Form SDK
 router.get("/snippet.js", serveWebsiteSnippet)
+router.get("/universal-sdk.js", serveWebsiteSnippet)
+router.get("/sdk.js", serveWebsiteSnippet)
 
 // 1. Public Integration Webhook Route (Preserves exact URL, headers, and response contract)
 router.post("/leads/website", webhookLimiter, receiveWebsiteLead)

@@ -383,7 +383,7 @@ export default function LeadFeedsClient() {
   const handleOpenSnippets = async (integration) => {
     setSelectedIntegration(integration)
     setShowSnippetsModal(true)
-    setActiveSnippetTab(integration.type || "wordpress")
+    setActiveSnippetTab("universal")
     try {
       setLoadingSnippets(true)
       const res = await apiClient.getIntegrationSnippets(integration.id || integration._id)
@@ -2709,19 +2709,131 @@ export default function LeadFeedsClient() {
                     {`<script src="${snippetUrl || "/api/integrations/snippet.js"}" data-site-key="${siteKey || ""}" async defer></script>`}
                   </div>
 
-                  <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-2 text-xs text-slate-600">
-                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      <Info className="w-4 h-4 text-indigo-600" />
-                      Snippet Features & Attribution Capabilities:
+                  <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-4 text-xs text-slate-600">
+                    <div className="font-semibold text-slate-800 flex items-center gap-1.5 text-sm">
+                      <Sparkles className="w-4 h-4 text-indigo-600" />
+                      Universal Dynamic Website Form SDK Features
                     </div>
-                    <ul className="list-disc list-inside space-y-1 text-slate-600">
-                      <li><strong>Automatic Attribution:</strong> Automatically captures <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">utm_source</code>, <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">utm_medium</code>, <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">utm_campaign</code>, <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">gclid</code>, <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">fbclid</code>, referrer, and landing page.</li>
-                      <li><strong>Multi-Touch Attribution:</strong> First-touch is preserved; last-touch is updated on repeat inquiries.</li>
-                      <li><strong>Zero Dependencies:</strong> 2.5 KB lightweight script; runs non-blocking with async/defer.</li>
-                      <li><strong>Form Tagging:</strong> Auto-detects forms containing contact inputs or marked with <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">&lt;form data-leads365-form&gt;</code>.</li>
-                      <li><strong>Programmatic Submission:</strong> Use <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">{'window.Leads365.capture({ name, email, phone, message })'}</code> in custom SPAs / React / Vue.</li>
-                      <li><strong>Anti-Spam Honeypot:</strong> Add <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800">{'<input type="text" name="_hp_trap" style="display:none" tabIndex="-1" />'}</code> to silently reject bots.</li>
-                    </ul>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
+                        <strong className="text-slate-900 block font-semibold">1. Safe, Explicit Form Selection</strong>
+                        <p className="text-[11px] text-slate-500">
+                          Add <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-indigo-600">data-leads365-form</code> or class <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-indigo-600">leads365-form</code> to target forms. Excludes passwords, login, search, and checkout forms automatically.
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
+                        <strong className="text-slate-900 block font-semibold">2. Dynamic Custom Field Extraction</strong>
+                        <p className="text-[11px] text-slate-500">
+                          Automatically extracts human-readable labels from <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">&lt;label&gt;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">aria-label</code>, or placeholders. Supports text, select, radio, and multi-checkboxes in submission order.
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
+                        <strong className="text-slate-900 block font-semibold">3. Built-in Anti-Spam & Concurrency</strong>
+                        <p className="text-[11px] text-slate-500">
+                          Prevents duplicate submissions via client idempotency keys, locks forms while submitting, and silently filters honeypots and spam bots.
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
+                        <strong className="text-slate-900 block font-semibold">4. Multi-Touch Attribution Tracking</strong>
+                        <p className="text-[11px] text-slate-500">
+                          Captures <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">utm_source</code>, <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">gclid</code>, <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">fbclid</code>, landing page, and referrer with first-touch write-once guarantee.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-200">
+                      <span className="font-semibold text-slate-800 block mb-1.5">Universal Form Examples & Usage:</span>
+                      <div className="space-y-2">
+                        <details className="bg-white p-3 rounded-lg border border-slate-200 cursor-pointer">
+                          <summary className="font-semibold text-indigo-700 hover:text-indigo-800 text-xs">
+                            Example A: Medical365 Healthcare Form (Multiple Custom Fields & Checkboxes)
+                          </summary>
+                          <div className="mt-2 text-[11px] font-mono bg-slate-900 text-slate-100 p-3 rounded overflow-x-auto select-all">
+{`<!-- Medical365 Dynamic Website Form -->
+<form data-leads365-form id="medical-inquiry-form">
+  <input type="text" name="first_name" placeholder="First Name" required />
+  <input type="text" name="last_name" placeholder="Last Name" required />
+  <input type="email" name="work_email" placeholder="Work Email" required />
+  <input type="tel" name="phone" placeholder="+1234567890" required />
+  <input type="text" name="organization_name" placeholder="Organization Name" />
+  
+  <label for="facility_type">Facility Type</label>
+  <select id="facility_type" name="facility_type">
+    <option value="Multi-Specialty Hospital">Multi-Specialty Hospital</option>
+    <option value="Diagnostic Center">Diagnostic Center</option>
+    <option value="Clinic">Clinic</option>
+  </select>
+
+  <label for="bed_count">No. of Beds / Doctors</label>
+  <select id="bed_count" name="bed_count">
+    <option value="1-50 Beds">1-50 Beds</option>
+    <option value="51-200 Beds">51-200 Beds</option>
+    <option value="200+ Beds">200+ Beds</option>
+  </select>
+
+  <label>Key Challenges</label>
+  <input type="checkbox" name="challenges" value="Staff Shortage" /> Staff Shortage
+  <input type="checkbox" name="challenges" value="High Wait Times" /> High Wait Times
+  <input type="checkbox" name="challenges" value="Billing Discrepancies" /> Billing Discrepancies
+
+  <button type="submit">Request Consultation</button>
+</form>`}
+                          </div>
+                        </details>
+
+                        <details className="bg-white p-3 rounded-lg border border-slate-200 cursor-pointer">
+                          <summary className="font-semibold text-indigo-700 hover:text-indigo-800 text-xs">
+                            Example B: Simple Service / Furniture Business (Name, Phone, Message)
+                          </summary>
+                          <div className="mt-2 text-[11px] font-mono bg-slate-900 text-slate-100 p-3 rounded overflow-x-auto select-all">
+{`<!-- Simple Contact Form -->
+<form class="leads365-form">
+  <input type="text" name="name" placeholder="Your Name" required />
+  <input type="tel" name="phone" placeholder="Phone Number" required />
+  <textarea name="message" placeholder="What furniture pieces are you looking for?"></textarea>
+  <button type="submit">Send Message</button>
+</form>`}
+                          </div>
+                        </details>
+
+                        <details className="bg-white p-3 rounded-lg border border-slate-200 cursor-pointer">
+                          <summary className="font-semibold text-indigo-700 hover:text-indigo-800 text-xs">
+                            Example C: Custom Selector & Headless / SPA Integration
+                          </summary>
+                          <div className="mt-2 text-[11px] space-y-2">
+                            <p className="text-slate-600 font-sans">
+                              Target specific forms with <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">data-form-selector</code> on the script tag:
+                            </p>
+                            <div className="font-mono bg-slate-900 text-slate-100 p-2.5 rounded overflow-x-auto select-all">
+{`<script src="${snippetUrl || "/api/integrations/snippet.js"}" 
+  data-site-key="${siteKey || ""}" 
+  data-form-selector="#custom-form, .quote-form" 
+  async defer>
+</script>`}
+                            </div>
+                            <p className="text-slate-600 font-sans pt-1">
+                              Or trigger programmatically in React / Next.js / Vue SPAs:
+                            </p>
+                            <div className="font-mono bg-slate-900 text-slate-100 p-2.5 rounded overflow-x-auto select-all">
+{`window.Leads365.capture({
+  name: "Dr. Sarah Smith",
+  email: "sarah@apexcare.org",
+  phone: "+15551234567",
+  company: "Apex Care Hospital",
+  customFields: [
+    { key: "facility_type", label: "Facility Type", value: "Super-Specialty", type: "select" },
+    { key: "bed_count", label: "Bed Count", value: "150 Beds", type: "select" }
+  ]
+});`}
+                            </div>
+                          </div>
+                        </details>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4985,6 +5097,7 @@ export default function LeadFeedsClient() {
             {/* Platform Selector Tabs inside Snippets Modal */}
             <div className="flex items-center gap-1.5 pt-4 pb-2 border-b border-slate-100 overflow-x-auto">
               {[
+                { id: "universal", label: "Universal Form SDK (Recommended)" },
                 { id: "wordpress", label: "WordPress" },
                 { id: "html", label: "HTML / JS" },
                 { id: "php", label: "PHP Backend" },
@@ -4996,7 +5109,7 @@ export default function LeadFeedsClient() {
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveSnippetTab(tab.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
                     activeSnippetTab === tab.id
                       ? "bg-indigo-600 text-white"
                       : "bg-slate-100 hover:bg-slate-200 text-slate-700"
@@ -5016,6 +5129,77 @@ export default function LeadFeedsClient() {
                 </div>
               ) : integrationSnippets ? (
                 <>
+                  {activeSnippetTab === "universal" && (
+                    <div className="space-y-4 text-xs text-slate-700">
+                      <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-950 space-y-2">
+                        <strong className="block font-bold">Universal Dynamic Form Integration</strong>
+                        <p className="text-[11px] leading-relaxed">
+                          Embed one lightweight script tag into your website pages. It dynamically discovers all form inputs, extracts human-readable labels from form labels or placeholders, preserves submission order, and transmits standard contact details and custom fields without hardcoding!
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800">1. Embed Script Tag (Before &lt;/body&gt;)</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.universal?.scriptTag || "")
+                              toast.success("Script tag copied!")
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            Copy Tag
+                          </button>
+                        </div>
+                        <pre className="bg-slate-900 text-emerald-400 p-3.5 rounded-xl font-mono text-[11px] overflow-x-auto select-all">
+                          {integrationSnippets.universal?.scriptTag}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800">2. Medical365 Multi-Field Form Example</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.universal?.medicalExample || "")
+                              toast.success("Medical365 form HTML copied!")
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            Copy HTML
+                          </button>
+                        </div>
+                        <pre className="bg-slate-900 text-slate-200 p-3.5 rounded-xl font-mono text-[11px] overflow-x-auto select-all">
+                          {integrationSnippets.universal?.medicalExample}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800">3. Simple Form Example</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(integrationSnippets.universal?.simpleExample || "")
+                              toast.success("Simple form HTML copied!")
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            Copy HTML
+                          </button>
+                        </div>
+                        <pre className="bg-slate-900 text-slate-200 p-3.5 rounded-xl font-mono text-[11px] overflow-x-auto select-all">
+                          {integrationSnippets.universal?.simpleExample}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+
                   {activeSnippetTab === "wordpress" && (
                     <div className="space-y-4 text-xs text-slate-700">
                       <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">

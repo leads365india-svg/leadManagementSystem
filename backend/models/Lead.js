@@ -221,6 +221,20 @@ const leadSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Universal Dynamic Custom Fields (structured array preserving submission order, labels, types)
+    customFields: {
+      type: [
+        {
+          _id: false,
+          key: { type: String, trim: true },
+          label: { type: String, trim: true },
+          value: { type: mongoose.Schema.Types.Mixed },
+          type: { type: String, default: "text" },
+          order: { type: Number, default: 0 },
+        },
+      ],
+      default: [],
+    },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
@@ -252,6 +266,14 @@ leadSchema.pre("save", function (next) {
     this.metadata.company = this.company
   } else if (this.metadata?.company) {
     this.company = this.metadata.company
+  }
+
+  // Synchronize customFields between top-level and metadata
+  if (Array.isArray(this.customFields) && this.customFields.length > 0) {
+    if (!this.metadata) this.metadata = {}
+    this.metadata.customFields = this.customFields
+  } else if (Array.isArray(this.metadata?.customFields) && this.metadata.customFields.length > 0 && (!this.customFields || this.customFields.length === 0)) {
+    this.customFields = this.metadata.customFields
   }
 
   // Synchronize ownerId and legacy assignedStaffId
