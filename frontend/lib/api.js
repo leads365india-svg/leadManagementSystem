@@ -640,8 +640,15 @@ class ApiClient {
   }
 
   // --- Roles & Scoped Permissions Endpoints (Phase 5: RBAC v2) ---
-  async getRoles() {
-    return this.request("/roles")
+  async getRoles(query = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const queryString = searchParams.toString()
+    return this.request(`/roles${queryString ? `?${queryString}` : ""}`)
   }
 
   async getAvailableRolePermissions() {

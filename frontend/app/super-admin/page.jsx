@@ -1229,7 +1229,7 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                       <p className="text-[11px] text-red-600 mt-1">{formErrors.customDomain}</p>
                     )}
                     <p className="text-[10px] text-slate-400 mt-0.5">
-                      Pending DNS CNAME pointing to <code className="font-mono">portal.leadflow.io</code>
+                      Pending DNS CNAME pointing to <code className="font-mono">cname.vercel-dns.com</code>
                     </p>
                   </div>
 
@@ -1615,7 +1615,7 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
 
                 {/* DNS Notice */}
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px] leading-relaxed">
-                  <strong>Notice on Domain Activation:</strong> Custom domain activation remains pending until DNS configuration is verified. Add a <code>CNAME</code> record pointing to <code>portal.leadflow.io</code> in your DNS provider.
+                  <strong>Notice on Domain Activation:</strong> Custom domain activation remains pending until DNS configuration is verified. Add a <code>CNAME</code> record pointing to <code>cname.vercel-dns.com</code> in your DNS provider.
                 </div>
               </div>
 
@@ -1766,7 +1766,7 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                   <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-600 space-y-1">
                     <p className="font-semibold text-slate-800">DNS CNAME Setup:</p>
                     <p>Host: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">{selectedAccount.customDomain}</code></p>
-                    <p>Value: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">portal.leadflow.io</code></p>
+                    <p>Value: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">cname.vercel-dns.com</code></p>
                   </div>
                 )}
               </div>

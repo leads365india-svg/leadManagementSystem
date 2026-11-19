@@ -112,6 +112,64 @@ export default function LeadDetailDrawer({
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false)
   const chatBottomRef = useRef(null)
 
+  // Staff Assignment State
+  const [staffList, setStaffList] = useState([])
+  const [isAssigningStaff, setIsAssigningStaff] = useState(false)
+
+  // Fetch staff list for assignment
+  useEffect(() => {
+    if (!isOpen) return
+    let isMounted = true
+    apiClient
+      .getStaff({ limit: 100, status: "active" })
+      .then((res) => {
+        if (isMounted && res && res.success && Array.isArray(res.data?.staff)) {
+          setStaffList(res.data.staff)
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to load staff list for assignment:", err)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [isOpen])
+
+  // Assign or reassign lead to a staff member
+  const handleAssignStaff = async (staffId) => {
+    if (!lead || !lead._id || isAssigningStaff) return
+    const targetStaff = staffList.find((s) => (s.id || s._id) === staffId)
+    const targetName = targetStaff ? targetStaff.name : staffId === "unassigned" ? "Unassigned" : staffId
+
+    try {
+      setIsAssigningStaff(true)
+      const res = await apiClient.assignLead(lead._id, {
+        targetOwnerId: staffId === "unassigned" ? null : staffId,
+        reason: "Assigned via Lead Detail Drawer",
+      })
+
+      if (res && res.success) {
+        const updated = {
+          ...lead,
+          assignedTo: targetName,
+          assignedStaffId: staffId === "unassigned" ? null : staffId,
+          ownerId: targetStaff ? { _id: targetStaff.id || targetStaff._id, name: targetStaff.name } : null,
+        }
+        setLead(updated)
+        if (onLeadUpdated) onLeadUpdated(updated)
+        toast.success(`Lead assigned to ${targetName}`)
+        fetchLeadActivities()
+      } else {
+        toast.error(res?.error || "Failed to assign lead")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to assign lead")
+    } finally {
+      setIsAssigningStaff(false)
+    }
+  }
+
   // Fetch tenant custom fields to enrich labels & formatters
   useEffect(() => {
     if (!isOpen) return
@@ -900,10 +958,29 @@ export default function LeadDetailDrawer({
                       <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                     </div>
 
-                    {/* Owner / Assignee pill */}
-                    <div className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                      <User className="w-3 h-3 text-slate-400" />
-                      <span>{lead?.ownerId?.name || lead?.assignedTo || "Unassigned"}</span>
+                    {/* Owner / Assignee dropdown */}
+                    <div className="relative inline-flex items-center">
+                      <select
+                        value={
+                          lead?.assignedStaffId ||
+                          (staffList.find((s) => s.name === lead?.assignedTo)?._id) ||
+                          (staffList.find((s) => s.name === lead?.assignedTo)?.id) ||
+                          "unassigned"
+                        }
+                        onChange={(e) => handleAssignStaff(e.target.value)}
+                        disabled={isAssigningStaff}
+                        className="text-xs font-semibold rounded-full pl-6 pr-6 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 cursor-pointer appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 transition-colors"
+                        title="Click to assign or reassign lead to a sales representative"
+                      >
+                        <option value="unassigned">Unassigned</option>
+                        {staffList.map((st) => (
+                          <option key={st.id || st._id} value={st.id || st._id}>
+                            {st.name} ({st.role})
+                          </option>
+                        ))}
+                      </select>
+                      <User className="w-3 h-3 text-slate-400 absolute left-2 pointer-events-none" />
+                      <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 pointer-events-none" />
                     </div>
 
                     {/* Source pill */}

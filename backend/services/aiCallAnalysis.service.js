@@ -1,4 +1,6 @@
 const { sanitizeErrorMessage, resolveGeminiModel, makeHttpsRequest } = require("./aiProvider.service")
+const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
+const BusinessProduct = require("../models/BusinessProduct")
 
 /**
  * AI Call Analysis Engine - Phase 3: AI Call Intelligence
@@ -119,6 +121,7 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
 async function analyzeCallWithGemini({
   transcript,
   topicMatches = [],
+  businessContext = null,
   apiKey,
   modelOverride = null,
   httpClient = makeHttpsRequest,
@@ -130,13 +133,34 @@ async function analyzeCallWithGemini({
   const model = modelOverride || resolveGeminiModel()
   const transcriptText = transcript.transcriptText || ""
 
+  let businessSection = ""
+  if (businessContext && (businessContext.companyName || businessContext.industry || (businessContext.products && businessContext.products.length > 0))) {
+    const productsList = (businessContext.products && businessContext.products.length > 0)
+      ? businessContext.products.map(p => `- ${p.name}${p.category ? ` (${p.category})` : ""}${p.type ? ` [${p.type}]` : ""}${p.description ? `: ${p.description}` : ""}`).join("\n")
+      : "No specific products listed."
+
+    businessSection = `\nTENANT BUSINESS & PRODUCTS CONTEXT:
+- Company / Business Name: ${businessContext.companyName || "N/A"}
+- Industry: ${businessContext.industry || "N/A"}
+- Description: ${businessContext.description || "N/A"}
+- Offered Products & Services:
+${productsList}\n`
+  }
+
+  let topicMatchesSection = ""
+  if (Array.isArray(topicMatches) && topicMatches.length > 0) {
+    const topicList = topicMatches.map(t => `- Topic: ${t.name || t.topicName} (Category: ${t.category || "General"})`).join("\n")
+    topicMatchesSection = `\nDETECTED APPROVED TOPIC MATCHES FOR THIS TENANT:
+${topicList}\n`
+  }
+
   const systemPrompt = `You are a Senior Sales Intelligence Auditor in Leads-365 CRM.
 Your objective is to extract objective, grounded intelligence from this phone call transcript.
-
+${businessSection}${topicMatchesSection}
 STRICT GROUNDING RULES:
 1. Ground every finding strictly in the provided transcript. DO NOT invent prices, dates, unstated commitments, or competitor names.
 2. Label sentiment accurately as POSITIVE, NEUTRAL, NEGATIVE, or MIXED.
-3. Label call outcome as one of: INTERESTED, NOT_INTERESTED, FOLLOW_UP_REQUIRED, CALL_BACK_LATER, DEAL_CLOSED, ESCALATED, WRONG_NUMBER, UNRESOLVED.
+3. RELEVANCE & OUTCOME RULE: Compare the call against the Tenant Business & Products context above. Only classify as \`INTERESTED\`, \`FOLLOW_UP_REQUIRED\`, \`CALL_BACK_LATER\`, or \`DEAL_CLOSED\` if the external party is genuinely inquiring about or considering the tenant's own products/services. If the call is an unrelated pitch (e.g., HR/recruitment agency, vendor sales, spam), or if the prospect states they have no current requirement (even if politely ending the call with 'send details on WhatsApp' or 'will let you know later'), you MUST classify \`callOutcome\` as \`NOT_INTERESTED\` (or \`WRONG_NUMBER\` if wrong party).
 4. Provide meaningful confidence and sentiment scores between 0.0 and 1.0 (do not use 1.0).
 5. Output MUST be valid JSON adhering strictly to this schema:
 {
@@ -253,9 +277,46 @@ async function processCallAnalysis({
   apiKey = null,
   httpClient = makeHttpsRequest,
   allowFallback = false,
+  tenantId = null,
+  businessContext = null,
 }) {
   if (!transcript || !transcript.transcriptText) {
     throw new Error("A valid transcript with text content is required to generate call analysis.")
+  }
+
+  const effectiveTenantId = tenantId || call?.tenantId || transcript?.tenantId
+
+  let resolvedBusinessContext = businessContext
+  if (!resolvedBusinessContext && effectiveTenantId) {
+    try {
+      const [profile, products] = await Promise.all([
+        TenantBusinessProfile.findOne({ tenantId: effectiveTenantId })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
+          .catch(() => null),
+        BusinessProduct.find({ tenantId: effectiveTenantId, status: "active", isArchived: false })
+          .setOptions({ skipTenantFilter: true })
+          .select("name category description type")
+          .lean()
+          .catch(() => []),
+      ])
+
+      if (profile || (products && products.length > 0)) {
+        resolvedBusinessContext = {
+          companyName: profile?.businessName || profile?.companyName || "",
+          industry: profile?.industry || profile?.customIndustry || "",
+          description: profile?.description || "",
+          products: (products || []).map((p) => ({
+            name: p.name,
+            category: p.category || "",
+            type: p.type || "PRODUCT",
+            description: p.description || "",
+          })),
+        }
+      }
+    } catch (ctxErr) {
+      console.warn("⚠️ Failed to load tenant business context for call analysis:", ctxErr.message)
+    }
   }
 
   const effectiveKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY
@@ -267,6 +328,7 @@ async function processCallAnalysis({
       return await analyzeCallWithGemini({
         transcript,
         topicMatches,
+        businessContext: resolvedBusinessContext,
         apiKey: effectiveKey,
         httpClient,
       })

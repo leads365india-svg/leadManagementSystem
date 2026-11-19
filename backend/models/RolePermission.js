@@ -87,6 +87,12 @@ const PERMISSION_MODULES = [
         scope: "own",
       },
       {
+        key: "leads.delete",
+        label: "Delete Leads",
+        module: "Leads",
+        description: "Delete leads across tenant account",
+      },
+      {
         key: "leads.assign",
         label: "Assign Lead Ownership",
         module: "Leads",
@@ -278,6 +284,30 @@ const PERMISSION_MODULES = [
     ],
   },
   {
+    module: "Reports",
+    label: "Reports & Analytics",
+    permissions: [
+      {
+        key: "reports.view",
+        label: "View Reports & Analytics",
+        module: "Reports",
+        description: "Access conversion reports, agent performance, and pipeline analytics",
+      },
+    ],
+  },
+  {
+    module: "Lead Feed",
+    label: "Lead Feed Management",
+    permissions: [
+      {
+        key: "leadfeed.manage",
+        label: "Manage Lead Feed & Webhooks",
+        module: "Lead Feed",
+        description: "Control incoming lead feeds, webhook ingestions, and lead rules",
+      },
+    ],
+  },
+  {
     module: "Account Settings",
     label: "Account Configuration",
     permissions: [
@@ -316,19 +346,13 @@ const LEGACY_ALIASES = [
   "users.manage",
 ]
 
-const ALLOWED_PERMISSIONS = Array.from(
-  new Set([
-    ...PERMISSION_MODULES.flatMap((group) => group.permissions.map((p) => p.key)),
-    ...LEGACY_ALIASES,
-  ]),
-)
-
 // Default permissions granted to Leads Account Admins (Super Admin ceiling baseline)
 const DEFAULT_ACCOUNT_ADMIN_PERMISSIONS = [
   "dashboard.view",
   "leads.view",
   "leads.create",
   "leads.edit",
+  "leads.delete",
   "leads.assign",
   "leads.export",
   "leads.bulkUpdate",
@@ -350,6 +374,14 @@ const DEFAULT_ACCOUNT_ADMIN_PERMISSIONS = [
   "settings.view",
   "settings.manage",
 ]
+
+const ALLOWED_PERMISSIONS = Array.from(
+  new Set([
+    ...PERMISSION_MODULES.flatMap((group) => group.permissions.map((p) => p.key)),
+    ...LEGACY_ALIASES,
+    ...DEFAULT_ACCOUNT_ADMIN_PERMISSIONS,
+  ]),
+)
 
 const rolePermissionSchema = new mongoose.Schema(
   {
@@ -394,17 +426,12 @@ const ensureCeilingDefaultsSeeded = async () => {
   if (ceilingDefaultsSeeded) return
   try {
     const doc = await RolePermission.findOne({ targetRole: "account_admin" })
-    if (doc) {
-      let changed = false
-      for (const perm of DEFAULT_ACCOUNT_ADMIN_PERMISSIONS) {
-        if (!doc.permissions.includes(perm)) {
-          doc.permissions.push(perm)
-          changed = true
-        }
-      }
-      if (changed) {
-        await doc.save()
-      }
+    if (!doc) {
+      await RolePermission.create({
+        targetRole: "account_admin",
+        permissions: DEFAULT_ACCOUNT_ADMIN_PERMISSIONS,
+        updatedBy: "system_bootstrap",
+      })
     }
     ceilingDefaultsSeeded = true
   } catch (_) {}

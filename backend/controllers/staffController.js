@@ -48,10 +48,12 @@ const getStaff = async (req, res) => {
 
     const query = {}
 
+    const targetTenantId = tenantId || req.query.tenantId
+
     // In tenant context, Mongoose plugin auto-injects tenantId.
     // If super admin passes specific tenant, filter on it.
-    if (tenantId) {
-      query.tenantId = tenantId
+    if (targetTenantId) {
+      query.tenantId = targetTenantId
     }
 
     // Role filter (exclude super_admin from staff list)
@@ -97,7 +99,7 @@ const getStaff = async (req, res) => {
         .lean(),
       User.countDocuments(query),
       User.aggregate([
-        { $match: tenantId ? { tenantId, role: { $ne: "super_admin" } } : { role: { $ne: "super_admin" } } },
+        { $match: targetTenantId ? { tenantId: targetTenantId, role: { $ne: "super_admin" } } : { role: { $ne: "super_admin" } } },
         {
           $group: {
             _id: null,

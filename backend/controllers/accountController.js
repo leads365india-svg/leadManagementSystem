@@ -2,6 +2,7 @@ const crypto = require("crypto")
 const mongoose = require("mongoose")
 const Account = require("../models/Account")
 const User = require("../models/User")
+const { invalidateCustomDomainCache } = require("../utils/customDomainCache")
 
 // Helper to escape regex special characters and prevent ReDoS
 const escapeRegex = (str) => {
@@ -433,6 +434,7 @@ const createAccount = async (req, res) => {
       pageTitle: typeof pageTitle === "string" ? pageTitle.trim() : "",
     })
     await createdAccount.save()
+    invalidateCustomDomainCache()
 
     res.status(201).json({
       success: true,
@@ -624,6 +626,7 @@ const updateAccount = async (req, res) => {
     }
 
     await account.save()
+    invalidateCustomDomainCache()
 
     // Sync Admin user details
     if (account.adminUserId) {
@@ -716,6 +719,7 @@ const updateAccountStatus = async (req, res) => {
 
     account.status = status
     await account.save()
+    invalidateCustomDomainCache()
 
     // Sync status with associated Admin user
     if (account.adminUserId) {

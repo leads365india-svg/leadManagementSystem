@@ -30,7 +30,7 @@ const LEGACY_PERMISSION_MAP = {
 
 /**
  * Checks if a specific permission key is covered by the Super Admin ceiling.
- * Considers scope hierarchy: .all in ceiling covers .team and .own.
+ * Considers scope hierarchy: .all in ceiling covers .team and .own, and un-scoped keys cover scoped keys.
  */
 const isPermissionCoveredByCeiling = (permission, ceiling) => {
   if (!ceiling || !Array.isArray(ceiling)) return true
@@ -40,7 +40,11 @@ const isPermissionCoveredByCeiling = (permission, ceiling) => {
   const parts = permission.split(".")
   if (parts.length === 3) {
     const [resource, action, scope] = parts
-    if (ceilingSet.has(`${resource}.${action}.all`) || ceilingSet.has(`${resource}.${action}`)) {
+    if (
+      ceilingSet.has(`${resource}.${action}.all`) ||
+      ceilingSet.has(`${resource}.${action}`) ||
+      ceilingSet.has(`${resource}.*`)
+    ) {
       return true
     }
     if (scope === "own" && ceilingSet.has(`${resource}.${action}.team`)) {
@@ -48,8 +52,27 @@ const isPermissionCoveredByCeiling = (permission, ceiling) => {
     }
   }
 
+  if (parts.length === 2) {
+    const [resource, action] = parts
+    if (
+      ceilingSet.has(`${resource}.${action}.all`) ||
+      ceilingSet.has(`${resource}.${action}.team`) ||
+      ceilingSet.has(`${resource}.${action}.own`) ||
+      ceilingSet.has(`${resource}.${action}`) ||
+      ceilingSet.has(`${resource}.*`)
+    ) {
+      return true
+    }
+  }
+
   if (LEGACY_PERMISSION_MAP[permission] && ceilingSet.has(LEGACY_PERMISSION_MAP[permission])) {
     return true
+  }
+
+  for (const [legacyKey, modernKey] of Object.entries(LEGACY_PERMISSION_MAP)) {
+    if (modernKey === permission && ceilingSet.has(legacyKey)) {
+      return true
+    }
   }
 
   return false
@@ -83,6 +106,12 @@ const getUserScope = (permissions = [], resource, action) => {
     return "all"
   }
 
+  for (const [legacyKey, modernKey] of Object.entries(LEGACY_PERMISSION_MAP)) {
+    if (modernKey === prefix && permSet.has(legacyKey)) {
+      return "all"
+    }
+  }
+
   return null
 }
 
@@ -106,6 +135,11 @@ const hasPermission = (user, requiredPermission, requiredScope = null) => {
   // Check legacy alias
   if (LEGACY_PERMISSION_MAP[requiredPermission] && permSet.has(LEGACY_PERMISSION_MAP[requiredPermission])) {
     return true
+  }
+  for (const [legacyKey, modernKey] of Object.entries(LEGACY_PERMISSION_MAP)) {
+    if (modernKey === requiredPermission && permSet.has(legacyKey)) {
+      return true
+    }
   }
 
   // Parse resource, action, and scope if key has format "resource.action.scope"

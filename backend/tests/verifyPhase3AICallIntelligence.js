@@ -21,6 +21,8 @@ const { AIKeywordTopic } = require("../models/AIKeywordTopic")
 const { AITranscript } = require("../models/AITranscript")
 const { AICallAnalysis } = require("../models/AICallAnalysis")
 const { AIUsageLedger } = require("../models/AIUsageLedger")
+const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
+const BusinessProduct = require("../models/BusinessProduct")
 const { getJwtSecret } = require("../middleware/authMiddleware")
 
 const { processSpeechToText, transcribeAudioWithGemini, generateDeterministicTranscript } = require("../services/aiSpeechToText.service")
@@ -73,6 +75,8 @@ async function cleanup() {
     await AICallAnalysis.syncIndexes().catch(() => {})
     await AIUsageLedger.deleteMany({ tenantId: { $in: tenants } }).setOptions({ skipTenantFilter: true })
     await AIKeywordTopic.deleteMany({ tenantId: { $in: tenants } }).setOptions({ skipTenantFilter: true })
+    await TenantBusinessProfile.deleteMany({ tenantId: { $in: tenants } }).setOptions({ skipTenantFilter: true })
+    await BusinessProduct.deleteMany({ tenantId: { $in: tenants } }).setOptions({ skipTenantFilter: true })
     await Call.deleteMany({ tenantId: { $in: tenants } }).setOptions({ skipTenantFilter: true })
     await User.deleteMany({ tenantId: { $in: tenants } }).setOptions({ skipTenantFilter: true })
     await Account.deleteMany({ $or: [{ accountId: { $in: tenants } }, { tenantId: { $in: tenants } }] }).setOptions({ skipTenantFilter: true })
@@ -233,6 +237,24 @@ async function runTests() {
       primaryKeywords: ["shipment tracking", "delivery timeline"],
       approvedAt: new Date(),
       approvedBy: adminUserB._id,
+    })
+
+    // Business Profile & Products for Tenant A Context Grounding
+    await TenantBusinessProfile.create({
+      tenantId: TENANT_A,
+      businessName: "Acme SaaS Enterprise Solutions",
+      industry: "Retail",
+      description: "Leading enterprise CRM and workforce management software provider.",
+    })
+
+    await BusinessProduct.create({
+      tenantId: TENANT_A,
+      name: "Enterprise CRM Cloud Suite",
+      type: "SERVICE",
+      category: "SaaS",
+      description: "Cloud-native CRM with 99.9% uptime SLA.",
+      status: "active",
+      isArchived: false,
     })
 
     record("Phase 3 fixtures, tenants, calls, and topics initialized", true)
@@ -441,6 +463,10 @@ async function runTests() {
     record("Analysis: Call outcome classified as 'INTERESTED'", analysisResult.callOutcome === "INTERESTED")
     record("Analysis: Key moments contain quotes and timestamps", analysisResult.keyMoments.length >= 1 && typeof analysisResult.keyMoments[0].timestamp === "number")
     record("Analysis: Request payload body includes 'store: false'", capturedAnalysisBody?.store === false)
+
+    const promptText = capturedAnalysisBody?.contents?.[0]?.parts?.[0]?.text || ""
+    record("Analysis: Prompt contains strict RELEVANCE & OUTCOME RULE", promptText.includes("RELEVANCE & OUTCOME RULE"))
+    record("Analysis: Prompt injects Tenant Business Profile & Products", promptText.includes("Acme SaaS Enterprise Solutions") && promptText.includes("Enterprise CRM Cloud Suite"))
 
     const savedAnalysis = await AICallAnalysis.create({
       tenantId: TENANT_A,

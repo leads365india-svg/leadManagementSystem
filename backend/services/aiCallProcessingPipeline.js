@@ -285,6 +285,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       apiKey,
       httpClient,
       allowFallback,
+      tenantId,
     })
 
     analysis.status = "COMPLETED"

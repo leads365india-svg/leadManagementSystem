@@ -15,6 +15,7 @@ const {
   checkDirectObjectAccess,
   isPermissionCoveredByCeiling,
 } = require("../utils/rbacScope")
+const { isCustomDomainAllowed } = require("../utils/customDomainCache")
 
 // In-memory cache for tenant roles: Map<tenantId, { roles: Array, timestamp: number }>
 const tenantRoleCache = new Map()
@@ -459,6 +460,11 @@ const requirePermission = (requiredPermission, options = {}) => {
 
       const ceiling = await getCachedRolePermissions("account_admin")
 
+      // Ensure Account Admin always evaluates against the live ceiling configuration
+      if (req.user.role === "account_admin") {
+        req.user.permissions = ceiling || []
+      }
+
       let anyAuthorized = false
       let authorizedPermission = null
 
@@ -506,7 +512,7 @@ const { isOriginAllowed } = require("../utils/corsHelper")
 
 // CSRF Protection Middleware for state-changing requests using cookie authentication
 const verifyCSRF = (allowedOrigins = []) => {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const mutatingMethods = ["POST", "PUT", "PATCH", "DELETE"]
     if (!mutatingMethods.includes(req.method)) {
       return next()
@@ -537,10 +543,13 @@ const verifyCSRF = (allowedOrigins = []) => {
           )
 
           if (!isExplicitlyAllowed) {
-            return res.status(403).json({
-              success: false,
-              error: "CSRF verification failed: Origin not allowed",
-            })
+            const isCustomAllowed = await isCustomDomainAllowed(parsedOrigin)
+            if (!isCustomAllowed) {
+              return res.status(403).json({
+                success: false,
+                error: "CSRF verification failed: Origin not allowed",
+              })
+            }
           }
         } catch (_) {
           return res.status(403).json({

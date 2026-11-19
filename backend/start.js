@@ -52,6 +52,10 @@ app.set("trust proxy", 1)
 
 // Import CORS origin parsing and matching helpers
 const { parseAllowedOrigins, isOriginAllowed } = require("./utils/corsHelper")
+const {
+  isCustomDomainAllowed,
+  invalidateCustomDomainCache,
+} = require("./utils/customDomainCache")
 
 // CORS configuration supporting comma-separated FRONTEND_URL or local defaults
 const configuredFrontendUrls = parseAllowedOrigins(process.env.FRONTEND_URL || "")
@@ -138,11 +142,23 @@ const corsOptions = {
     // Allow requests with no origin (like mobile apps, curl, or server-to-server proxies)
     if (!origin) return callback(null, true)
 
+    // Fast-path: check static / env / local origins
     if (isAllowedOrigin(origin)) {
       return callback(null, true)
     }
 
-    callback(null, false)
+    // Dynamic check for tenant custom domains (white-label CNAME domains)
+    isCustomDomainAllowed(origin)
+      .then((allowed) => {
+        if (allowed) {
+          return callback(null, true)
+        }
+        callback(null, false)
+      })
+      .catch((err) => {
+        console.error("Dynamic CORS domain validation error:", err.message)
+        callback(null, false)
+      })
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   credentials: true, // Allow cookies to be sent across origins
@@ -421,6 +437,8 @@ if (process.env.NODE_ENV !== "test") {
 
 module.exports = app
 module.exports.webhookCors = webhookCors
+module.exports.corsOptions = corsOptions
+module.exports.invalidateCustomDomainCache = invalidateCustomDomainCache
 module.exports.startServer = startServer
 module.exports.setupGracefulShutdown = setupGracefulShutdown
 module.exports.voiceGateway = require("./services/telephony/voiceGateway.service").voiceGateway

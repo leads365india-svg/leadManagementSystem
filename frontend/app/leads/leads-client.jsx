@@ -154,6 +154,25 @@ export default function LeadsClient() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [editFormErrors, setEditFormErrors] = useState({})
   const [updatingStatusId, setUpdatingStatusId] = useState(null)
+  const [staffList, setStaffList] = useState([])
+
+  // Fetch staff list for assignment
+  useEffect(() => {
+    let isMounted = true
+    apiClient
+      .getStaff({ limit: 100, status: "active" })
+      .then((res) => {
+        if (isMounted && res && res.success && Array.isArray(res.data?.staff)) {
+          setStaffList(res.data.staff)
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to load staff list:", err)
+      })
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const activeLeadId = activeLeadDetails?._id || activeLeadDetails?.id
 
@@ -1475,13 +1494,18 @@ export default function LeadsClient() {
                 {/* Assigned Representative */}
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Assigned Representative</label>
-                  <input
-                    type="text"
+                  <select
                     value={editingLead.assignedTo}
                     onChange={(e) => setEditingLead({ ...editingLead, assignedTo: e.target.value })}
-                    placeholder="e.g. Sarah Jenkins or Unassigned"
                     className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
-                  />
+                  >
+                    <option value="Unassigned">Unassigned</option>
+                    {staffList.map((st) => (
+                      <option key={st.id || st._id} value={st.name}>
+                        {st.name} ({st.role})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Message / Notes */}
