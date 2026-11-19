@@ -278,6 +278,11 @@ class ApiClient {
     return this.request(`/super-admin/accounts${queryString ? `?${queryString}` : ""}`)
   }
 
+  // Alias for backward compatibility across Super Admin components
+  async getAccounts(params = {}) {
+    return this.getSuperAdminAccounts(params)
+  }
+
   async getSuperAdminAccountById(id) {
     return this.request(`/super-admin/accounts/${id}`)
   }

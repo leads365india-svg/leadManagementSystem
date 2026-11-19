@@ -55,10 +55,12 @@ export default function RolesPermissionsPage() {
   const [selectedTenantAccount, setSelectedTenantAccount] = useState(null)
   const [tenantSubTab, setTenantSubTab] = useState("roles") // "roles" | "staff"
   const [loadingAccounts, setLoadingAccounts] = useState(false)
+  const [accountsError, setAccountsError] = useState(null)
 
   // Roles state for selected tenant
   const [tenantRoles, setTenantRoles] = useState([])
   const [loadingTenantRoles, setLoadingTenantRoles] = useState(false)
+  const [tenantRolesError, setTenantRolesError] = useState(null)
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false)
   const [editingRole, setEditingRole] = useState(null)
   const [roleFormData, setRoleFormData] = useState({
@@ -72,6 +74,7 @@ export default function RolesPermissionsPage() {
   // Staff state for selected tenant
   const [tenantStaff, setTenantStaff] = useState([])
   const [loadingTenantStaff, setLoadingTenantStaff] = useState(false)
+  const [tenantStaffError, setTenantStaffError] = useState(null)
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(false)
   const [staffFormData, setStaffFormData] = useState({
     name: "",
@@ -193,21 +196,37 @@ export default function RolesPermissionsPage() {
   const loadAccounts = useCallback(async () => {
     try {
       setLoadingAccounts(true)
-      const res = await apiClient.getAccounts({ limit: 50, status: "all" })
-      if (res.success && Array.isArray(res.data?.accounts)) {
-        setAccounts(res.data.accounts)
-        if (!selectedTenantId && res.data.accounts.length > 0) {
-          const first = res.data.accounts[0]
-          setSelectedTenantId(first.accountId)
+      setAccountsError(null)
+      const accountsRes = await apiClient.getSuperAdminAccounts({ limit: 100, status: "all" })
+      const rawAccounts = accountsRes?.data?.accounts || accountsRes?.accounts || (Array.isArray(accountsRes) ? accountsRes : [])
+      const accountsList = Array.isArray(rawAccounts) ? rawAccounts : []
+      setAccounts(accountsList)
+
+      if (accountsList.length > 0) {
+        setSelectedTenantId((prevId) => {
+          const matched = accountsList.find((a) => (a.tenantId || a.accountId) === prevId)
+          if (prevId && matched) {
+            setSelectedTenantAccount(matched)
+            return prevId
+          }
+          const first = accountsList[0]
+          const firstId = first.tenantId || first.accountId || first.id || ""
           setSelectedTenantAccount(first)
-        }
+          return firstId
+        })
+      } else {
+        setSelectedTenantId("")
+        setSelectedTenantAccount(null)
       }
     } catch (err) {
       console.error("Error loading accounts for tenant management:", err)
+      const errMsg = err.message || "Failed to load tenant accounts"
+      setAccountsError(errMsg)
+      toast.error(errMsg)
     } finally {
       setLoadingAccounts(false)
     }
-  }, [selectedTenantId])
+  }, [])
 
   useEffect(() => {
     if (activeTab === "tenants") {
@@ -215,44 +234,68 @@ export default function RolesPermissionsPage() {
     }
   }, [activeTab, loadAccounts])
 
-  const handleSelectTenant = (accountId) => {
-    setSelectedTenantId(accountId)
-    const acc = accounts.find((a) => a.accountId === accountId) || null
+  const handleSelectTenant = (tenantOrAccountId) => {
+    setSelectedTenantId(tenantOrAccountId)
+    const acc = accounts.find((a) => (a.tenantId || a.accountId) === tenantOrAccountId) || null
     setSelectedTenantAccount(acc)
   }
 
   // Load roles & staff when selectedTenantId changes
   const loadTenantRoles = useCallback(async (tId) => {
-    if (!tId) return
+    if (!tId) {
+      setTenantRoles([])
+      return
+    }
     try {
       setLoadingTenantRoles(true)
+      setTenantRolesError(null)
       const res = await apiClient.getRoles({ tenantId: tId })
-      if (res.success && Array.isArray(res.data?.roles)) {
-        setTenantRoles(res.data.roles)
+      if (res && res.success !== false) {
+        const rawRoles = res?.data?.roles || res?.roles || (Array.isArray(res) ? res : [])
+        const rolesList = Array.isArray(rawRoles) ? rawRoles : []
+        setTenantRoles(rolesList)
       } else {
+        const errMsg = res?.error || res?.message || "Failed to load roles for selected tenant"
+        setTenantRolesError(errMsg)
         setTenantRoles([])
+        toast.error(errMsg)
       }
     } catch (err) {
       console.error("Failed to load tenant roles:", err)
-      toast.error("Failed to load roles for selected tenant")
+      const errMsg = err.message || "Failed to load roles for selected tenant"
+      setTenantRolesError(errMsg)
+      setTenantRoles([])
+      toast.error(errMsg)
     } finally {
       setLoadingTenantRoles(false)
     }
   }, [])
 
   const loadTenantStaff = useCallback(async (tId) => {
-    if (!tId) return
+    if (!tId) {
+      setTenantStaff([])
+      return
+    }
     try {
       setLoadingTenantStaff(true)
+      setTenantStaffError(null)
       const res = await apiClient.getStaff({ tenantId: tId, limit: 100 })
-      if (res.success && Array.isArray(res.data?.staff)) {
-        setTenantStaff(res.data.staff)
+      if (res && res.success !== false) {
+        const rawStaff = res?.data?.staff || res?.staff || (Array.isArray(res) ? res : [])
+        const staffList = Array.isArray(rawStaff) ? rawStaff : []
+        setTenantStaff(staffList)
       } else {
+        const errMsg = res?.error || res?.message || "Failed to load staff for selected tenant"
+        setTenantStaffError(errMsg)
         setTenantStaff([])
+        toast.error(errMsg)
       }
     } catch (err) {
       console.error("Failed to load tenant staff:", err)
-      toast.error("Failed to load staff for selected tenant")
+      const errMsg = err.message || "Failed to load staff for selected tenant"
+      setTenantStaffError(errMsg)
+      setTenantStaff([])
+      toast.error(errMsg)
     } finally {
       setLoadingTenantStaff(false)
     }
@@ -850,18 +893,39 @@ export default function RolesPermissionsPage() {
                   <select
                     value={selectedTenantId}
                     onChange={(e) => handleSelectTenant(e.target.value)}
-                    className="w-full text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+                    disabled={loadingAccounts}
+                    className="w-full text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:bg-white disabled:opacity-60"
                   >
-                    {accounts.length === 0 ? (
+                    {loadingAccounts ? (
+                      <option value="">Loading accounts...</option>
+                    ) : accounts.length === 0 ? (
                       <option value="">No accounts found</option>
                     ) : (
-                      accounts.map((acc) => (
-                        <option key={acc.accountId} value={acc.accountId}>
-                          {acc.companyName || acc.displayName} ({acc.accountId}) — {acc.status}
-                        </option>
-                      ))
+                      accounts.map((acc) => {
+                        const tId = acc.tenantId || acc.accountId || acc.id
+                        return (
+                          <option key={tId} value={tId}>
+                            {acc.companyName || acc.displayName || tId} ({tId}) — {acc.status || "active"}
+                          </option>
+                        )
+                      })
                     )}
                   </select>
+                  {accountsError && (
+                    <div className="mt-2 flex items-center justify-between text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2">
+                      <div className="flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{accountsError}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={loadAccounts}
+                        className="underline font-bold hover:text-rose-800 cursor-pointer text-[11px]"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {selectedTenantAccount && (
@@ -937,6 +1001,20 @@ export default function RolesPermissionsPage() {
 
                 {loadingTenantRoles ? (
                   <div className="p-8 text-center text-xs text-slate-500">Loading roles...</div>
+                ) : tenantRolesError ? (
+                  <div className="p-6 text-center">
+                    <div className="inline-flex items-center gap-2 text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-3">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{tenantRolesError}</span>
+                      <button
+                        type="button"
+                        onClick={() => loadTenantRoles(selectedTenantId)}
+                        className="ml-2 underline font-bold hover:text-rose-800 cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
                 ) : tenantRoles.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-500">No roles found for this tenant.</div>
                 ) : (
@@ -1020,6 +1098,20 @@ export default function RolesPermissionsPage() {
 
                 {loadingTenantStaff ? (
                   <div className="p-8 text-center text-xs text-slate-500">Loading staff users...</div>
+                ) : tenantStaffError ? (
+                  <div className="p-6 text-center">
+                    <div className="inline-flex items-center gap-2 text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-3">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{tenantStaffError}</span>
+                      <button
+                        type="button"
+                        onClick={() => loadTenantStaff(selectedTenantId)}
+                        className="ml-2 underline font-bold hover:text-rose-800 cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
                 ) : tenantStaff.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-500">No staff members found for this tenant.</div>
                 ) : (
