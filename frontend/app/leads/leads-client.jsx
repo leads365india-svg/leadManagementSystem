@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react"
 import dynamic from "next/dynamic"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
+import { useAuth } from "@/lib/auth-context"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import Breadcrumb from "@/components/breadcrumb"
@@ -105,6 +106,14 @@ const LEAD_SOURCES = [
 export default function LeadsClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { user: authUser, hasPermission } = useAuth()
+
+  // Granular capability flags
+  const canCreateLead = typeof hasPermission === "function" ? hasPermission("leads.create") : true
+  const canImportLeads = typeof hasPermission === "function" ? (hasPermission("leads.create") || hasPermission("leads.import")) : true
+  const canEditLead = typeof hasPermission === "function" ? hasPermission("leads.edit*") : true
+  const canDeleteLead = typeof hasPermission === "function" ? (hasPermission("leads.delete*") || hasPermission("leads.delete")) : true
+  const canAssignLead = typeof hasPermission === "function" ? hasPermission("leads.assign") : true
 
   // URL parameters state
   const currentPage = Number(searchParams.get("page")) || 1
@@ -678,21 +687,25 @@ export default function LeadsClient() {
             <span className="hidden sm:inline">Refresh</span>
           </button>
 
-          <Link
-            href="/tools/import-leads"
-            className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
-          >
-            <UploadCloud className="w-4 h-4 text-slate-500" />
-            <span>Import Leads</span>
-          </Link>
+          {canImportLeads && (
+            <Link
+              href="/tools/import-leads"
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
+            >
+              <UploadCloud className="w-4 h-4 text-slate-500" />
+              <span>Import Leads</span>
+            </Link>
+          )}
 
-          <Link
-            href="/leads/new"
-            className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Lead</span>
-          </Link>
+          {canCreateLead && (
+            <Link
+              href="/leads/new"
+              className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Lead</span>
+            </Link>
+          )}
         </div>
       </div>
 
@@ -1251,23 +1264,27 @@ export default function LeadsClient() {
                             )
                           })()}
 
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(lead)}
-                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                            title="Edit Lead"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
+                          {canEditLead && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditModal(lead)}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                              title="Edit Lead"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
 
-                          <button
-                            type="button"
-                            onClick={() => setLeadToDelete(lead)}
-                            className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                            title="Delete Lead"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {canDeleteLead && (
+                            <button
+                              type="button"
+                              onClick={() => setLeadToDelete(lead)}
+                              className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              title="Delete Lead"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

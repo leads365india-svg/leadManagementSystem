@@ -117,6 +117,7 @@ export default function InBrowserAudioPlayer({
         blobUrlRef.current = null
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId])
 
   // 2. Audio DOM event handlers with Instant Auto-play & Error Diagnostics

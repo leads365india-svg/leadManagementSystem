@@ -5,6 +5,120 @@ import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 
+export const SCOPE_RANKS = {
+  own: 1,
+  team: 2,
+  all: 3,
+}
+
+export const LEGACY_PERMISSION_MAP = {
+  "leads.view": "leads.view",
+  "leads.edit": "leads.edit",
+  "leads.delete": "leads.delete",
+  "followups.view": "followups.view",
+  "followups.manage": "followups.manage",
+  "calls.view": "calls.view",
+  "calls.manage": "calls.log",
+  "users.view": "staff.view",
+  "users.manage": "staff.manage",
+}
+
+/**
+ * Robust Permission Evaluator supporting:
+ * 1. super_admin -> always true
+ * 2. account_admin -> full permissions unless constrained by ceiling
+ * 3. Wildcard prefix matching e.g. "leads.view*", "calls.view*"
+ * 4. 3-part scoped permissions e.g. "leads.view.own", "leads.view.team", "leads.view.all"
+ * 5. 2-part action permissions e.g. "leads.delete", "leads.create", "dashboard.view"
+ */
+export function hasPermission(user, requiredPermission, requiredScope = null) {
+  if (!user) return false
+  if (user.role === "super_admin") return true
+
+  const userPerms = Array.isArray(user.permissions) ? user.permissions : []
+  const permSet = new Set(userPerms)
+
+  // Account admin with empty custom array receives full tenant access
+  if (user.role === "account_admin" && userPerms.length === 0) {
+    return true
+  }
+
+  if (!requiredPermission) return true
+
+  // Support wildcard prefix matching (e.g. "leads.view*", "calls.view*", "settings.*")
+  if (requiredPermission.endsWith("*")) {
+    const prefix = requiredPermission.slice(0, -1)
+    for (const p of userPerms) {
+      if (p.startsWith(prefix) || p === prefix.replace(/\.$/, "")) {
+        return true
+      }
+    }
+    const cleanPrefix = prefix.replace(/\.$/, "")
+    if (permSet.has(cleanPrefix)) return true
+    return false
+  }
+
+  // Direct match
+  if (permSet.has(requiredPermission)) return true
+
+  // Legacy alias check
+  if (LEGACY_PERMISSION_MAP[requiredPermission] && permSet.has(LEGACY_PERMISSION_MAP[requiredPermission])) {
+    return true
+  }
+  for (const [legacyKey, modernKey] of Object.entries(LEGACY_PERMISSION_MAP)) {
+    if (modernKey === requiredPermission && permSet.has(legacyKey)) {
+      return true
+    }
+  }
+
+  // 3-part key: resource.action.scope (e.g. "leads.view.own")
+  const parts = requiredPermission.split(".")
+  if (parts.length === 3) {
+    const [resource, action, requestedScope] = parts
+    const prefix = `${resource}.${action}`
+    let currentScope = null
+    if (permSet.has(`${prefix}.all`) || permSet.has(`${resource}.*.all`)) {
+      currentScope = "all"
+    } else if (permSet.has(`${prefix}.team`) || permSet.has(`${resource}.*.team`)) {
+      currentScope = "team"
+    } else if (permSet.has(`${prefix}.own`) || permSet.has(`${resource}.*.own`)) {
+      currentScope = "own"
+    } else if (permSet.has(prefix)) {
+      currentScope = "all"
+    }
+
+    if (!currentScope) return false
+    const minScope = requiredScope || requestedScope
+    const minRank = SCOPE_RANKS[minScope] || 1
+    const currentRank = SCOPE_RANKS[currentScope] || 0
+    return currentRank >= minRank
+  }
+
+  // 2-part key: resource.action (e.g. "leads.delete", "leads.view", "calls.view")
+  if (parts.length === 2) {
+    const [resource, action] = parts
+    const prefix = `${resource}.${action}`
+    if (
+      permSet.has(`${prefix}.all`) ||
+      permSet.has(`${prefix}.team`) ||
+      permSet.has(`${prefix}.own`) ||
+      permSet.has(`${resource}.*.all`) ||
+      permSet.has(`${resource}.*.team`) ||
+      permSet.has(`${resource}.*.own`)
+    ) {
+      if (requiredScope) {
+        let currentScope = "own"
+        if (permSet.has(`${prefix}.all`) || permSet.has(`${resource}.*.all`)) currentScope = "all"
+        else if (permSet.has(`${prefix}.team`) || permSet.has(`${resource}.*.team`)) currentScope = "team"
+        return (SCOPE_RANKS[currentScope] || 0) >= (SCOPE_RANKS[requiredScope] || 1)
+      }
+      return true
+    }
+  }
+
+  return false
+}
+
 const AuthContext = createContext({
   user: null,
   status: "idle", // "idle" | "loading" | "authenticated" | "unauthenticated"
@@ -13,6 +127,7 @@ const AuthContext = createContext({
   login: async () => {},
   setSession: () => {},
   logout: async () => {},
+  hasPermission: () => false,
 })
 
 export function AuthProvider({ children }) {
@@ -142,6 +257,13 @@ export function AuthProvider({ children }) {
     }
   }, [user, router])
 
+  const checkPermission = useCallback(
+    (requiredPermission, requiredScope = null) => {
+      return hasPermission(user, requiredPermission, requiredScope)
+    },
+    [user]
+  )
+
   const value = {
     user,
     status,
@@ -152,6 +274,7 @@ export function AuthProvider({ children }) {
     login,
     setSession,
     logout,
+    hasPermission: checkPermission,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

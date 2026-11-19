@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect, useRef, useMemo } from "react"
 import { createPortal } from "react-dom"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
@@ -47,13 +47,14 @@ import {
   Building2,
 } from "lucide-react"
 
-// Complete Six-Category CRM Navigation Structure (All 26 child items preserved)
+// Complete Six-Category CRM Navigation Structure (Granular RBAC permission keys assigned)
 const NAV_CATEGORIES = [
   {
     id: "main",
     label: "Home",
     icon: LayoutDashboard,
     href: "/portal",
+    permission: "dashboard.view",
     items: [
       {
         id: "main-dashboard",
@@ -61,6 +62,7 @@ const NAV_CATEGORIES = [
         href: "/portal",
         description: "Pipeline KPIs, metrics & lead velocity",
         icon: LayoutDashboard,
+        permission: "dashboard.view",
       },
     ],
   },
@@ -69,6 +71,7 @@ const NAV_CATEGORIES = [
     label: "Leads",
     icon: Users,
     href: "/leads",
+    permission: "leads.view*",
     items: [
       {
         id: "leads-manage",
@@ -76,6 +79,7 @@ const NAV_CATEGORIES = [
         href: "/leads",
         description: "Complete database of sales inquiries",
         icon: Users,
+        permission: "leads.view*",
       },
     ],
   },
@@ -91,6 +95,7 @@ const NAV_CATEGORIES = [
         href: "/communication/call-reports",
         description: "Agent call logs and audio durations",
         icon: PhoneCall,
+        permission: "calls.view*",
       },
       {
         id: "comm-ai-intelligence",
@@ -98,6 +103,7 @@ const NAV_CATEGORIES = [
         href: "/dashboard/ai-call-intelligence",
         description: "Transcripts, summaries & conversation analytics",
         icon: Sparkles,
+        permission: "calls.view*",
       },
       {
         id: "comm-meetings",
@@ -105,6 +111,7 @@ const NAV_CATEGORIES = [
         href: "/communication/meetings",
         description: "Scheduled client demos and briefings",
         icon: Calendar,
+        permission: "followups.view*",
       },
       {
         id: "comm-reminders",
@@ -112,6 +119,7 @@ const NAV_CATEGORIES = [
         href: "/communication/reminders",
         description: "Pending tasks and time-sensitive alerts",
         icon: Clock,
+        permission: "followups.view*",
       },
       {
         id: "comm-follow-ups",
@@ -119,6 +127,7 @@ const NAV_CATEGORIES = [
         href: "/communication/follow-ups",
         description: "Scheduled touchpoints & callbacks",
         icon: ArrowUpRight,
+        permission: "followups.view*",
       },
     ],
   },
@@ -134,6 +143,7 @@ const NAV_CATEGORIES = [
         href: "/tools/import-leads",
         description: "Bulk upload CSV, Excel or JSON lists",
         icon: UploadCloud,
+        permission: "leads.create",
       },
       {
         id: "tools-assign",
@@ -141,6 +151,7 @@ const NAV_CATEGORIES = [
         href: "/tools/assign-leads",
         description: "Round-robin distribution & team routing",
         icon: UserCheck,
+        permission: "leads.assign",
       },
       {
         id: "tools-data-mgmt",
@@ -148,6 +159,7 @@ const NAV_CATEGORIES = [
         href: "/tools/data-management",
         description: "Cleanse, deduplicate and archive data",
         icon: Database,
+        permission: "leads.delete*",
       },
     ],
   },
@@ -156,6 +168,7 @@ const NAV_CATEGORIES = [
     label: "Reports",
     icon: BarChart3,
     href: "/reports/leads",
+    permission: "reports.view",
     items: [
       {
         id: "reports-leads",
@@ -163,6 +176,7 @@ const NAV_CATEGORIES = [
         href: "/reports/leads",
         description: "Volume trends and pipeline conversions",
         icon: BarChart3,
+        permission: "reports.view",
       },
       {
         id: "reports-call-reports",
@@ -170,6 +184,7 @@ const NAV_CATEGORIES = [
         href: "/reports/call-reports",
         description: "Call disposition & connection statistics",
         icon: Phone,
+        permission: "reports.view",
       },
       {
         id: "reports-meetings",
@@ -177,6 +192,7 @@ const NAV_CATEGORIES = [
         href: "/reports/meeting-reports",
         description: "Show rates and executive presentation logs",
         icon: Video,
+        permission: "reports.view",
       },
       {
         id: "reports-performance",
@@ -184,6 +200,7 @@ const NAV_CATEGORIES = [
         href: "/reports/performance",
         description: "Agent quota tracking and leaderboard",
         icon: TrendingUp,
+        permission: "reports.view",
       },
       {
         id: "reports-ai-sales-intelligence",
@@ -191,6 +208,7 @@ const NAV_CATEGORIES = [
         href: "/dashboard/ai-sales-intelligence",
         description: "Agent scorecards, sales coaching & lead priority",
         icon: Sparkles,
+        permission: "reports.view",
       },
       {
         id: "reports-call-ingestion",
@@ -198,6 +216,7 @@ const NAV_CATEGORIES = [
         href: "/reports/call-ingestion",
         description: "PBX webhook feeds & AI recordings status",
         icon: Radio,
+        permission: "reports.view",
       },
     ],
   },
@@ -213,6 +232,7 @@ const NAV_CATEGORIES = [
         href: "/settings/custom-fields",
         description: "Create custom parameters & lead tags",
         icon: Sliders,
+        permission: "settings.view",
       },
       {
         id: "settings-field-arrangement",
@@ -220,6 +240,7 @@ const NAV_CATEGORIES = [
         href: "/settings/field-arrangement",
         description: "Customize lead form layout and order",
         icon: Layers,
+        permission: "settings.view",
       },
       {
         id: "settings-report-builder",
@@ -227,6 +248,7 @@ const NAV_CATEGORIES = [
         href: "/settings/report-builder",
         description: "Custom queries & automated report schedules",
         icon: FileSpreadsheet,
+        permission: "reports.view",
       },
       {
         id: "settings-lead-feeds",
@@ -234,6 +256,7 @@ const NAV_CATEGORIES = [
         href: "/settings/lead-feeds",
         description: "Webhook endpoints and advertising APIs",
         icon: Rss,
+        permission: "leadfeed.manage",
       },
       {
         id: "settings-message-templates",
@@ -241,6 +264,7 @@ const NAV_CATEGORIES = [
         href: "/settings/message-templates",
         description: "Email snippets and SMS follow-up macros",
         icon: MessageSquare,
+        permission: "settings.view",
       },
       {
         id: "settings-staff",
@@ -248,6 +272,7 @@ const NAV_CATEGORIES = [
         href: "/settings/staff",
         description: "Sales representatives and seat allocations",
         icon: Shield,
+        permission: "staff.view",
       },
       {
         id: "settings-roles",
@@ -255,6 +280,7 @@ const NAV_CATEGORIES = [
         href: "/settings/roles",
         description: "Configure custom roles and granular permission scopes",
         icon: Shield,
+        permission: "roles.manage",
       },
       {
         id: "settings-audit-log",
@@ -262,6 +288,7 @@ const NAV_CATEGORIES = [
         href: "/settings/audit-log",
         description: "Inspect chronological trail of security & CRM actions",
         icon: History,
+        permission: "audit.view",
       },
       {
         id: "settings-do-not-record",
@@ -269,6 +296,7 @@ const NAV_CATEGORIES = [
         href: "/settings/do-not-record",
         description: "Compliance list and restricted numbers",
         icon: PhoneOff,
+        permission: "donotrecord.manage",
       },
       {
         id: "settings-ai-knowledge",
@@ -276,6 +304,7 @@ const NAV_CATEGORIES = [
         href: "/settings/ai-knowledge",
         description: "Business profile, products & AI knowledge base",
         icon: Sparkles,
+        permission: "settings.manage",
       },
       {
         id: "settings-ai-receptionist",
@@ -283,6 +312,7 @@ const NAV_CATEGORIES = [
         href: "/settings/ai-receptionist",
         description: "Cloud telephony routing, virtual numbers & AI call answering",
         icon: PhoneCall,
+        permission: "integrations.manage",
       },
     ],
   },
@@ -305,8 +335,40 @@ export default function Header() {
   useEffect(() => {
     setMounted(true)
   }, [])
-  const { user: authUser, logout, setActiveTenant, checkAuth } = useAuth()
+  const { user: authUser, logout, setActiveTenant, checkAuth, hasPermission } = useAuth()
   const user = authUser
+
+  // Filter NAV_CATEGORIES dynamically based on user role and granular permissions
+  const filteredNavCategories = useMemo(() => {
+    if (!user) return []
+    if (user.role === "super_admin") return NAV_CATEGORIES
+
+    return NAV_CATEGORIES.map((cat) => {
+      // Filter child items
+      const permittedItems = (cat.items || []).filter((item) => {
+        if (!item.permission) return true
+        return typeof hasPermission === "function" ? hasPermission(item.permission) : true
+      })
+
+      // If category has top-level permission check
+      if (cat.permission && typeof hasPermission === "function" && !hasPermission(cat.permission)) {
+        return null
+      }
+
+      // Hide category if all its items are filtered out
+      if (cat.items && cat.items.length > 0 && permittedItems.length === 0) {
+        return null
+      }
+
+      const defaultHref = permittedItems.length > 0 ? permittedItems[0].href : cat.href
+
+      return {
+        ...cat,
+        href: defaultHref,
+        items: permittedItems,
+      }
+    }).filter(Boolean)
+  }, [user, hasPermission])
 
   const dropdownTimeoutRef = useRef(null)
   const navRef = useRef(null)
@@ -518,7 +580,7 @@ export default function Header() {
     return null
   }
 
-  const activeCategoryData = NAV_CATEGORIES.find((c) => c.id === activeDropdown)
+  const activeCategoryData = filteredNavCategories.find((c) => c.id === activeDropdown)
 
   return (
     <header
@@ -584,7 +646,7 @@ export default function Header() {
               CENTER: ALL PRIMARY NAVIGATION ITEMS IN ONE NAVBAR (NO ARROWS, NO SCROLL)
           ========================================================================= */}
           <nav className="hidden md:flex items-center space-x-0.5 lg:space-x-1 xl:space-x-1.5 shrink-0">
-            {NAV_CATEGORIES.map((category) => {
+            {filteredNavCategories.map((category) => {
               const CategoryIcon = category.icon
               const isActive = isCategoryActive(category)
               const isDropdownOpen = activeDropdown === category.id
@@ -882,7 +944,7 @@ export default function Header() {
 
             {/* Scrollable Categories List */}
             <div className="flex-1 overflow-y-auto p-3 space-y-1">
-              {NAV_CATEGORIES.map((category) => {
+              {filteredNavCategories.map((category) => {
                 const CategoryIcon = category.icon
                 const isExpanded = expandedMobileCategory === category.id
                 const isCatActive = isCategoryActive(category)

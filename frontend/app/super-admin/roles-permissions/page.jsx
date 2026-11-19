@@ -229,6 +229,10 @@ export default function RolesPermissionsPage() {
   }, [])
 
   useEffect(() => {
+    loadAccounts()
+  }, [loadAccounts])
+
+  useEffect(() => {
     if (activeTab === "tenants") {
       loadAccounts()
     }

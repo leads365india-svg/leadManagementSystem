@@ -113,7 +113,7 @@ function PortalLoginForm() {
     if (authStatus === "unauthenticated") {
       setCheckingExistingSession(false)
     }
-  }, [authStatus, authUser, router])
+  }, [authStatus, authUser, router, tenantParam])
 
   const handleSubmit = async (e) => {
     e.preventDefault()

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import {
@@ -16,10 +17,13 @@ import {
   Mail,
   ChevronRight,
   Filter,
+  Sparkles,
+  PhoneCall,
 } from "lucide-react"
 
 export default function ClientPortalDashboard() {
-  const { user: authUser } = useAuth()
+  const { user: authUser, hasPermission } = useAuth()
+  const router = useRouter()
   const [stats, setStats] = useState({
     total: 0,
     statusCounts: {
@@ -35,6 +39,33 @@ export default function ClientPortalDashboard() {
   const [user, setUser] = useState(authUser || null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+
+  // Granular capability flags
+  const canCreateLead = typeof hasPermission === "function" ? hasPermission("leads.create") : true
+  const canViewLeads = typeof hasPermission === "function" ? hasPermission("leads.view*") : true
+  const canViewReports = typeof hasPermission === "function" ? hasPermission("reports.view") : true
+  const canViewCalls = typeof hasPermission === "function" ? (hasPermission("calls.view*") || hasPermission("recordings.listen")) : true
+
+  // Automatic redirect if custom role lacks dashboard.view
+  useEffect(() => {
+    if (authUser && authUser.role !== "super_admin" && typeof hasPermission === "function") {
+      if (!hasPermission("dashboard.view")) {
+        if (hasPermission("leads.view*")) {
+          router.replace("/leads")
+        } else if (hasPermission("calls.view*") || hasPermission("calls.log")) {
+          router.replace("/communication/call-reports")
+        } else if (hasPermission("followups.view*") || hasPermission("followups.manage*")) {
+          router.replace("/communication/follow-ups")
+        } else if (hasPermission("reports.view")) {
+          router.replace("/reports/leads")
+        } else if (hasPermission("settings.view") || hasPermission("settings.manage")) {
+          router.replace("/settings/custom-fields")
+        } else {
+          router.replace("/leads")
+        }
+      }
+    }
+  }, [authUser, hasPermission, router])
 
   useEffect(() => {
     if (authUser) {
@@ -129,13 +160,15 @@ export default function ClientPortalDashboard() {
             <span>Refresh</span>
           </button>
 
-          <Link
-            href="/portal/leads/new"
-            className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm shadow-indigo-100 transition-colors"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Add Lead</span>
-          </Link>
+          {canCreateLead && (
+            <Link
+              href="/portal/leads/new"
+              className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm shadow-indigo-100 transition-colors"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Add Lead</span>
+            </Link>
+          )}
         </div>
       </div>
 
@@ -252,74 +285,109 @@ export default function ClientPortalDashboard() {
         </div>
       </div>
 
-      {/* Recent Leads Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900">Recent Leads</h3>
-            <p className="text-xs text-slate-500">Latest prospects registered in your workspace</p>
+      {/* AI Call Intelligence & Voice Analytics Shortcut */}
+      {canViewCalls && (
+        <div className="bg-gradient-to-r from-indigo-900 via-indigo-850 to-slate-900 rounded-2xl p-5 sm:p-6 text-white shadow-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center space-x-2">
+              <span className="p-1.5 bg-indigo-500/20 rounded-lg border border-indigo-400/30 text-indigo-300">
+                <Sparkles className="w-4 h-4" />
+              </span>
+              <h3 className="font-bold text-sm text-white">AI Call Intelligence & Voice Analytics</h3>
+            </div>
+            <p className="text-xs text-indigo-200/90 max-w-xl">
+              Inspect automatic Gemini transcription, customer intent, scorecards, and actionable call outcomes.
+            </p>
           </div>
           <Link
-            href="/portal/leads"
-            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
+            href="/dashboard/ai-call-intelligence"
+            className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold text-slate-900 bg-white hover:bg-slate-100 shadow-sm transition-colors shrink-0"
           >
-            <span>All Leads →</span>
+            <PhoneCall className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Open Call Intelligence</span>
+            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
           </Link>
         </div>
+      )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
-                <th className="py-3 px-6">Name</th>
-                <th className="py-3 px-4">Email</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-6 text-right">Added On</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
-              {recentLeads.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-10 text-center text-slate-400">
-                    <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                    <p className="font-medium text-slate-700 text-xs">No leads recorded yet</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Get started by adding your first lead.
-                    </p>
-                    <Link
-                      href="/portal/leads/new"
-                      className="inline-block mt-3 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
-                    >
-                      + Create First Lead
-                    </Link>
-                  </td>
+      {/* Recent Leads Table */}
+      {canViewLeads ? (
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+          <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Recent Leads</h3>
+              <p className="text-xs text-slate-500">Latest prospects registered in your workspace</p>
+            </div>
+            <Link
+              href="/portal/leads"
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
+            >
+              <span>All Leads →</span>
+            </Link>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
+                  <th className="py-3 px-6">Name</th>
+                  <th className="py-3 px-4">Email</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-6 text-right">Added On</th>
                 </tr>
-              ) : (
-                recentLeads.map((lead) => (
-                  <tr key={lead._id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-3.5 px-6 font-semibold text-slate-900">{lead.name}</td>
-                    <td className="py-3.5 px-4 font-mono text-slate-600 text-[11px]">
-                      {lead.email}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${getStatusBadge(
-                          lead.status,
-                        )}`}
-                      >
-                        {lead.status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-6 text-right text-slate-400 text-[11px]">
-                      {new Date(lead.createdAt).toLocaleDateString()}
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {recentLeads.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-10 text-center text-slate-400">
+                      <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                      <p className="font-medium text-slate-700 text-xs">No leads recorded yet</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Get started by adding your first lead.
+                      </p>
+                      {canCreateLead && (
+                        <Link
+                          href="/portal/leads/new"
+                          className="inline-block mt-3 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+                        >
+                          + Create First Lead
+                        </Link>
+                      )}
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  recentLeads.map((lead) => (
+                    <tr key={lead._id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3.5 px-6 font-semibold text-slate-900">{lead.name}</td>
+                      <td className="py-3.5 px-4 font-mono text-slate-600 text-[11px]">
+                        {lead.email}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${getStatusBadge(
+                            lead.status,
+                          )}`}
+                        >
+                          {lead.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-6 text-right text-slate-400 text-[11px]">
+                        {new Date(lead.createdAt).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-500">
+          <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+          <p className="font-semibold text-slate-700">Leads List Restricted</p>
+          <p className="text-[11px] text-slate-400 mt-1">Your assigned role has restricted access to view individual lead records.</p>
+        </div>
+      )}
     </div>
   )
 }

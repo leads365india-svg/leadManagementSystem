@@ -770,7 +770,7 @@ export default function LeadFeedsClient() {
     } finally {
       setRefreshingAll(false)
     }
-  }, [loadSettings, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
+  }, [loadSettings, fetchWebsiteIntegrations, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
 
   useEffect(() => {
     if (activeTab === "overview") {
@@ -789,7 +789,7 @@ export default function LeadFeedsClient() {
     } else if (activeTab === "events") {
       loadEvents()
     }
-  }, [activeTab, loadAllStatuses, loadSettings, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
+  }, [activeTab, loadAllStatuses, loadSettings, fetchWebsiteIntegrations, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
 
   // Save Website changes
   const handleSaveWebsite = async () => {

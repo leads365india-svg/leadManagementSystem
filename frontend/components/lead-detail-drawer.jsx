@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
+import { useAuth } from "@/lib/auth-context"
 import { apiClient, API_BASE_URL } from "@/lib/api"
 import InBrowserAudioPlayer from "@/components/in-browser-audio-player"
 import { toast } from "react-hot-toast"
@@ -87,6 +88,11 @@ export default function LeadDetailDrawer({
   onEditLead,
   onDeleteLead,
 }) {
+  const { hasPermission } = useAuth()
+  const canEditLead = typeof hasPermission === "function" ? hasPermission("leads.edit*") : true
+  const canDeleteLead = typeof hasPermission === "function" ? (hasPermission("leads.delete*") || hasPermission("leads.delete")) : true
+  const canAssignLead = typeof hasPermission === "function" ? hasPermission("leads.assign") : true
+
   const [activeTab, setActiveTab] = useState("timeline") // "timeline" | "notes" | "followups" | "calls" | "details"
   const [lead, setLead] = useState(initialLead || null)
   const [loading, setLoading] = useState(false)
@@ -319,6 +325,7 @@ export default function LeadDetailDrawer({
     if (initialLead) {
       setLead(initialLead)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLeadId])
 
   // Fetch full lead details on drawer open (Passive read: does NOT notify parent to avoid cascading re-renders)
@@ -529,6 +536,7 @@ export default function LeadDetailDrawer({
       fetchLeadActivities()
       fetchLeadCalls()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, leadId])
 
   // Close on ESC key
@@ -958,30 +966,37 @@ export default function LeadDetailDrawer({
                       <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                     </div>
 
-                    {/* Owner / Assignee dropdown */}
-                    <div className="relative inline-flex items-center">
-                      <select
-                        value={
-                          lead?.assignedStaffId ||
-                          (staffList.find((s) => s.name === lead?.assignedTo)?._id) ||
-                          (staffList.find((s) => s.name === lead?.assignedTo)?.id) ||
-                          "unassigned"
-                        }
-                        onChange={(e) => handleAssignStaff(e.target.value)}
-                        disabled={isAssigningStaff}
-                        className="text-xs font-semibold rounded-full pl-6 pr-6 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 cursor-pointer appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 transition-colors"
-                        title="Click to assign or reassign lead to a sales representative"
-                      >
-                        <option value="unassigned">Unassigned</option>
-                        {staffList.map((st) => (
-                          <option key={st.id || st._id} value={st.id || st._id}>
-                            {st.name} ({st.role})
-                          </option>
-                        ))}
-                      </select>
-                      <User className="w-3 h-3 text-slate-400 absolute left-2 pointer-events-none" />
-                      <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 pointer-events-none" />
-                    </div>
+                    {/* Owner / Assignee */}
+                    {canAssignLead ? (
+                      <div className="relative inline-flex items-center">
+                        <select
+                          value={
+                            lead?.assignedStaffId ||
+                            (staffList.find((s) => s.name === lead?.assignedTo)?._id) ||
+                            (staffList.find((s) => s.name === lead?.assignedTo)?.id) ||
+                            "unassigned"
+                          }
+                          onChange={(e) => handleAssignStaff(e.target.value)}
+                          disabled={isAssigningStaff}
+                          className="text-xs font-semibold rounded-full pl-6 pr-6 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 cursor-pointer appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 transition-colors"
+                          title="Click to assign or reassign lead to a sales representative"
+                        >
+                          <option value="unassigned">Unassigned</option>
+                          {staffList.map((st) => (
+                            <option key={st.id || st._id} value={st.id || st._id}>
+                              {st.name} ({st.role})
+                            </option>
+                          ))}
+                        </select>
+                        <User className="w-3 h-3 text-slate-400 absolute left-2 pointer-events-none" />
+                        <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 pointer-events-none" />
+                      </div>
+                    ) : (
+                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                        <User className="w-3 h-3 text-slate-400" />
+                        <span>{lead?.assignedTo || "Unassigned"}</span>
+                      </span>
+                    )}
 
                     {/* Source pill */}
                     <div className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
@@ -2072,16 +2087,20 @@ export default function LeadDetailDrawer({
               DRAWER FOOTER ACTIONS
           ========================================================================= */}
           <div className="p-4 bg-slate-50 border-t border-slate-200 shrink-0 flex items-center justify-between gap-3 text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                if (onDeleteLead) onDeleteLead(lead)
-              }}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete Lead</span>
-            </button>
+            <div>
+              {canDeleteLead && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onDeleteLead) onDeleteLead(lead)
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Lead</span>
+                </button>
+              )}
+            </div>
 
             <div className="flex items-center space-x-2">
               <Link
@@ -2092,16 +2111,18 @@ export default function LeadDetailDrawer({
                 <span>Schedule Follow-up</span>
               </Link>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (onEditLead) onEditLead(lead)
-                }}
-                className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                <span>Edit Lead</span>
-              </button>
+              {canEditLead && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onEditLead) onEditLead(lead)
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Lead</span>
+                </button>
+              )}
             </div>
           </div>
 

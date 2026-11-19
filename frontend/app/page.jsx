@@ -18,7 +18,7 @@ import { useAuth } from "@/lib/auth-context"
  */
 export default function RootEntryPage() {
   const router = useRouter()
-  const { user, status, loading } = useAuth()
+  const { user, status, loading, hasPermission } = useAuth()
 
   useEffect(() => {
     // Wait until authentication status has been resolved from the session check
@@ -30,7 +30,23 @@ export default function RootEntryPage() {
       if (user.role === "super_admin") {
         router.replace("/super-admin")
       } else {
-        router.replace("/portal")
+        if (typeof hasPermission === "function" && !hasPermission("dashboard.view")) {
+          if (hasPermission("leads.view*")) {
+            router.replace("/leads")
+          } else if (hasPermission("calls.view*") || hasPermission("calls.log")) {
+            router.replace("/communication/call-reports")
+          } else if (hasPermission("followups.view*") || hasPermission("followups.manage*")) {
+            router.replace("/communication/follow-ups")
+          } else if (hasPermission("reports.view")) {
+            router.replace("/reports/leads")
+          } else if (hasPermission("settings.view") || hasPermission("settings.manage")) {
+            router.replace("/settings/custom-fields")
+          } else {
+            router.replace("/leads")
+          }
+        } else {
+          router.replace("/portal")
+        }
       }
       return
     }
@@ -39,7 +55,7 @@ export default function RootEntryPage() {
       router.replace("/super-admin/login")
       return
     }
-  }, [status, user, loading, router])
+  }, [status, user, loading, router, hasPermission])
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100">

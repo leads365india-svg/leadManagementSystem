@@ -329,6 +329,7 @@ function FollowUpsContent() {
     if (action === "schedule" || targetLeadId) {
       handleOpenScheduleModal(targetLeadId || "")
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
   // Submit Schedule Form
