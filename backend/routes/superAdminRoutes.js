@@ -31,4 +31,21 @@ router.post("/switch-tenant", switchTenantContext)
 router.get("/permissions", getPermissions)
 router.put("/permissions", updatePermissions)
 
+// WhatsApp Cloud API Super Admin Control Endpoints
+const {
+  getWhatsAppGlobalConfig,
+  updateWhatsAppGlobalConfig,
+  listTenantWhatsAppConfigs,
+  getTenantWhatsAppConfig,
+  saveTenantWhatsAppConfig,
+  deleteTenantWhatsAppConfig,
+} = require("../controllers/whatsappAdminController")
+
+router.get("/whatsapp/config", getWhatsAppGlobalConfig)
+router.put("/whatsapp/config", updateWhatsAppGlobalConfig)
+router.get("/whatsapp/tenants", listTenantWhatsAppConfigs)
+router.get("/whatsapp/tenants/:tenantId", getTenantWhatsAppConfig)
+router.post("/whatsapp/tenants/:tenantId", saveTenantWhatsAppConfig)
+router.delete("/whatsapp/tenants/:tenantId", deleteTenantWhatsAppConfig)
+
 module.exports = router

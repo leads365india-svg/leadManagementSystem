@@ -28,6 +28,7 @@ const ALLOWED_INTEGRATION_TYPES = [
   "indiamart",
   "wix",
   "shopify",
+  "whatsapp",
 ]
 
 const fieldMappingSchema = new mongoose.Schema(
@@ -104,6 +105,22 @@ const integrationSchema = new mongoose.Schema(
     siteKey: {
       type: String,
       index: true,
+      default: null,
+    },
+    // WhatsApp Cloud API identifiers (Roadmap Phase WhatsApp)
+    phoneNumberId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    wabaId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    displayPhoneNumber: {
+      type: String,
+      trim: true,
       default: null,
     },
     // Encrypted credentials payload (AES-256-GCM)
@@ -224,6 +241,21 @@ const integrationSchema = new mongoose.Schema(
 integrationSchema.index({ tenantId: 1, type: 1 })
 integrationSchema.index({ tenantId: 1, name: 1 })
 integrationSchema.index({ apiKeyHash: 1 }, { sparse: true })
+
+// WhatsApp Phone Number ID partial unique index:
+// Ensures an active WhatsApp number can NEVER be claimed or assigned across multiple tenants
+integrationSchema.index(
+  { phoneNumberId: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: {
+      type: "whatsapp",
+      status: "active",
+      phoneNumberId: { $type: "string" },
+    },
+  }
+)
 
 /**
  * Encrypt and store credentials

@@ -252,7 +252,7 @@ async function processCallAnalysis({
   topicMatches = [],
   apiKey = null,
   httpClient = makeHttpsRequest,
-  allowFallback = true,
+  allowFallback = false,
 }) {
   if (!transcript || !transcript.transcriptText) {
     throw new Error("A valid transcript with text content is required to generate call analysis.")

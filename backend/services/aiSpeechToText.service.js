@@ -321,7 +321,7 @@ async function processSpeechToText({
   mimeType = null,
   apiKey = null,
   httpClient = makeHttpsRequest,
-  allowFallback = true,
+  allowFallback = false,
 }) {
   if (!call) {
     throw new Error("Call record is required for speech-to-text processing.")

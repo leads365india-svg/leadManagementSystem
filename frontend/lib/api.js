@@ -143,6 +143,18 @@ class ApiClient {
     return this.request(`/leads/${leadId}/activities${queryString ? `?${queryString}` : ""}`)
   }
 
+  // --- Lead WhatsApp Cloud API Messaging ---
+  async getLeadWhatsAppMessages(leadId) {
+    return this.request(`/leads/${leadId}/whatsapp-messages`)
+  }
+
+  async sendLeadWhatsAppMessage(leadId, message) {
+    return this.request(`/leads/${leadId}/whatsapp-messages`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    })
+  }
+
   // --- Follow-ups Management Endpoints ---
   async getFollowUps(query = {}) {
     const searchParams = new URLSearchParams()
@@ -306,6 +318,39 @@ class ApiClient {
     return this.request("/super-admin/permissions", {
       method: "PUT",
       body: JSON.stringify({ permissions }),
+    })
+  }
+
+  // --- Super Admin WhatsApp Cloud API Integration ---
+  async getSuperAdminWhatsAppConfig() {
+    return this.request("/super-admin/whatsapp/config")
+  }
+
+  async updateSuperAdminWhatsAppConfig(payload) {
+    return this.request("/super-admin/whatsapp/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getSuperAdminWhatsAppTenants() {
+    return this.request("/super-admin/whatsapp/tenants")
+  }
+
+  async getSuperAdminTenantWhatsAppConfig(tenantId) {
+    return this.request(`/super-admin/whatsapp/tenants/${tenantId}`)
+  }
+
+  async saveSuperAdminTenantWhatsAppConfig(tenantId, payload) {
+    return this.request(`/super-admin/whatsapp/tenants/${tenantId}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async deleteSuperAdminTenantWhatsAppConfig(tenantId) {
+    return this.request(`/super-admin/whatsapp/tenants/${tenantId}`, {
+      method: "DELETE",
     })
   }
 

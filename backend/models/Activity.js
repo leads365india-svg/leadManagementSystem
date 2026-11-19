@@ -55,6 +55,8 @@ const ALLOWED_ACTIVITY_TYPES = [
   "lead.source_updated",
   "call.logged",
   "call.associated",
+  "whatsapp.message_received",
+  "whatsapp.message_sent",
   // Short aliases for convenience
   "created",
   "status_changed",
@@ -66,6 +68,9 @@ const ALLOWED_ACTIVITY_TYPES = [
   "source_updated",
   "call_logged",
   "call_associated",
+  "whatsapp_received",
+  "whatsapp_sent",
+  "whatsapp_message",
 ]
 
 const activitySchema = new mongoose.Schema(

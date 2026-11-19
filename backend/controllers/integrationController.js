@@ -767,6 +767,13 @@ const createIntegration = async (req, res) => {
       })
     }
 
+    if (type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed and assigned centrally by the Super Administrator.",
+      })
+    }
+
     // Generate secure API key and public site key for the integration
     const rawApiKey = generateApiKey()
     const apiKeyHash = hashApiKey(rawApiKey)
@@ -836,6 +843,13 @@ const getIntegrationById = async (req, res) => {
     if (!integration) {
       return res.status(404).json({ success: false, error: "Integration not found" })
     }
+
+    if (integration.type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed centrally by the Super Administrator.",
+      })
+    }
     return res.status(200).json({ success: true, data: integration })
   } catch (error) {
     return res.status(500).json({ success: false, error: "Failed to get integration" })
@@ -852,6 +866,13 @@ const updateIntegration = async (req, res) => {
     const integration = await Integration.findOne({ _id: req.params.id, tenantId })
     if (!integration) {
       return res.status(404).json({ success: false, error: "Integration not found" })
+    }
+
+    if (integration.type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed centrally by the Super Administrator.",
+      })
     }
 
     const { name, status, fieldMapping, assignedRuleId, assignedStaffId, settings, credentials } = req.body
@@ -910,6 +931,13 @@ const rotateIntegrationKey = async (req, res) => {
       return res.status(404).json({ success: false, error: "Integration not found" })
     }
 
+    if (integration.type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed centrally by the Super Administrator.",
+      })
+    }
+
     const rawApiKey = generateApiKey()
     const apiKeyHash = hashApiKey(rawApiKey)
     const apiKeyMasked = maskSecret(rawApiKey)
@@ -965,6 +993,13 @@ const deleteIntegration = async (req, res) => {
     const integration = await Integration.findOne({ _id: req.params.id, tenantId })
     if (!integration) {
       return res.status(404).json({ success: false, error: "Integration not found" })
+    }
+
+    if (integration.type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed centrally by the Super Administrator.",
+      })
     }
 
     integration.status = "inactive"
@@ -1746,6 +1781,13 @@ const getIntegrationSnippets = async (req, res) => {
       return res.status(404).json({ success: false, error: "Integration not found" })
     }
 
+    if (integration.type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed centrally by the Super Administrator.",
+      })
+    }
+
     const baseUrl = getBaseUrl(req)
     const snippets = generatePlatformSnippets({
       integration,
@@ -1784,6 +1826,13 @@ const testIntegrationById = async (req, res) => {
     const integration = await Integration.findOne({ _id: req.params.id, tenantId })
     if (!integration) {
       return res.status(404).json({ success: false, error: "Integration not found" })
+    }
+
+    if (integration.type === "whatsapp" && !req.user?.isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: "WhatsApp Cloud API integration must be managed centrally by the Super Administrator.",
+      })
     }
 
     const createRealLead = req.body?.createRealLead === true || req.body?.isTest === false

@@ -8,7 +8,7 @@ const { matchApprovedTopicsForCall } = require("./aiTopicMatcher.service")
 const { processCallAnalysis } = require("./aiCallAnalysis.service")
 const { recordUsage } = require("./aiUsageService")
 const audit = require("./auditService")
-const { sanitizeErrorMessage } = require("./aiProvider.service")
+const { sanitizeErrorMessage, resolveGeminiModel } = require("./aiProvider.service")
 
 /**
  * AI Call Processing Pipeline - Phase 3: AI Call Intelligence
@@ -90,7 +90,7 @@ async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, forc
  * Primary worker handler for the AI Call Intelligence pipeline.
  */
 async function processCallIntelligenceJob(job, workerContext = {}) {
-  const { callId, tenantId, forceNewTranscript = false, httpClient, allowFallback = true, apiKey = null, audioBuffer = null } = job.payload || {}
+  const { callId, tenantId, forceNewTranscript = false, httpClient, allowFallback = false, apiKey = null, audioBuffer = null } = job.payload || {}
   if (!callId || !tenantId) {
     throw new Error("Missing callId or tenantId in ai_call.process job payload.")
   }
@@ -204,12 +204,20 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       transcript.safeErrorMessage = sanitized
       await transcript.save()
 
+      // Update Call model so call listings and metadata reflect failure
+      call.metadata = call.metadata || {}
+      call.metadata.aiAnalysisStatus = "FAILED"
+      call.metadata.aiTranscriptStatus = "FAILED"
+      call.metadata.aiErrorMessage = sanitized
+      call.markModified("metadata")
+      await call.save().catch(() => {})
+
       await recordUsage({
         tenantId,
         callId: callObjId,
         processingType: "TRANSCRIPTION",
         provider: "gemini",
-        model: "gemini-3.8-flash",
+        model: resolveGeminiModel(),
         audioDurationSeconds: call.recording?.duration || 0,
         durationMs: Date.now() - sttStart,
         status: "FAILED",
@@ -269,7 +277,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       topicMatches: matchedTopics,
       apiKey,
       httpClient,
-      allowFallback: true,
+      allowFallback,
     })
 
     analysis.status = "COMPLETED"
@@ -390,12 +398,18 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     analysis.safeErrorMessage = sanitized
     await analysis.save()
 
+    call.metadata = call.metadata || {}
+    call.metadata.aiAnalysisStatus = "FAILED"
+    call.metadata.aiErrorMessage = sanitized
+    call.markModified("metadata")
+    await call.save().catch(() => {})
+
     await recordUsage({
       tenantId,
       callId: callObjId,
       processingType: "ANALYSIS",
       provider: "gemini",
-      model: "gemini-3.8-flash",
+      model: resolveGeminiModel(),
       durationMs: Date.now() - analysisStart,
       status: "FAILED",
       idempotencyKey: `analysis_${callId}_v${nextAnalysisVersion}_fail`,

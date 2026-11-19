@@ -42,6 +42,9 @@ import {
   PhoneOutgoing,
   Mic,
   Sliders,
+  Send,
+  CheckCheck,
+  MessageCircle,
 } from "lucide-react"
 
 // Status styling configuration
@@ -100,6 +103,14 @@ export default function LeadDetailDrawer({
   const [playingCallId, setPlayingCallId] = useState(null)
   const [customFieldDefinitions, setCustomFieldDefinitions] = useState({})
   const [loadingCustomFields, setLoadingCustomFields] = useState(false)
+
+  // WhatsApp Cloud API Chat State
+  const [whatsappMessages, setWhatsappMessages] = useState([])
+  const [loadingWhatsApp, setLoadingWhatsApp] = useState(false)
+  const [whatsAppError, setWhatsAppError] = useState(null)
+  const [whatsAppInput, setWhatsAppInput] = useState("")
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false)
+  const chatBottomRef = useRef(null)
 
   // Fetch tenant custom fields to enrich labels & formatters
   useEffect(() => {
@@ -347,6 +358,72 @@ export default function LeadDetailDrawer({
     }
   }, [leadId])
 
+  // Fetch WhatsApp chat messages for lead
+  const fetchWhatsAppMessages = useCallback(async () => {
+    if (!leadId) return
+    try {
+      setLoadingWhatsApp(true)
+      setWhatsAppError(null)
+      const res = await apiClient.getLeadWhatsAppMessages(leadId)
+      if (res && res.success && Array.isArray(res.data)) {
+        setWhatsappMessages(res.data)
+      } else {
+        setWhatsappMessages([])
+        if (res && !res.success) {
+          setWhatsAppError(res.error || "Failed to load WhatsApp messages")
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch WhatsApp messages:", err)
+      setWhatsAppError(err.message || "Failed to load WhatsApp messages")
+      setWhatsappMessages([])
+    } finally {
+      setLoadingWhatsApp(false)
+    }
+  }, [leadId])
+
+  useEffect(() => {
+    if (isOpen && leadId) {
+      fetchWhatsAppMessages()
+    }
+  }, [isOpen, leadId, fetchWhatsAppMessages])
+
+  // Scroll to bottom of chat when messages change or tab activates
+  useEffect(() => {
+    if (activeTab === "whatsapp" && chatBottomRef.current) {
+      chatBottomRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [activeTab, whatsappMessages])
+
+  const handleSendWhatsAppMessage = async (e) => {
+    if (e && typeof e.preventDefault === "function") e.preventDefault()
+    if (!whatsAppInput || !whatsAppInput.trim() || sendingWhatsApp) return
+
+    const messageText = whatsAppInput.trim()
+    try {
+      setSendingWhatsApp(true)
+      setWhatsAppError(null)
+      const res = await apiClient.sendLeadWhatsAppMessage(leadId, messageText)
+      if (res && res.success) {
+        toast.success("WhatsApp message sent!")
+        setWhatsAppInput("")
+        fetchWhatsAppMessages()
+        fetchLeadActivities()
+      } else {
+        const errorMsg = res?.error || "Failed to send WhatsApp message"
+        setWhatsAppError(errorMsg)
+        toast.error(errorMsg)
+      }
+    } catch (err) {
+      console.error("Failed to send WhatsApp message:", err)
+      const errorMsg = err.message || "Failed to send WhatsApp message"
+      setWhatsAppError(errorMsg)
+      toast.error(errorMsg)
+    } finally {
+      setSendingWhatsApp(false)
+    }
+  }
+
   const handleLogCallSubmit = async (e) => {
     e.preventDefault()
     if (!lead) return
@@ -566,6 +643,22 @@ export default function LeadDetailDrawer({
             icon: isCompleted ? CheckCircle2 : CalendarClock,
             iconBg: isCompleted ? "bg-teal-100 text-teal-600 border-teal-200" : "bg-amber-100 text-amber-600 border-amber-200",
             category: "followup",
+          })
+        } else if (actType.startsWith("whatsapp.") || actType.startsWith("whatsapp_")) {
+          const isInbound = actType.includes("received") || act.payload?.direction === "inbound"
+          events.push({
+            id: actId,
+            type: isInbound ? "whatsapp_received" : "whatsapp_sent",
+            title: isInbound ? "WhatsApp Inbound Message" : "WhatsApp Outbound Reply",
+            description: act.payload?.text || act.payload?.body || "WhatsApp conversation event",
+            actor: actorName,
+            timestamp: actDate,
+            icon: MessageCircle,
+            iconBg: isInbound
+              ? "bg-emerald-100 text-emerald-600 border-emerald-200"
+              : "bg-teal-100 text-teal-700 border-teal-200",
+            category: "notes",
+            badge: isInbound ? "Inbound" : "Outbound",
           })
         } else {
           events.push({
@@ -943,6 +1036,24 @@ export default function LeadDetailDrawer({
               <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
                 {calls.length}
               </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("whatsapp")}
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                activeTab === "whatsapp"
+                  ? "border-emerald-600 text-emerald-600 font-bold"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span>WhatsApp</span>
+              {whatsappMessages.length > 0 && (
+                <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-700 font-bold">
+                  {whatsappMessages.length}
+                </span>
+              )}
             </button>
 
             <button
@@ -1709,6 +1820,173 @@ export default function LeadDetailDrawer({
                     </div>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* TAB: WHATSAPP CLOUD API CHAT */}
+            {activeTab === "whatsapp" && (
+              <div className="flex flex-col h-[580px] max-h-[72vh] bg-slate-50 border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                {/* Chat Header */}
+                <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                      <MessageCircle className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <span>{lead?.name || "WhatsApp Contact"}</span>
+                        <span className="text-[10px] font-mono font-normal text-slate-500">
+                          ({lead?.phoneNormalized || lead?.phone || "No phone"})
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-emerald-600 font-medium flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                        <span>Meta WhatsApp Cloud API</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchWhatsAppMessages}
+                    disabled={loadingWhatsApp}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+                    title="Refresh conversation"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingWhatsApp ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+
+                {/* Error Banner */}
+                {whatsAppError && (
+                  <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-700 text-xs flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>{whatsAppError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setWhatsAppError(null)}
+                      className="text-rose-400 hover:text-rose-600 text-xs font-bold px-1"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                )}
+
+                {/* Chat Messages Container */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#f0f2f5]">
+                  {loadingWhatsApp && whatsappMessages.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-2">
+                      <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />
+                      <span className="text-xs font-medium">Loading WhatsApp messages...</span>
+                    </div>
+                  ) : whatsappMessages.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+                      <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                        <MessageSquare className="w-6 h-6" />
+                      </div>
+                      <div className="max-w-xs">
+                        <h4 className="text-xs font-bold text-slate-800">No WhatsApp messages yet</h4>
+                        <p className="text-[11px] text-slate-500 mt-1">
+                          Inbound messages sent to your registered WhatsApp number will appear here automatically. You can also send a reply below.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {whatsappMessages.map((msg, index) => {
+                        const isInbound = msg.direction === "inbound"
+                        const msgDate = msg.timestamp ? new Date(msg.timestamp) : new Date()
+
+                        return (
+                          <div
+                            key={msg._id || msg.id || index}
+                            className={`flex flex-col ${isInbound ? "items-start" : "items-end"}`}
+                          >
+                            <div
+                              className={`max-w-[80%] rounded-2xl px-3.5 py-2 shadow-2xs text-xs relative ${
+                                isInbound
+                                  ? "bg-white border border-slate-200 text-slate-800 rounded-tl-xs"
+                                  : "bg-emerald-600 text-white rounded-tr-xs"
+                              }`}
+                            >
+                              {/* Message sender label for inbound */}
+                              {isInbound && (
+                                <div className="text-[10px] font-bold text-emerald-700 mb-0.5">
+                                  {msg.senderPhone || lead?.name || "Customer"}
+                                </div>
+                              )}
+
+                              {/* Message Body */}
+                              <p className="whitespace-pre-wrap break-words leading-relaxed text-xs">
+                                {msg.body || "[No message content]"}
+                              </p>
+
+                              {/* Footer timestamp & status ticks */}
+                              <div
+                                className={`flex items-center justify-end space-x-1 mt-1 text-[9px] ${
+                                  isInbound ? "text-slate-400" : "text-emerald-100"
+                                }`}
+                              >
+                                <span>
+                                  {msgDate.toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </span>
+                                {!isInbound && (
+                                  <span className="inline-flex items-center ml-1">
+                                    {msg.status === "read" ? (
+                                      <CheckCheck className="w-3.5 h-3.5 text-sky-200" title="Read" />
+                                    ) : msg.status === "delivered" ? (
+                                      <CheckCheck className="w-3.5 h-3.5 text-emerald-200" title="Delivered" />
+                                    ) : msg.status === "failed" ? (
+                                      <AlertCircle className="w-3.5 h-3.5 text-rose-300" title="Failed" />
+                                    ) : (
+                                      <Check className="w-3.5 h-3.5 text-emerald-200" title="Sent" />
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <div ref={chatBottomRef} />
+                    </>
+                  )}
+                </div>
+
+                {/* Input Area */}
+                <form
+                  onSubmit={handleSendWhatsAppMessage}
+                  className="p-3 bg-white border-t border-slate-200 flex items-center space-x-2 shrink-0"
+                >
+                  <input
+                    type="text"
+                    value={whatsAppInput}
+                    onChange={(e) => setWhatsAppInput(e.target.value)}
+                    placeholder={
+                      !lead?.phone && !lead?.phoneNormalized
+                        ? "Lead has no phone number to message..."
+                        : "Type a WhatsApp reply..."
+                    }
+                    disabled={(!lead?.phone && !lead?.phoneNormalized) || sendingWhatsApp}
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!whatsAppInput.trim() || sendingWhatsApp || (!lead?.phone && !lead?.phoneNormalized)}
+                    className="inline-flex items-center space-x-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {sendingWhatsApp ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>Send</span>
+                  </button>
+                </form>
               </div>
             )}
           </div>

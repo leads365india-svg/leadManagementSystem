@@ -62,6 +62,7 @@ const router = express.Router()
 const webhookLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 60, // 60 requests per minute per IP
+  skip: () => process.env.NODE_ENV === "test",
   message: {
     success: false,
     error: "Too many requests to integration webhook. Please try again shortly.",
@@ -127,6 +128,14 @@ router.post("/generic/test", authenticate, requireAccountAdmin, sendGenericTestL
 router.post("/webhooks/shopify", webhookLimiter, handleShopifyWebhook)
 router.post("/shopify/connect", authenticate, requireAccountAdmin, connectShopifyIntegration)
 router.get("/shopify/status", authenticate, getShopifyStatus)
+
+// 9c. Central Multi-Tenant WhatsApp Cloud API Webhook Endpoints
+const {
+  handleWhatsAppWebhookHandshake,
+  handleWhatsAppWebhookNotification,
+} = require("../controllers/whatsappWebhookController")
+router.get("/webhooks/whatsapp", handleWhatsAppWebhookHandshake)
+router.post("/webhooks/whatsapp", webhookLimiter, handleWhatsAppWebhookNotification)
 
 // 10. Phase 11 Multi-Tenant Integration Connectors CRUD
 router.get("/", authenticate, listIntegrations)

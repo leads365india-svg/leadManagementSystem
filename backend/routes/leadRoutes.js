@@ -64,6 +64,14 @@ router.patch("/:id/status", checkPermission("leads.edit"), updateLead)
 const { updateLeadPrivacy } = require("../controllers/privacyController")
 router.patch("/:id/privacy", checkPermission("leads.edit"), updateLeadPrivacy)
 
+// WhatsApp Chat History & Outbound Messaging
+const {
+  getLeadWhatsAppMessages,
+  sendLeadWhatsAppMessage,
+} = require("../controllers/whatsappController")
+router.get("/:id/whatsapp-messages", checkPermission("leads.view"), getLeadWhatsAppMessages)
+router.post("/:id/whatsapp-messages", checkPermission("leads.edit"), sendLeadWhatsAppMessage)
+
 // DELETE /api/leads/:id - Delete lead
 router.delete("/:id", checkPermission("leads.delete"), deleteLead)
 

@@ -482,6 +482,7 @@ async function runTests() {
         callId: testCallA1._id.toString(),
         tenantId: TENANT_A,
         httpClient: mockAnalysisHttpClient,
+        apiKey: "mock-gemini-key-for-test",
       },
     })
     record("Pipeline: Completed successfully end-to-end", pipelineJobResult.success === true)
