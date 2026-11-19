@@ -526,6 +526,52 @@ async function runTests() {
       .setOptions({ skipTenantFilter: true })
     record("Pipeline: No call analysis created when STT step fails", missingAnalysis === null)
 
+    // Test that legacy deterministic-nlp/offline-rule-engine fake transcripts are bypassed
+    const callWithFakeTranscript = await Call.create({
+      tenantId: TENANT_A,
+      agentId: adminUserA._id,
+      customerNumber: "+919999977777",
+      hasRecording: true,
+      recording: { status: "stored", duration: 30 },
+    })
+    await AITranscript.create({
+      tenantId: TENANT_A,
+      callId: callWithFakeTranscript._id,
+      provider: "deterministic-nlp",
+      model: "offline-rule-engine",
+      language: "en",
+      duration: 30,
+      transcriptText: "Medical 365 Clinic fake transcript text",
+      segments: [],
+      status: "COMPLETED",
+      completedAt: new Date(),
+      version: 1,
+    })
+
+    let liveSTTInvoked = false
+    const mockSTTDetector = async () => {
+      liveSTTInvoked = true
+      return {
+        candidates: [{
+          content: {
+            parts: [{ text: JSON.stringify({ language: "en", segments: [{ speaker: "Customer", startTime: 0, endTime: 5, text: "Real customer" }] }) }],
+          },
+        }],
+      }
+    }
+
+    await processCallIntelligenceJob({
+      payload: {
+        callId: callWithFakeTranscript._id.toString(),
+        tenantId: TENANT_A,
+        forceNewTranscript: false, // Even when false, must bypass fake transcript
+        audioBuffer: Buffer.from("audio-bytes"),
+        httpClient: mockSTTDetector,
+        apiKey: "mock-key",
+      },
+    })
+    record("Pipeline: Legacy fallback transcript is bypassed and live STT is triggered", liveSTTInvoked === true)
+
     // ---------------------------------------------------------
     // Suite 7: AI Usage Ledger & Deduplication
     // ---------------------------------------------------------

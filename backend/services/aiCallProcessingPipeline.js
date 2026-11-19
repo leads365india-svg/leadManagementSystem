@@ -29,7 +29,7 @@ const JOB_NAME = "ai_call.process"
  * Safely enqueues an AI Call Intelligence job.
  * Idempotent: multiple calls for the same call and recording will not spawn duplicates.
  */
-async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, force = false }) {
+async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, force = false, forceNewTranscript = false }) {
   if (!callId) {
     throw new Error("callId is required to enqueue AI call intelligence job.")
   }
@@ -71,7 +71,7 @@ async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, forc
     payload: {
       callId: call._id.toString(),
       tenantId: cleanTenantId,
-      forceNewTranscript: force,
+      forceNewTranscript: Boolean(forceNewTranscript || force),
     },
     tenantId: cleanTenantId,
     idempotencyKey,
@@ -132,9 +132,16 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       status: "COMPLETED",
     }).sort({ version: -1 }).setOptions({ skipTenantFilter: true })
 
-    if (transcript && transcript.transcriptText && transcript.transcriptText.trim()) {
+    const isFakeFallback = transcript && (
+      transcript.provider === "deterministic-nlp" ||
+      transcript.model === "offline-rule-engine"
+    )
+
+    if (transcript && transcript.transcriptText && transcript.transcriptText.trim() && !isFakeFallback) {
       isTranscriptReused = true
       console.log(`ℹ️ [AIPipeline] Reusing existing completed transcript v${transcript.version} for call ${callId}.`)
+    } else if (isFakeFallback) {
+      console.log(`ℹ️ [AIPipeline] Bypassing legacy fallback transcript v${transcript?.version} for call ${callId} — requiring fresh live STT.`)
     }
   }
 

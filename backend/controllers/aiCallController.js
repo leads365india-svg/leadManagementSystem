@@ -312,12 +312,13 @@ async function reprocessCall(req, res) {
       })
     }
 
-    const forceNewTranscript = Boolean(req.body?.forceNewTranscript || req.body?.force)
+    const forceNewTranscript = req.body?.forceNewTranscript !== false
 
     const enqueueResult = await enqueueCallIntelligenceJob({
       callId: call._id,
       tenantId,
       force: true,
+      forceNewTranscript,
     })
 
     await audit.log({
