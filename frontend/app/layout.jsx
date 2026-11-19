@@ -19,6 +19,32 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if (typeof window !== 'undefined') {
+                window.addEventListener('error', function(e) {
+                  var msg = (e && (e.message || (e.error && e.error.message))) || '';
+                  if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1) {
+                    try {
+                      var k = '__chunk_retry_ts';
+                      var last = sessionStorage.getItem(k);
+                      var now = Date.now();
+                      if (!last || now - parseInt(last, 10) > 10000) {
+                        sessionStorage.setItem(k, now.toString());
+                        window.location.reload();
+                      }
+                    } catch(err) {
+                      window.location.reload();
+                    }
+                  }
+                });
+              }
+            `,
+          }}
+        />
+      </head>
       <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased max-w-full overflow-x-hidden`}>
         <AuthProvider>
           <Header />

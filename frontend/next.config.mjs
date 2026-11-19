@@ -14,6 +14,12 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ["lucide-react", "date-fns", "recharts"],
   },
+  webpack: (config, { dev, isServer }) => {
+    if (dev && !isServer) {
+      config.output.chunkLoadTimeout = 300000
+    }
+    return config
+  },
   async rewrites() {
     return [
       {
