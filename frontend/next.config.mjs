@@ -15,17 +15,21 @@ const nextConfig = {
     optimizePackageImports: ["lucide-react", "date-fns", "recharts"],
   },
   webpack: (config, { dev, isServer }) => {
+    if (!isServer) {
+      config.output.chunkLoadTimeout = 300000
+    }
     if (dev) {
-      if (!isServer) {
-        config.output.chunkLoadTimeout = 300000
-      }
       config.watchOptions = {
         poll: false,
         aggregateTimeout: 300,
-        ignored: ['**/node_modules', '**/.git', '**/.next'],
+        ignored: /node_modules|\.git|\.next/,
       }
     }
     return config
+  },
+  onDemandEntries: {
+    maxInactiveAge: 120 * 1000,
+    pagesBufferLength: 8,
   },
   async rewrites() {
     return [
