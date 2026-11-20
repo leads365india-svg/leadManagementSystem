@@ -137,6 +137,23 @@ const isAllowedOrigin = (origin) => {
   return isOriginAllowed(origin, allowedOrigins, isDevelopment)
 }
 
+const defaultAllowedHeaders = [
+  "Content-Type",
+  "Authorization",
+  "x-tenant-domain",
+  "X-Tenant-Domain",
+  "x-tenant-id",
+  "X-Tenant-Id",
+  "x-csrf-token",
+  "X-CSRF-Token",
+  "x-requested-with",
+  "X-Requested-With",
+  "Accept",
+  "Origin",
+  "Access-Control-Request-Method",
+  "Access-Control-Request-Headers",
+]
+
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, curl, or server-to-server proxies)
@@ -160,20 +177,47 @@ const corsOptions = {
         callback(null, false)
       })
   },
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  allowedHeaders: defaultAllowedHeaders,
   credentials: true, // Allow cookies to be sent across origins
   maxAge: 86400, // Cache preflight requests for 24 hours
+  optionsSuccessStatus: 204,
 }
 
-// Apply CORS middleware
-app.use(cors(corsOptions))
-// Handle preflight OPTIONS requests
-app.options("/api/*", cors(corsOptions))
-app.options("*", cors(corsOptions))
+// Dynamic CORS delegate that reflects requested headers while ensuring defaults are always permitted
+const corsOptionsDelegate = (req, callback) => {
+  const reqHeaders = req.headers["access-control-request-headers"]
+  let allowedHeaders = [...defaultAllowedHeaders]
+  if (reqHeaders && typeof reqHeaders === "string") {
+    const requested = reqHeaders.split(",").map((h) => h.trim()).filter(Boolean)
+    for (const h of requested) {
+      if (!allowedHeaders.some((ah) => ah.toLowerCase() === h.toLowerCase())) {
+        allowedHeaders.push(h)
+      }
+    }
+  }
+
+  callback(null, {
+    origin: corsOptions.origin,
+    methods: corsOptions.methods,
+    allowedHeaders,
+    credentials: true,
+    maxAge: 86400,
+    optionsSuccessStatus: 204,
+  })
+}
+
+// Apply CORS middleware - MUST RUN FIRST before any auth, CSRF, rate-limit, or redirect middleware
+app.options("*", cors(corsOptionsDelegate))
+app.use(cors(corsOptionsDelegate))
 
 // Enforce HTTPS in production behind reverse proxies / balancers
 if (process.env.NODE_ENV === "production") {
   app.use((req, res, next) => {
+    // OPTIONS preflight requests must NEVER be redirected (causes CORS preflight failure in browsers)
+    if (req.method === "OPTIONS") {
+      return next()
+    }
     if (req.secure || req.headers["x-forwarded-proto"] === "https") {
       return next()
     }
@@ -184,6 +228,7 @@ if (process.env.NODE_ENV === "production") {
 // Security middleware
 app.use(
   helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -375,6 +420,15 @@ const startServer = async () => {
     console.log("⏳ Connecting to database before starting HTTP server...")
     await connectDB()
     console.log("✅ Database connected successfully.")
+
+    // Pre-warm tenant custom domain CORS cache before listening
+    try {
+      const { getCustomDomainsCached } = require("./utils/customDomainCache")
+      await getCustomDomainsCached()
+      console.log("✅ Tenant custom domain CORS cache pre-warmed.")
+    } catch (cacheErr) {
+      console.warn("⚠️ Failed to pre-warm custom domain cache:", cacheErr.message)
+    }
 
     const { registerAllHandlers } = require("./jobs")
     registerAllHandlers()

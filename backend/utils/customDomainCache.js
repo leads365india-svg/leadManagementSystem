@@ -1,3 +1,4 @@
+const mongoose = require("mongoose")
 const Account = require("../models/Account")
 
 /**
@@ -30,6 +31,20 @@ const getCustomDomainsCached = async () => {
   const now = Date.now()
   if (cachedDomainsSet && now - lastFetchedAt < CACHE_TTL_MS) {
     return cachedDomainsSet
+  }
+
+  // Await DB connection if still establishing
+  if (mongoose.connection && mongoose.connection.readyState !== 1) {
+    try {
+      await new Promise((resolve) => {
+        if (mongoose.connection.readyState === 1) return resolve()
+        const timer = setTimeout(resolve, 4000)
+        mongoose.connection.once("open", () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+    } catch (_) {}
   }
 
   try {
@@ -67,26 +82,58 @@ const invalidateCustomDomainCache = () => {
 
 /**
  * Verify if an incoming HTTP Origin belongs to an active tenant's custom domain.
- * @param {string} origin e.g. "https://crm.tenantcompany.com"
+ * @param {string} origin e.g. "https://crm.medical365.in"
  * @returns {Promise<boolean>}
  */
 const isCustomDomainAllowed = async (origin) => {
   if (!origin || typeof origin !== "string") return false
 
-  try {
-    const parsed = new URL(origin)
-    // Only allow secure HTTPS in production, allow HTTP in development/testing
-    const isDev = process.env.NODE_ENV !== "production"
-    if (parsed.protocol !== "https:" && !isDev) {
+  const cleanHost = sanitizeHostname(origin)
+  if (!cleanHost) return false
+
+  // Disallow localhost or IP from custom domain bypass
+  if (
+    cleanHost === "localhost" ||
+    cleanHost === "127.0.0.1" ||
+    cleanHost === "::1" ||
+    cleanHost.endsWith(".localhost")
+  ) {
+    return false
+  }
+
+  // Only allow secure HTTPS in production, allow HTTP in development/testing
+  const isDev = process.env.NODE_ENV !== "production"
+  if (!isDev) {
+    if (origin.startsWith("http://") && !origin.startsWith("https://")) {
       return false
     }
+  }
 
-    const hostname = parsed.hostname.toLowerCase()
-    if (!hostname) return false
-
+  try {
     const allowedDomains = await getCustomDomainsCached()
-    return allowedDomains.has(hostname)
-  } catch (_) {
+    if (allowedDomains && allowedDomains.has(cleanHost)) {
+      return true
+    }
+
+    // Direct database fallback if cache is cold or missed on first request
+    const escaped = cleanHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const match = await Account.findOne({
+      customDomain: { $regex: new RegExp(`^${escaped}$`, "i") },
+      status: { $ne: "suspended" },
+    })
+      .select("customDomain")
+      .lean()
+
+    if (match && match.customDomain) {
+      if (allowedDomains) {
+        allowedDomains.add(cleanHost)
+      }
+      return true
+    }
+
+    return false
+  } catch (err) {
+    console.error("isCustomDomainAllowed check error:", err.message)
     return false
   }
 }
