@@ -3,6 +3,7 @@
 import React, { useEffect } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { isWhiteLabelDomain } from "@/lib/domain"
 
 const PUBLIC_EXACT_ROUTES = new Set([
   "/",
@@ -40,6 +41,14 @@ export default function AuthGuard({ children }) {
     // If route has its own guard or is public, do nothing here
     if (isExempt) return
 
+    // On white-label domains, super-admin routes are strictly forbidden
+    if (typeof window !== "undefined" && isWhiteLabelDomain(window.location.hostname)) {
+      if (pathname.startsWith("/super-admin")) {
+        router.replace("/portal/login")
+        return
+      }
+    }
+
     // If session check finished and user is not authenticated, redirect to portal login
     if (status === "unauthenticated") {
       router.replace("/portal/login")
@@ -57,7 +66,11 @@ export default function AuthGuard({ children }) {
       }
 
       if (!effectiveTenant) {
-        router.replace("/super-admin")
+        if (typeof window !== "undefined" && isWhiteLabelDomain(window.location.hostname)) {
+          router.replace("/portal/login")
+        } else {
+          router.replace("/super-admin")
+        }
         return
       }
 
@@ -69,7 +82,7 @@ export default function AuthGuard({ children }) {
         return
       }
     }
-  }, [isExempt, status, user, router])
+  }, [isExempt, pathname, status, user, router])
 
   // Public routes or delegated layouts render immediately
   if (isExempt) {

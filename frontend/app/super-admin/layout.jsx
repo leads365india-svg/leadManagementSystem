@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { isWhiteLabelDomain } from "@/lib/domain"
 import { toast } from "react-hot-toast"
 import {
   LogOut,
@@ -35,6 +36,12 @@ export default function SuperAdminLayout({ children }) {
   }, [])
 
   useEffect(() => {
+    // Block Super Admin console on white-label domains
+    if (typeof window !== "undefined" && isWhiteLabelDomain(window.location.hostname)) {
+      router.replace("/portal/login")
+      return
+    }
+
     if (isLoginPage) return
 
     if (status === "unauthenticated") {

@@ -5,6 +5,8 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { useBranding } from "@/lib/branding-context"
+import { isWhiteLabelDomain } from "@/lib/domain"
 import { apiClient } from "@/lib/api"
 import { toast } from "react-hot-toast"
 import {
@@ -336,6 +338,8 @@ export default function Header() {
     setMounted(true)
   }, [])
   const { user: authUser, logout, setActiveTenant, checkAuth, hasPermission } = useAuth()
+  const { branding, isWhiteLabel } = useBranding()
+  const [logoError, setLogoError] = useState(false)
   const user = authUser
 
   // Filter NAV_CATEGORIES dynamically based on user role and granular permissions
@@ -598,23 +602,45 @@ export default function Header() {
             <Link
               href="/"
               className="flex items-center space-x-2.5 group shrink-0"
-              title="LeadFlow CRM Home"
+              title={branding?.displayName || companyName || "CRM Home"}
             >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-indigo-100 group-hover:scale-105 transition-all duration-200">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2.2}
-                    d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-                  />
-                </svg>
-              </div>
+              {branding?.logoUrl && !logoError ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={branding.logoUrl}
+                  alt={branding.displayName || companyName || "Logo"}
+                  onError={() => setLogoError(true)}
+                  className="h-8 max-w-[150px] object-contain shrink-0 drop-shadow-2xs transition-transform group-hover:scale-105 duration-200"
+                />
+              ) : (
+                <div
+                  className="w-9 h-9 rounded-xl flex items-center justify-center text-white shadow-md group-hover:scale-105 transition-all duration-200"
+                  style={{
+                    backgroundColor: branding?.primaryColor || branding?.brandPrimaryColor || "#4f46e5",
+                  }}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2.2}
+                      d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+                    />
+                  </svg>
+                </div>
+              )}
               <div className="flex items-center space-x-1.5">
                 <span className="font-extrabold text-slate-900 text-base tracking-tight group-hover:text-indigo-600 transition-colors">
-                  LeadFlow
+                  {branding?.displayName || (isWhiteLabel ? (companyName || "CRM") : "LeadFlow")}
                 </span>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 border border-indigo-200/60 uppercase tracking-wider">
+                <span
+                  className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wider border"
+                  style={{
+                    backgroundColor: branding?.primaryColor ? `${branding.primaryColor}15` : "#eef2ff",
+                    color: branding?.primaryColor || "#4338ca",
+                    borderColor: branding?.primaryColor ? `${branding.primaryColor}30` : "#c7d2fe",
+                  }}
+                >
                   CRM
                 </span>
               </div>
@@ -768,7 +794,7 @@ export default function Header() {
           ========================================================================= */}
           <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
             {/* Super Admin Active Tenant Indicator */}
-            {user?.role === "super_admin" && (
+            {user?.role === "super_admin" && !isWhiteLabel && (
               <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200/80 text-xs shadow-2xs">
                 <span className="font-bold text-indigo-700">Super Admin</span>
                 <span className="text-slate-400">/</span>
@@ -835,7 +861,7 @@ export default function Header() {
                   </div>
 
                   <div className="py-1 text-xs text-slate-700">
-                    {user?.role === "super_admin" && (
+                    {user?.role === "super_admin" && !isWhiteLabel && (
                       <button
                         type="button"
                         onClick={() => {

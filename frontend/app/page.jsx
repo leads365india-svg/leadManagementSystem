@@ -3,6 +3,7 @@
 import React, { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { isWhiteLabelDomain } from "@/lib/domain"
 
 /**
  * Platform Root Entry Router (Phase 27)
@@ -24,6 +25,36 @@ export default function RootEntryPage() {
     // Wait until authentication status has been resolved from the session check
     if (loading || status === "idle" || status === "loading") {
       return
+    }
+
+    const isWhiteLabel = typeof window !== "undefined" && isWhiteLabelDomain(window.location.hostname)
+
+    // On white-label domains (e.g. crm.medical365.in), NEVER expose Super Admin routes
+    if (isWhiteLabel) {
+      if (status === "unauthenticated") {
+        router.replace("/portal/login")
+        return
+      }
+      if (status === "authenticated" && user) {
+        if (typeof hasPermission === "function" && !hasPermission("dashboard.view")) {
+          if (hasPermission("leads.view*")) {
+            router.replace("/leads")
+          } else if (hasPermission("calls.view*") || hasPermission("calls.log")) {
+            router.replace("/communication/call-reports")
+          } else if (hasPermission("followups.view*") || hasPermission("followups.manage*")) {
+            router.replace("/communication/follow-ups")
+          } else if (hasPermission("reports.view")) {
+            router.replace("/reports/leads")
+          } else if (hasPermission("settings.view") || hasPermission("settings.manage")) {
+            router.replace("/settings/custom-fields")
+          } else {
+            router.replace("/leads")
+          }
+        } else {
+          router.replace("/portal")
+        }
+        return
+      }
     }
 
     if (status === "authenticated" && user) {

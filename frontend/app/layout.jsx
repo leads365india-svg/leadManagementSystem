@@ -4,6 +4,7 @@ import Header from "@/components/header"
 import Footer from "@/components/footer"
 import { Toaster } from "react-hot-toast"
 import { AuthProvider } from "@/lib/auth-context"
+import { BrandingProvider } from "@/lib/branding-context"
 import AuthGuard from "@/components/auth-guard"
 
 const inter = Inter({ subsets: ["latin"] })
@@ -24,22 +25,35 @@ export default function RootLayout({ children }) {
           dangerouslySetInnerHTML={{
             __html: `
               if (typeof window !== 'undefined') {
-                window.addEventListener('error', function(e) {
-                  var msg = (e && (e.message || (e.error && e.error.message))) || '';
-                  if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1) {
-                    try {
-                      var k = '__chunk_retry_ts';
-                      var last = sessionStorage.getItem(k);
-                      var now = Date.now();
-                      if (!last || now - parseInt(last, 10) > 10000) {
-                        sessionStorage.setItem(k, now.toString());
-                        window.location.reload();
-                      }
-                    } catch(err) {
+                var autoReloadOnChunkError = function() {
+                  try {
+                    var k = '__chunk_retry_ts';
+                    var last = sessionStorage.getItem(k);
+                    var now = Date.now();
+                    if (!last || now - parseInt(last, 10) > 4000) {
+                      sessionStorage.setItem(k, now.toString());
                       window.location.reload();
                     }
+                  } catch(err) {
+                    window.location.reload();
+                  }
+                };
+                window.addEventListener('unhandledrejection', function(event) {
+                  var reason = event && event.reason;
+                  var msg = ((reason && (reason.message || reason.name)) || '') + '';
+                  if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1 || msg.indexOf('timeout') !== -1) {
+                    if (event.preventDefault) event.preventDefault();
+                    autoReloadOnChunkError();
                   }
                 });
+                window.addEventListener('error', function(e) {
+                  var msg = (e && (e.message || (e.error && (e.error.message || e.error.name)))) || '';
+                  var target = e && e.target;
+                  var isChunkScript = target && target.tagName === 'SCRIPT' && target.src && target.src.indexOf('/_next/static/chunks/') !== -1;
+                  if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1 || isChunkScript) {
+                    autoReloadOnChunkError();
+                  }
+                }, true);
               }
             `,
           }}
@@ -47,11 +61,13 @@ export default function RootLayout({ children }) {
       </head>
       <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased max-w-full overflow-x-hidden`}>
         <AuthProvider>
-          <Header />
-          <main className="flex-1 w-full max-w-full min-w-0">
-            <AuthGuard>{children}</AuthGuard>
-          </main>
-          <Footer />
+          <BrandingProvider>
+            <Header />
+            <main className="flex-1 w-full max-w-full min-w-0">
+              <AuthGuard>{children}</AuthGuard>
+            </main>
+            <Footer />
+          </BrandingProvider>
         </AuthProvider>
         <Toaster
           position="top-right"

@@ -4,6 +4,7 @@ const {
   logout,
   getMe,
   getTenantInfo,
+  getBranding,
   acceptInvite,
   resetPasswordWithToken,
   logoutAll,
@@ -12,6 +13,9 @@ const { authenticate } = require("../middleware/authMiddleware")
 const { authLimiter } = require("../middleware/rateLimiters")
 
 const router = Router()
+
+// GET /api/auth/branding?domain=crm.medical365.in (Public white-label branding)
+router.get("/branding", getBranding)
 
 // POST /api/auth/login
 router.post("/login", authLimiter, login)

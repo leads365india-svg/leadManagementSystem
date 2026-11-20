@@ -39,6 +39,11 @@ class ApiClient {
       } catch (_) {}
     }
 
+    // Attach current portal domain header for white-label tenant boundary verification
+    if (!headers["x-tenant-domain"] && typeof window !== "undefined" && window.location?.hostname) {
+      headers["x-tenant-domain"] = window.location.hostname
+    }
+
     const config = {
       method: options.method || "GET",
       credentials: "include",
@@ -251,8 +256,15 @@ class ApiClient {
     return this.request("/auth/me")
   }
 
-  async getTenantInfo(tenantId) {
-    return this.request(`/auth/tenant-info?tenantId=${encodeURIComponent(tenantId)}`)
+  async getTenantInfo(identifier) {
+    if (!identifier) return { success: false, error: "Identifier required" }
+    const clean = identifier.toString().trim()
+    return this.request(`/auth/tenant-info?tenantId=${encodeURIComponent(clean)}`)
+  }
+
+  async getBranding(domain) {
+    const query = domain ? `?domain=${encodeURIComponent(domain)}` : ""
+    return this.request(`/auth/branding${query}`)
   }
 
   // --- Super Admin Endpoints ---

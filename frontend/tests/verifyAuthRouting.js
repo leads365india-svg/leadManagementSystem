@@ -280,6 +280,103 @@ runTest("Explicit logout resets AuthProvider state and blocks protected routes",
   assert.strictEqual(leadsRes.target, "/portal/login")
 })
 
+console.log("\n📋 Suite 6: Strict White-Label Domain Routing & Protection")
+
+function normalizeHostname(host) {
+  if (!host || typeof host !== "string") return ""
+  return host
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .split(":")[0]
+    .toLowerCase()
+}
+
+function isWhiteLabelDomain(hostname) {
+  const host = normalizeHostname(hostname)
+  if (!host) return false
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host.endsWith(".localhost")
+  ) {
+    return false
+  }
+  if (host.endsWith(".vercel.app")) {
+    return false
+  }
+  if (host === "admin.leads365.in" || host === "leads365.in") {
+    return false
+  }
+  return true
+}
+
+function simulateMiddleware(hostname, pathname) {
+  if (isWhiteLabelDomain(hostname)) {
+    if (pathname === "/" || pathname.startsWith("/super-admin")) {
+      return { action: "redirect", target: "/portal/login" }
+    }
+  }
+  return { action: "next", target: null }
+}
+
+runTest("Domain classification: accurately identifies white-label domains vs admin hosts", () => {
+  assert.strictEqual(isWhiteLabelDomain("crm.medical365.in"), true)
+  assert.strictEqual(isWhiteLabelDomain("leads.clientfirm.com"), true)
+  assert.strictEqual(isWhiteLabelDomain("crm.medical365.in:3000"), true)
+  assert.strictEqual(isWhiteLabelDomain("https://crm.medical365.in/portal"), true)
+
+  assert.strictEqual(isWhiteLabelDomain("admin.leads365.in"), false)
+  assert.strictEqual(isWhiteLabelDomain("leads365.in"), false)
+  assert.strictEqual(isWhiteLabelDomain("localhost"), false)
+  assert.strictEqual(isWhiteLabelDomain("localhost:3000"), false)
+  assert.strictEqual(isWhiteLabelDomain("127.0.0.1"), false)
+  assert.strictEqual(isWhiteLabelDomain("leadflow-preview.vercel.app"), false)
+})
+
+runTest("Middleware blocks root '/' on white-label domains and redirects to /portal/login", () => {
+  const res = simulateMiddleware("crm.medical365.in", "/")
+  assert.strictEqual(res.action, "redirect")
+  assert.strictEqual(res.target, "/portal/login")
+})
+
+runTest("Middleware blocks '/super-admin' on white-label domains and redirects to /portal/login", () => {
+  const res = simulateMiddleware("crm.medical365.in", "/super-admin")
+  assert.strictEqual(res.action, "redirect")
+  assert.strictEqual(res.target, "/portal/login")
+})
+
+runTest("Middleware blocks '/super-admin/roles-permissions' on white-label domains", () => {
+  const res = simulateMiddleware("crm.medical365.in", "/super-admin/roles-permissions")
+  assert.strictEqual(res.action, "redirect")
+  assert.strictEqual(res.target, "/portal/login")
+})
+
+runTest("Middleware blocks '/super-admin/login' on white-label domains", () => {
+  const res = simulateMiddleware("crm.medical365.in", "/super-admin/login")
+  assert.strictEqual(res.action, "redirect")
+  assert.strictEqual(res.target, "/portal/login")
+})
+
+runTest("Middleware allows '/portal/login' on white-label domains", () => {
+  const res = simulateMiddleware("crm.medical365.in", "/portal/login")
+  assert.strictEqual(res.action, "next")
+  assert.strictEqual(res.target, null)
+})
+
+runTest("Middleware allows '/super-admin' on administrative domain (admin.leads365.in)", () => {
+  const res = simulateMiddleware("admin.leads365.in", "/super-admin")
+  assert.strictEqual(res.action, "next")
+  assert.strictEqual(res.target, null)
+})
+
+runTest("Middleware allows '/super-admin' on localhost", () => {
+  const res = simulateMiddleware("localhost:3000", "/super-admin")
+  assert.strictEqual(res.action, "next")
+  assert.strictEqual(res.target, null)
+})
+
 console.log("\n=======================================================")
 console.log(`TOTAL TESTS: ${passed + failed} | PASSED: ${passed} | FAILED: ${failed}`)
 console.log("=======================================================")

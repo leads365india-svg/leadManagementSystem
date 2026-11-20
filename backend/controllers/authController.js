@@ -55,6 +55,66 @@ const login = async (req, res) => {
       return invalidCredentialsResponse()
     }
 
+    // Strict Domain-to-Tenant Lock for White-Label Domains
+    const rawDomain =
+      (req.body && req.body.domain) ||
+      req.headers["x-tenant-domain"] ||
+      req.headers["x-forwarded-host"] ||
+      req.headers.origin ||
+      ""
+
+    const normalizeDomain = (val) => {
+      if (!val || typeof val !== "string") return ""
+      return val
+        .trim()
+        .replace(/^https?:\/\//i, "")
+        .split("/")[0]
+        .split(":")[0]
+        .toLowerCase()
+    }
+
+    const cleanReqDomain = normalizeDomain(rawDomain)
+
+    if (
+      cleanReqDomain &&
+      cleanReqDomain !== "localhost" &&
+      cleanReqDomain !== "127.0.0.1" &&
+      cleanReqDomain !== "::1" &&
+      !cleanReqDomain.endsWith(".localhost") &&
+      !cleanReqDomain.endsWith(".vercel.app") &&
+      cleanReqDomain !== "admin.leads365.in" &&
+      cleanReqDomain !== "leads365.in"
+    ) {
+      const domainAccount = await Account.findOne({
+        customDomain: cleanReqDomain,
+        status: { $ne: "suspended" },
+      }).lean()
+
+      if (domainAccount) {
+        // Enforce: User MUST belong to this domain's tenant
+        // Super admins or users from different tenants are strictly rejected
+        if (user.role === "super_admin") {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied: This account does not belong to this portal domain.",
+          })
+        }
+
+        const userTenant =
+          user.tenantId ||
+          (user._id && domainAccount.adminUserId && domainAccount.adminUserId.toString() === user._id.toString()
+            ? domainAccount.accountId
+            : null)
+
+        if (!userTenant || userTenant !== domainAccount.accountId) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied: This account does not belong to this portal domain.",
+          })
+        }
+      }
+    }
+
     // If tenant user/admin (non-super-admin), retrieve tenant account metadata
     let accountData = null
     if (user.role !== "super_admin") {
@@ -79,6 +139,10 @@ const login = async (req, res) => {
           companyName: account.companyName,
           displayName: account.displayName,
           status: account.status,
+          customDomain: account.customDomain || "",
+          logoUrl: account.logoUrl || "",
+          primaryColor: account.primaryColor || "#4f46e5",
+          pageTitle: account.pageTitle || account.displayName || account.companyName,
         }
         // Ensure user tenantId is synchronized if missing
         if (!user.tenantId && account.accountId) {
@@ -261,6 +325,10 @@ const getMe = async (req, res) => {
           companyName: account.companyName,
           displayName: account.displayName,
           status: account.status,
+          customDomain: account.customDomain || "",
+          logoUrl: account.logoUrl || "",
+          primaryColor: account.primaryColor || "#4f46e5",
+          pageTitle: account.pageTitle || account.displayName || account.companyName,
         }
       }
     } else if (effectiveTenantId) {
@@ -272,6 +340,10 @@ const getMe = async (req, res) => {
           companyName: account.companyName,
           displayName: account.displayName,
           status: account.status,
+          customDomain: account.customDomain || "",
+          logoUrl: account.logoUrl || "",
+          primaryColor: account.primaryColor || "#4f46e5",
+          pageTitle: account.pageTitle || account.displayName || account.companyName,
         }
       }
     }
@@ -303,30 +375,31 @@ const getMe = async (req, res) => {
   }
 }
 
-// GET /api/auth/tenant-info?tenantId=ACC-XXXX
+// GET /api/auth/tenant-info?tenantId=ACC-XXXX or ?domain=crm.medical365.in
 const getTenantInfo = async (req, res) => {
   try {
-    const { tenantId } = req.query
-    if (!tenantId || typeof tenantId !== "string" || !tenantId.trim()) {
+    const rawTerm = (req.query.tenantId || req.query.domain || req.query.identifier || "").toString().trim()
+    if (!rawTerm) {
       return res.status(400).json({
         success: false,
-        error: "Tenant ID is required",
+        error: "Tenant ID or domain identifier is required",
       })
     }
 
-    const cleanTerm = tenantId.trim().toLowerCase()
+    // Clean term to match customDomain or slug (strip protocol, path, port)
+    const cleanDomain = rawTerm.replace(/^https?:\/\//i, "").split("/")[0].split(":")[0].toLowerCase()
     const account = await Account.findOne({
       $or: [
-        { accountId: tenantId.trim() },
-        { slug: cleanTerm },
-        { customDomain: cleanTerm },
+        { accountId: rawTerm },
+        { slug: cleanDomain },
+        { customDomain: cleanDomain },
       ],
     }).lean()
 
     if (!account) {
       return res.status(404).json({
         success: false,
-        error: "No active Leads Account found with this identifier or slug",
+        error: "No active Leads Account found with this identifier or domain",
       })
     }
 
@@ -349,6 +422,87 @@ const getTenantInfo = async (req, res) => {
     return res.status(500).json({
       success: false,
       error: "Failed to retrieve tenant info",
+    })
+  }
+}
+
+/**
+ * GET /api/auth/branding?domain=crm.medical365.in
+ * Public endpoint to fetch tenant white-label branding by customDomain.
+ * Never exposes credentials or sensitive account secrets.
+ */
+const getBranding = async (req, res) => {
+  try {
+    const rawDomain =
+      req.query.domain ||
+      req.headers["x-tenant-domain"] ||
+      req.headers["x-forwarded-host"] ||
+      req.headers.origin ||
+      req.headers.host ||
+      ""
+
+    const normalizeDomain = (val) => {
+      if (!val || typeof val !== "string") return ""
+      return val
+        .trim()
+        .replace(/^https?:\/\//i, "")
+        .split("/")[0]
+        .split(":")[0]
+        .toLowerCase()
+    }
+
+    const host = normalizeDomain(rawDomain)
+
+    if (
+      !host ||
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host.endsWith(".localhost") ||
+      host.endsWith(".vercel.app") ||
+      host === "admin.leads365.in" ||
+      host === "leads365.in"
+    ) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          isWhiteLabel: false,
+        },
+      })
+    }
+
+    const account = await Account.findOne({
+      customDomain: host,
+      status: { $ne: "suspended" },
+    }).lean()
+
+    if (!account) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          isWhiteLabel: false,
+        },
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        isWhiteLabel: true,
+        tenantId: account.accountId,
+        accountId: account.accountId,
+        companyName: account.companyName,
+        displayName: account.displayName || account.companyName,
+        browserPageTitle: account.pageTitle || account.displayName || account.companyName,
+        logoUrl: account.logoUrl || "",
+        brandPrimaryColor: account.primaryColor || "#4f46e5",
+      },
+    })
+  } catch (error) {
+    console.error("Error retrieving domain branding:", error)
+    return res.status(500).json({
+      success: false,
+      error: "Failed to retrieve branding metadata",
     })
   }
 }
@@ -519,6 +673,7 @@ module.exports = {
   logout,
   getMe,
   getTenantInfo,
+  getBranding,
   acceptInvite,
   resetPasswordWithToken,
   logoutAll,

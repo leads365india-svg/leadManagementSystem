@@ -15,8 +15,15 @@ const nextConfig = {
     optimizePackageImports: ["lucide-react", "date-fns", "recharts"],
   },
   webpack: (config, { dev, isServer }) => {
-    if (dev && !isServer) {
-      config.output.chunkLoadTimeout = 300000
+    if (dev) {
+      if (!isServer) {
+        config.output.chunkLoadTimeout = 300000
+      }
+      config.watchOptions = {
+        poll: false,
+        aggregateTimeout: 300,
+        ignored: ['**/node_modules', '**/.git', '**/.next'],
+      }
     }
     return config
   },

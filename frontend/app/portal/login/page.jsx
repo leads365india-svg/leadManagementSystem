@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { isWhiteLabelDomain, normalizeHostname } from "@/lib/domain"
 import { toast } from "react-hot-toast"
 import {
   Building2,
@@ -28,6 +29,8 @@ function PortalLoginForm() {
   const [tenantId, setTenantId] = useState(tenantParam)
   const [tenantInfo, setTenantInfo] = useState(null)
   const [loadingTenantInfo, setLoadingTenantInfo] = useState(false)
+  const [isWhiteLabel, setIsWhiteLabel] = useState(false)
+  const [logoError, setLogoError] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
@@ -39,29 +42,65 @@ function PortalLoginForm() {
   const passwordInputRef = useRef(null)
   const isSubmittingRef = useRef(false)
 
-  // Sync tenant from URL param
+  // Fetch white-label branding by hostname or query params on mount
   useEffect(() => {
-    if (tenantParam) {
-      setTenantId(tenantParam)
-    }
-  }, [tenantParam])
+    if (typeof window === "undefined") return
 
-  // Fetch tenant metadata if tenant ID is provided
-  useEffect(() => {
+    const host = normalizeHostname(window.location.hostname)
+    const testDomain = searchParams.get("domain") || searchParams.get("test_domain") || ""
+    const queryHost = testDomain ? normalizeHostname(testDomain) : host
+
     let isMounted = true
-    if (!tenantId.trim()) {
-      setTenantInfo(null)
-      return
-    }
-
-    const fetchTenant = async () => {
+    const fetchBranding = async () => {
       try {
         setLoadingTenantInfo(true)
-        const response = await apiClient.getTenantInfo(tenantId.trim())
-        if (isMounted && response.success && response.data) {
-          setTenantInfo(response.data)
-        } else if (isMounted) {
-          setTenantInfo(null)
+        setLogoError(false)
+
+        // 1. Fetch public branding by hostname
+        const res = await apiClient.getBranding(queryHost)
+        if (isMounted && res?.success && res?.data?.isWhiteLabel) {
+          const brand = res.data
+          setIsWhiteLabel(true)
+          setTenantInfo({
+            accountId: brand.accountId || brand.tenantId,
+            tenantId: brand.tenantId || brand.accountId,
+            companyName: brand.companyName,
+            displayName: brand.displayName,
+            browserPageTitle: brand.browserPageTitle || brand.displayName || brand.companyName,
+            logoUrl: brand.logoUrl || "",
+            primaryColor: brand.brandPrimaryColor || "#4f46e5",
+            brandPrimaryColor: brand.brandPrimaryColor || "#4f46e5",
+          })
+          if (brand.tenantId || brand.accountId) {
+            setTenantId(brand.tenantId || brand.accountId)
+          }
+          const brandTitle = brand.browserPageTitle || brand.displayName || brand.companyName
+          if (brandTitle) {
+            document.title = `${brandTitle} - Sign In`
+          }
+          if (brand.brandPrimaryColor) {
+            document.documentElement.style.setProperty("--brand-primary", brand.brandPrimaryColor)
+          }
+          return
+        }
+
+        // 2. If not white-label domain, check ?tenant= parameter
+        const effectiveTenant = tenantParam || tenantId
+        if (effectiveTenant && effectiveTenant.trim()) {
+          const tenantRes = await apiClient.getTenantInfo(effectiveTenant.trim())
+          if (isMounted && tenantRes?.success && tenantRes?.data) {
+            setTenantInfo(tenantRes.data)
+            if (tenantRes.data.accountId) {
+              setTenantId(tenantRes.data.accountId)
+            }
+            const brandTitle =
+              tenantRes.data.pageTitle ||
+              tenantRes.data.displayName ||
+              tenantRes.data.companyName
+            if (brandTitle) {
+              document.title = `${brandTitle} - Sign In`
+            }
+          }
         }
       } catch (_err) {
         if (isMounted) {
@@ -74,12 +113,12 @@ function PortalLoginForm() {
       }
     }
 
-    fetchTenant()
+    fetchBranding()
 
     return () => {
       isMounted = false
     }
-  }, [tenantId])
+  }, [tenantParam, searchParams, tenantId])
 
   // Prefetch destination routes in production where prefetching is lightweight and doesn't trigger dev rebuilds
   useEffect(() => {
@@ -131,10 +170,18 @@ function PortalLoginForm() {
     setLoading(true)
 
     try {
-      const response = await login({
+      const loginPayload = {
         email: cleanEmail,
         password,
-      })
+      }
+      if (typeof window !== "undefined" && window.location.hostname) {
+        loginPayload.domain = window.location.hostname
+      }
+      if (tenantId && tenantId.trim()) {
+        loginPayload.tenantId = tenantId.trim()
+      }
+
+      const response = await login(loginPayload)
 
       if (response && response.success && response.data?.user) {
         setIsRedirecting(true)
@@ -212,27 +259,41 @@ function PortalLoginForm() {
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         {/* Brand Icon & Heading */}
         <div className="flex justify-center">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-100 text-white transition-transform hover:scale-105 duration-200">
-            <Building2 className="w-7 h-7" />
-          </div>
+          {tenantInfo?.logoUrl && !logoError ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={tenantInfo.logoUrl}
+              alt={tenantInfo.displayName || tenantInfo.companyName || "Logo"}
+              onError={() => setLogoError(true)}
+              className="h-14 max-w-[240px] object-contain drop-shadow-sm transition-transform hover:scale-105 duration-200"
+            />
+          ) : (
+            <div
+              className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-100 text-white transition-transform hover:scale-105 duration-200"
+              style={{
+                backgroundColor: tenantInfo?.brandPrimaryColor || tenantInfo?.primaryColor || undefined,
+              }}
+            >
+              <Building2 className="w-7 h-7" />
+            </div>
+          )}
         </div>
 
         {tenantInfo ? (
           <div className="text-center mt-4">
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 uppercase tracking-wider">
-              Tenant: {tenantInfo.accountId}
-            </span>
-            <h2 className="mt-2 text-center text-2xl font-bold tracking-tight text-slate-900">
-              {tenantInfo.companyName}
+            <h2 className="text-center text-2xl font-bold tracking-tight text-slate-900">
+              {tenantInfo.displayName || tenantInfo.browserPageTitle || tenantInfo.companyName}
             </h2>
             <p className="mt-1 text-center text-xs text-slate-500">
-              Client CRM Workspace & Leads Portal
+              {tenantInfo.displayName
+                ? `Sign in to access ${tenantInfo.displayName}'s CRM workspace`
+                : "Client CRM Workspace & Leads Portal"}
             </p>
           </div>
         ) : (
           <div className="text-center mt-4">
             <h2 className="text-center text-2xl font-bold tracking-tight text-slate-900">
-              Client CRM Portal Login
+              {isWhiteLabel ? "Client CRM Portal" : "Client CRM Portal Login"}
             </h2>
             <p className="mt-1 text-center text-xs text-slate-500">
               Sign in with your Leads Account Administrator credentials
@@ -277,33 +338,35 @@ function PortalLoginForm() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Optional Tenant ID Field (autofilled if URL query param exists) */}
-            <div>
-              <label
-                htmlFor="tenantId"
-                className="block text-xs font-semibold uppercase tracking-wider text-slate-700"
-              >
-                Tenant Account ID
-              </label>
-              <div className="mt-1.5 relative rounded-lg">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <KeyRound className="w-4 h-4" />
+            {/* When isWhiteLabel is true, HIDE the Tenant Account ID field completely since domain locks the tenant */}
+            {!isWhiteLabel && (
+              <div>
+                <label
+                  htmlFor="tenantId"
+                  className="block text-xs font-semibold uppercase tracking-wider text-slate-700"
+                >
+                  Tenant Account ID
+                </label>
+                <div className="mt-1.5 relative rounded-lg">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <KeyRound className="w-4 h-4" />
+                  </div>
+                  <input
+                    id="tenantId"
+                    name="tenantId"
+                    type="text"
+                    disabled={loading}
+                    value={tenantId}
+                    onChange={(e) => setTenantId(e.target.value.toUpperCase())}
+                    placeholder="e.g. ACC-XXXX (optional)"
+                    className="block w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs font-mono placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 focus:bg-white transition-all disabled:opacity-75 disabled:cursor-not-allowed"
+                  />
                 </div>
-                <input
-                  id="tenantId"
-                  name="tenantId"
-                  type="text"
-                  disabled={loading}
-                  value={tenantId}
-                  onChange={(e) => setTenantId(e.target.value.toUpperCase())}
-                  placeholder="e.g. ACC-XXXX (optional)"
-                  className="block w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs font-mono placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 focus:bg-white transition-all disabled:opacity-75 disabled:cursor-not-allowed"
-                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Leave empty or provide your company Tenant ID
+                </p>
               </div>
-              <p className="text-[10px] text-slate-400 mt-1">
-                Leave empty or provide your company Tenant ID
-              </p>
-            </div>
+            )}
 
             {/* Admin Email */}
             <div>
@@ -373,7 +436,10 @@ function PortalLoginForm() {
               <button
                 type="submit"
                 disabled={loading || tenantInfo?.status === "suspended"}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-85 transition-all duration-150 cursor-pointer disabled:cursor-not-allowed select-none"
+                style={{
+                  backgroundColor: tenantInfo?.primaryColor || undefined,
+                }}
+                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-xs font-semibold text-white bg-indigo-600 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-85 transition-all duration-150 cursor-pointer disabled:cursor-not-allowed select-none"
               >
                 {loading ? (
                   isRedirecting ? (
@@ -420,23 +486,29 @@ function PortalLoginForm() {
           <div className="mt-6 pt-5 border-t border-slate-100 space-y-3">
             <div className="rounded-xl p-3 bg-slate-50 border border-slate-200/90 text-[11px] text-slate-600 space-y-1">
               <div className="flex items-center space-x-1.5 font-semibold text-slate-700">
-                <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                <ShieldCheck
+                  className="w-3.5 h-3.5 text-indigo-600"
+                  style={{ color: tenantInfo?.primaryColor || undefined }}
+                />
                 <span>Isolated Multi-Tenant CRM</span>
               </div>
               <p className="text-slate-500">
-                Each client organization operates in its own isolated database partition. Only
-                authorized administrators of this account can access its leads.
+                {tenantInfo?.displayName
+                  ? `Sign in with authorized credentials for ${tenantInfo.displayName} to access your team's leads, calls, and performance reports.`
+                  : "Each client organization operates in its own isolated database partition. Only authorized administrators of this account can access its leads."}
               </p>
             </div>
 
-            <div className="flex items-center justify-center text-xs pt-2">
-              <Link
-                href="/"
-                className="text-slate-400 hover:text-slate-600 transition-colors text-[11px]"
-              >
-                Home
-              </Link>
-            </div>
+            {!isWhiteLabel && (
+              <div className="flex items-center justify-center text-xs pt-2">
+                <Link
+                  href="/"
+                  className="text-slate-400 hover:text-slate-600 transition-colors text-[11px]"
+                >
+                  Home
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       </div>

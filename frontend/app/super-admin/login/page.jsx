@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { isWhiteLabelDomain } from "@/lib/domain"
 import {
   ShieldCheck,
   Lock,
@@ -42,6 +43,12 @@ export default function SuperAdminLoginPage() {
 
   // Redirect authenticated users away from login page if already logged in on initial visit
   useEffect(() => {
+    // White-label domains must NEVER display Super Admin Login
+    if (typeof window !== "undefined" && isWhiteLabelDomain(window.location.hostname)) {
+      router.replace("/portal/login")
+      return
+    }
+
     // Avoid conflicting with active form submission
     if (isSubmittingRef.current) return
 
