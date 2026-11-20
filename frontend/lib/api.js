@@ -59,6 +59,7 @@ class ApiClient {
         if (response.status === 401 && typeof window !== "undefined") {
           try {
             localStorage.removeItem("token")
+            localStorage.removeItem("leadflow_token")
           } catch (_) {}
           const isAuthEndpoint =
             endpoint === "/auth/me" ||
@@ -160,6 +161,26 @@ class ApiClient {
     return this.request(`/leads/${leadId}/whatsapp-messages`, {
       method: "POST",
       body: JSON.stringify({ message }),
+    })
+  }
+
+  // --- Free Multi-Tenant WhatsApp Web QR Sync (Baileys) ---
+  async getWhatsAppQrStatus(tenantId) {
+    const q = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ""
+    return this.request(`/integrations/whatsapp-qr/status${q}`)
+  }
+
+  async connectWhatsAppQr(tenantId) {
+    return this.request("/integrations/whatsapp-qr/connect", {
+      method: "POST",
+      body: JSON.stringify(tenantId ? { tenantId } : {}),
+    })
+  }
+
+  async disconnectWhatsAppQr(tenantId) {
+    return this.request("/integrations/whatsapp-qr/disconnect", {
+      method: "POST",
+      body: JSON.stringify(tenantId ? { tenantId } : {}),
     })
   }
 

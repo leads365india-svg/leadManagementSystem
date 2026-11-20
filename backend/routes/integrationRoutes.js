@@ -137,6 +137,18 @@ const {
 router.get("/webhooks/whatsapp", handleWhatsAppWebhookHandshake)
 router.post("/webhooks/whatsapp", webhookLimiter, handleWhatsAppWebhookNotification)
 
+// 9d. Free Multi-Tenant WhatsApp Web QR Sync Endpoints (Baileys)
+const {
+  getQrStatus,
+  connectQrSession,
+  disconnectQrSession,
+  syncContacts,
+} = require("../controllers/whatsappQrController")
+router.get("/whatsapp-qr/status", authenticate, getQrStatus)
+router.post("/whatsapp-qr/connect", authenticate, requireAccountAdmin, connectQrSession)
+router.post("/whatsapp-qr/disconnect", authenticate, requireAccountAdmin, disconnectQrSession)
+router.post("/whatsapp-qr/sync-contacts", authenticate, syncContacts)
+
 // 10. Phase 11 Multi-Tenant Integration Connectors CRUD
 router.get("/", authenticate, listIntegrations)
 router.post("/", authenticate, requireAccountAdmin, createIntegration)

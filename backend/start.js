@@ -430,6 +430,14 @@ const startServer = async () => {
       console.warn("⚠️ Failed to pre-warm custom domain cache:", cacheErr.message)
     }
 
+    // Auto-restore active WhatsApp QR sync sessions
+    try {
+      const { restoreConnectedSessions } = require("./services/whatsappQrService")
+      await restoreConnectedSessions()
+    } catch (qrErr) {
+      console.warn("⚠️ Failed to restore WhatsApp QR sessions:", qrErr.message)
+    }
+
     const { registerAllHandlers } = require("./jobs")
     registerAllHandlers()
 

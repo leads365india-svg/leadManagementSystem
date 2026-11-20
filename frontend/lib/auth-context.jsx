@@ -157,7 +157,7 @@ export function AuthProvider({ children }) {
       // If unauthenticated visitor is on a login page and has no valid token,
       // skip calling /auth/me to avoid unnecessary 401 console errors.
       if (typeof window !== "undefined") {
-        const token = localStorage.getItem("token")
+        const token = localStorage.getItem("leadflow_token") || localStorage.getItem("token")
         let isExpired = true
         if (token && typeof token === "string") {
           try {
@@ -173,6 +173,7 @@ export function AuthProvider({ children }) {
         if (isExpired) {
           try {
             localStorage.removeItem("token")
+            localStorage.removeItem("leadflow_token")
           } catch (_) {}
         }
 

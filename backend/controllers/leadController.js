@@ -425,6 +425,49 @@ const createLead = async (req, res) => {
         console.warn("Failed to dispatch lead assigned push:", pushErr.message)
       }
     }
+
+    // Unsuppress phone number and re-link historical WhatsApp messages
+    if (result.lead && (result.lead.phoneNormalized || result.lead.phone)) {
+      try {
+        const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
+        const WhatsAppSuppressedNumber = require("../models/WhatsAppSuppressedNumber")
+        const { WhatsAppMessage } = require("../models/WhatsAppMessage")
+
+        const rawPhone = result.lead.phoneNormalized || result.lead.phone || ""
+        const normalizedPhone = normalizePhoneE164(rawPhone) || rawPhone.trim()
+        const digits = normalizedPhone.replace(/\D/g, "")
+        const last10 = digits.length >= 10 ? digits.slice(-10) : digits
+        const phoneVariants = Array.from(new Set([normalizedPhone, `+91${last10}`, last10, digits, rawPhone])).filter(Boolean)
+
+        // 1. Remove from WhatsAppSuppressedNumber for this tenant
+        await WhatsAppSuppressedNumber.deleteMany({
+          tenantId: result.lead.tenantId,
+          normalizedPhone: { $in: phoneVariants },
+        }).setOptions({ skipTenantFilter: true })
+
+        // 2. Re-link any preserved WhatsAppMessage records where leadId is null
+        await WhatsAppMessage.updateMany(
+          {
+            tenantId: result.lead.tenantId,
+            leadId: null,
+            $or: [
+              { normalizedPhone: { $in: phoneVariants } },
+              { senderPhone: { $in: phoneVariants } },
+              { recipientPhone: { $in: phoneVariants } },
+            ],
+          },
+          {
+            $set: {
+              leadId: result.lead._id,
+              normalizedPhone,
+            },
+          }
+        ).setOptions({ skipTenantFilter: true })
+      } catch (unsuppressErr) {
+        console.warn("Could not unsuppress phone or re-link WhatsApp messages:", unsuppressErr.message)
+      }
+    }
+
     res.status(201).json({
       success: true,
       data: result.lead,
@@ -989,6 +1032,54 @@ const deleteLead = async (req, res) => {
       }
     } catch (tombstoneErr) {
       console.warn("Could not record mobile sync tombstone on lead deletion:", tombstoneErr.message)
+    }
+
+    // Suppress phone number for WhatsApp QR Sync and preserve message history (unlink leadId)
+    try {
+      const rawLeadPhone = lead.phoneNormalized || lead.phone || ""
+      if (rawLeadPhone && lead.tenantId) {
+        const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
+        const WhatsAppSuppressedNumber = require("../models/WhatsAppSuppressedNumber")
+        const { WhatsAppMessage } = require("../models/WhatsAppMessage")
+
+        const normalizedPhone = normalizePhoneE164(rawLeadPhone) || rawLeadPhone.trim()
+        const digits = normalizedPhone.replace(/\D/g, "")
+        const last10 = digits.length >= 10 ? digits.slice(-10) : digits
+        const phoneVariants = Array.from(new Set([normalizedPhone, `+91${last10}`, last10, digits, rawLeadPhone])).filter(Boolean)
+
+        // 1. Upsert into WhatsAppSuppressedNumber so future messages do not auto-recreate the lead
+        await WhatsAppSuppressedNumber.findOneAndUpdate(
+          { tenantId: lead.tenantId, normalizedPhone },
+          {
+            $set: {
+              tenantId: lead.tenantId,
+              normalizedPhone,
+              suppressedAt: new Date(),
+              reason: "lead_deleted",
+            },
+          },
+          { upsert: true, new: true }
+        ).setOptions({ skipTenantFilter: true })
+
+        // 2. Unlink WhatsAppMessage rows from this lead without deleting history
+        await WhatsAppMessage.updateMany(
+          {
+            tenantId: lead.tenantId,
+            $or: [
+              { leadId: lead._id },
+              { normalizedPhone: { $in: phoneVariants } },
+            ],
+          },
+          {
+            $set: {
+              leadId: null,
+              normalizedPhone,
+            },
+          }
+        ).setOptions({ skipTenantFilter: true })
+      }
+    } catch (suppressErr) {
+      console.warn("Could not suppress deleted lead phone for WhatsApp QR:", suppressErr.message)
     }
 
     await Lead.findOneAndDelete({ _id: lead._id })

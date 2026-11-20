@@ -49,6 +49,9 @@ import {
   Terminal,
   PlayCircle,
   Edit3,
+  QrCode,
+  MessageSquare,
+  Smartphone,
 } from "lucide-react"
 
 const DEFAULT_BLOCKED_DOMAINS = [
@@ -271,6 +274,23 @@ export default function LeadFeedsClient() {
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [refreshingAll, setRefreshingAll] = useState(false)
   const [copiedEventPayload, setCopiedEventPayload] = useState(false)
+
+  // ==========================================
+  // WhatsApp QR Sync State (Free Multi-Tenant Baileys Sync)
+  // ==========================================
+  const [whatsAppQrData, setWhatsAppQrData] = useState({
+    status: "disconnected",
+    qrDataUrl: "",
+    phoneNumber: "",
+    pushName: "",
+    connectedAt: null,
+    lastError: null,
+  })
+  const [loadingWhatsAppQr, setLoadingWhatsAppQr] = useState(false)
+  const [connectingWhatsAppQr, setConnectingWhatsAppQr] = useState(false)
+  const [disconnectingWhatsAppQr, setDisconnectingWhatsAppQr] = useState(false)
+  const [showWhatsAppQrModal, setShowWhatsAppQrModal] = useState(false)
+  const whatsAppQrPollTimerRef = React.useRef(null)
 
   // Load Website settings on mount
   const loadSettings = useCallback(async () => {
@@ -746,6 +766,114 @@ export default function LeadFeedsClient() {
     }
   }
 
+  // ==========================================
+  // WhatsApp QR Sync Helpers
+  // ==========================================
+  const loadWhatsAppQrStatus = useCallback(async () => {
+    try {
+      setLoadingWhatsAppQr(true)
+      const res = await apiClient.getWhatsAppQrStatus()
+      if (res && res.success && res.data) {
+        setWhatsAppQrData(res.data)
+        if (res.data.status === "connected") {
+          if (whatsAppQrPollTimerRef.current) {
+            clearInterval(whatsAppQrPollTimerRef.current)
+            whatsAppQrPollTimerRef.current = null
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load WhatsApp QR status:", err)
+    } finally {
+      setLoadingWhatsAppQr(false)
+    }
+  }, [])
+
+  const startWhatsAppQrPolling = useCallback(() => {
+    if (whatsAppQrPollTimerRef.current) {
+      clearInterval(whatsAppQrPollTimerRef.current)
+    }
+    whatsAppQrPollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await apiClient.getWhatsAppQrStatus()
+        if (res && res.success && res.data) {
+          setWhatsAppQrData(res.data)
+          if (res.data.status === "connected") {
+            clearInterval(whatsAppQrPollTimerRef.current)
+            whatsAppQrPollTimerRef.current = null
+            toast.success(`WhatsApp connected successfully (${res.data.phoneNumber || "Paired"})!`)
+          }
+        }
+      } catch (_) {}
+    }, 2500)
+  }, [])
+
+  const stopWhatsAppQrPolling = useCallback(() => {
+    if (whatsAppQrPollTimerRef.current) {
+      clearInterval(whatsAppQrPollTimerRef.current)
+      whatsAppQrPollTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (whatsAppQrPollTimerRef.current) {
+        clearInterval(whatsAppQrPollTimerRef.current)
+      }
+    }
+  }, [])
+
+  const handleConnectWhatsAppQr = async () => {
+    try {
+      setConnectingWhatsAppQr(true)
+      setShowWhatsAppQrModal(true)
+      const res = await apiClient.connectWhatsAppQr()
+      if (res && res.success) {
+        if (res.data) {
+          setWhatsAppQrData(res.data)
+        }
+        startWhatsAppQrPolling()
+      } else {
+        toast.error(res?.error || "Failed to initialize WhatsApp QR session")
+      }
+    } catch (err) {
+      console.error("Failed to connect WhatsApp QR:", err)
+      toast.error(err.message || "Failed to initialize WhatsApp QR session")
+    } finally {
+      setConnectingWhatsAppQr(false)
+    }
+  }
+
+  const handleDisconnectWhatsAppQr = async () => {
+    if (typeof window !== "undefined" && !window.confirm("Are you sure you want to disconnect WhatsApp? Synced messages will remain in CRM, but phone sync will stop.")) {
+      return
+    }
+    try {
+      setDisconnectingWhatsAppQr(true)
+      stopWhatsAppQrPolling()
+      const res = await apiClient.disconnectWhatsAppQr()
+      if (res && res.success) {
+        setWhatsAppQrData({
+          status: "disconnected",
+          qrDataUrl: "",
+          phoneNumber: "",
+          pushName: "",
+          connectedAt: null,
+          lastError: null,
+        })
+        setShowWhatsAppQrModal(false)
+        toast.success("WhatsApp disconnected successfully")
+      } else {
+        toast.error(res?.error || "Failed to disconnect WhatsApp")
+      }
+    } catch (err) {
+      console.error("Failed to disconnect WhatsApp:", err)
+      toast.error(err.message || "Failed to disconnect WhatsApp")
+    } finally {
+      setDisconnectingWhatsAppQr(false)
+    }
+  }
+
   // Phase 26/27: Load all statuses for Integration Studio Overview (optimized, no redundant requests)
   const loadAllStatuses = useCallback(async (showToast = false) => {
     try {
@@ -757,6 +885,7 @@ export default function LeadFeedsClient() {
         loadMetaStatus(),
         loadGoogleStatus(),
         loadGenericStatus(),
+        loadWhatsAppQrStatus(),
         loadEvents(),
       ])
       if (showToast) {
@@ -770,7 +899,7 @@ export default function LeadFeedsClient() {
     } finally {
       setRefreshingAll(false)
     }
-  }, [loadSettings, fetchWebsiteIntegrations, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadEvents])
+  }, [loadSettings, fetchWebsiteIntegrations, loadIndiaMartStatus, loadMetaStatus, loadGoogleStatus, loadGenericStatus, loadWhatsAppQrStatus, loadEvents])
 
   useEffect(() => {
     if (activeTab === "overview") {
@@ -2001,6 +2130,121 @@ export default function LeadFeedsClient() {
                     <span>Manage Meta Settings</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
+                </div>
+              </div>
+
+              {/* Channel 6: Free Multi-Tenant WhatsApp Web QR Sync */}
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shadow-sm">
+                        <MessageSquare className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">WhatsApp Sync (Free QR)</h4>
+                        <span className="text-[11px] text-slate-500">Phone-Linked Message Mirror</span>
+                      </div>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                        whatsAppQrData.status === "connected"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : whatsAppQrData.status === "qr_ready"
+                          ? "bg-amber-100 text-amber-800"
+                          : whatsAppQrData.status === "connecting"
+                          ? "bg-sky-100 text-sky-800"
+                          : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {whatsAppQrData.status === "connected" ? (
+                        <>
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          <span>Connected</span>
+                        </>
+                      ) : whatsAppQrData.status === "qr_ready" ? (
+                        <>
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+                          <span>Scan QR</span>
+                        </>
+                      ) : whatsAppQrData.status === "connecting" ? (
+                        <span>Connecting...</span>
+                      ) : (
+                        <span>Disconnected</span>
+                      )}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Mirror both incoming customer messages and phone-sent outgoing messages into CRM Leads by scanning a QR code with WhatsApp on your phone.
+                  </p>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Linked Phone:</span>
+                      <span className="font-semibold text-slate-800">
+                        {whatsAppQrData.phoneNumber || "Not paired"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Push Name:</span>
+                      <span className="text-slate-700">
+                        {whatsAppQrData.pushName || "—"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Connected At:</span>
+                      <span className="text-slate-700">
+                        {whatsAppQrData.connectedAt
+                          ? new Date(whatsAppQrData.connectedAt).toLocaleString()
+                          : "Never"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
+                  {whatsAppQrData.status === "connected" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleDisconnectWhatsAppQr}
+                        disabled={disconnectingWhatsAppQr}
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {disconnectingWhatsAppQr ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <XCircle className="w-3.5 h-3.5" />
+                        )}
+                        <span>Disconnect</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          loadWhatsAppQrStatus()
+                          setShowWhatsAppQrModal(true)
+                        }}
+                        className="px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
+                      >
+                        Status
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleConnectWhatsAppQr}
+                      disabled={connectingWhatsAppQr}
+                      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm shadow-emerald-100 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {connectingWhatsAppQr ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <QrCode className="w-3.5 h-3.5" />
+                      )}
+                      <span>Connect WhatsApp (QR)</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -5788,6 +6032,149 @@ export default function LeadFeedsClient() {
                   ? (saveAsRealLead ? "Creating Real Lead..." : "Sending Simulation...")
                   : (saveAsRealLead ? "Create Real Lead in CRM" : "Send Test Lead (Simulate)")}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL: WHATSAPP QR SYNC (FREE BAILEYS LINK)
+      ======================================================== */}
+      {showWhatsAppQrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur-xs flex items-center justify-center text-white font-bold">
+                  <QrCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Link WhatsApp via QR</h3>
+                  <p className="text-xs text-emerald-100 mt-0.5">
+                    Free Multi-Tenant WhatsApp Web Mirror
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  stopWhatsAppQrPolling()
+                  setShowWhatsAppQrModal(false)
+                }}
+                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5">
+              {whatsAppQrData.status === "connected" ? (
+                <div className="text-center py-6 space-y-4">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 mx-auto flex items-center justify-center shadow-inner">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold text-slate-900">WhatsApp Connected!</h4>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Paired with <strong className="text-slate-800">{whatsAppQrData.phoneNumber}</strong> {whatsAppQrData.pushName ? `(${whatsAppQrData.pushName})` : ""}
+                    </p>
+                    <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg p-2.5 mt-3 border border-emerald-100">
+                      Incoming customer messages and phone-sent messages are now automatically synced into CRM Leads in real-time.
+                    </p>
+                  </div>
+                  <div className="pt-2 flex justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopWhatsAppQrPolling()
+                        setShowWhatsAppQrModal(false)
+                      }}
+                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all cursor-pointer"
+                    >
+                      Done
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDisconnectWhatsAppQr}
+                      disabled={disconnectingWhatsAppQr}
+                      className="px-4 py-2 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      Disconnect Device
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Instructions */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-700 space-y-2">
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <Smartphone className="w-4 h-4 text-emerald-600" />
+                      <span>Follow these steps on your phone:</span>
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
+                      <li>Open <strong>WhatsApp</strong> or <strong>WhatsApp Business</strong> on your phone</li>
+                      <li>Tap <strong>Settings</strong> (iPhone) or <strong>Menu &gt; Linked Devices</strong> (Android)</li>
+                      <li>Tap <strong>Link a Device</strong> and point your camera at this QR code</li>
+                    </ol>
+                  </div>
+
+                  {/* QR Code Container */}
+                  <div className="flex flex-col items-center justify-center p-4 bg-slate-50/50 rounded-xl border border-slate-200">
+                    {whatsAppQrData.qrDataUrl ? (
+                      <div className="p-3 bg-white rounded-xl shadow-md border border-slate-200 relative group">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={whatsAppQrData.qrDataUrl}
+                          alt="WhatsApp Link QR Code"
+                          className="w-60 h-60 object-contain rounded-lg"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-60 h-60 flex flex-col items-center justify-center space-y-3 bg-white rounded-xl border border-dashed border-slate-300">
+                        <RefreshCw className="w-8 h-8 animate-spin text-emerald-600" />
+                        <span className="text-xs text-slate-500 font-medium">Generating WhatsApp QR code...</span>
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      <span>Auto-detecting scan... Keep this window open</span>
+                    </div>
+                  </div>
+
+                  {whatsAppQrData.lastError && (
+                    <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <span>{whatsAppQrData.lastError}</span>
+                    </div>
+                  )}
+
+                  {/* Footer buttons */}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={handleConnectWhatsAppQr}
+                      disabled={connectingWhatsAppQr}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${connectingWhatsAppQr ? "animate-spin" : ""}`} />
+                      <span>Regenerate QR</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopWhatsAppQrPolling()
+                        setShowWhatsAppQrModal(false)
+                      }}
+                      className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

@@ -43,7 +43,6 @@ import {
   PhoneOutgoing,
   Mic,
   Sliders,
-  Send,
   CheckCheck,
   MessageCircle,
 } from "lucide-react"
@@ -110,12 +109,10 @@ export default function LeadDetailDrawer({
   const [customFieldDefinitions, setCustomFieldDefinitions] = useState({})
   const [loadingCustomFields, setLoadingCustomFields] = useState(false)
 
-  // WhatsApp Cloud API Chat State
+  // WhatsApp Message Mirror State
   const [whatsappMessages, setWhatsappMessages] = useState([])
   const [loadingWhatsApp, setLoadingWhatsApp] = useState(false)
   const [whatsAppError, setWhatsAppError] = useState(null)
-  const [whatsAppInput, setWhatsAppInput] = useState("")
-  const [sendingWhatsApp, setSendingWhatsApp] = useState(false)
   const chatBottomRef = useRef(null)
 
   // Staff Assignment State
@@ -459,35 +456,6 @@ export default function LeadDetailDrawer({
       chatBottomRef.current.scrollIntoView({ behavior: "smooth" })
     }
   }, [activeTab, whatsappMessages])
-
-  const handleSendWhatsAppMessage = async (e) => {
-    if (e && typeof e.preventDefault === "function") e.preventDefault()
-    if (!whatsAppInput || !whatsAppInput.trim() || sendingWhatsApp) return
-
-    const messageText = whatsAppInput.trim()
-    try {
-      setSendingWhatsApp(true)
-      setWhatsAppError(null)
-      const res = await apiClient.sendLeadWhatsAppMessage(leadId, messageText)
-      if (res && res.success) {
-        toast.success("WhatsApp message sent!")
-        setWhatsAppInput("")
-        fetchWhatsAppMessages()
-        fetchLeadActivities()
-      } else {
-        const errorMsg = res?.error || "Failed to send WhatsApp message"
-        setWhatsAppError(errorMsg)
-        toast.error(errorMsg)
-      }
-    } catch (err) {
-      console.error("Failed to send WhatsApp message:", err)
-      const errorMsg = err.message || "Failed to send WhatsApp message"
-      setWhatsAppError(errorMsg)
-      toast.error(errorMsg)
-    } finally {
-      setSendingWhatsApp(false)
-    }
-  }
 
   const handleLogCallSubmit = async (e) => {
     e.preventDefault()
@@ -1915,7 +1883,7 @@ export default function LeadDetailDrawer({
               </div>
             )}
 
-            {/* TAB: WHATSAPP CLOUD API CHAT */}
+            {/* TAB: WHATSAPP MESSAGE MIRROR */}
             {activeTab === "whatsapp" && (
               <div className="flex flex-col h-[580px] max-h-[72vh] bg-slate-50 border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
                 {/* Chat Header */}
@@ -1933,7 +1901,7 @@ export default function LeadDetailDrawer({
                       </div>
                       <div className="text-[10px] text-emerald-600 font-medium flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                        <span>Meta WhatsApp Cloud API</span>
+                        <span>WhatsApp Message Mirror</span>
                       </div>
                     </div>
                   </div>
@@ -1980,7 +1948,7 @@ export default function LeadDetailDrawer({
                       <div className="max-w-xs">
                         <h4 className="text-xs font-bold text-slate-800">No WhatsApp messages yet</h4>
                         <p className="text-[11px] text-slate-500 mt-1">
-                          Inbound messages sent to your registered WhatsApp number will appear here automatically. You can also send a reply below.
+                          Messages synced from your linked phone WhatsApp will appear here automatically.
                         </p>
                       </div>
                     </div>
@@ -2049,36 +2017,14 @@ export default function LeadDetailDrawer({
                   )}
                 </div>
 
-                {/* Input Area */}
-                <form
-                  onSubmit={handleSendWhatsAppMessage}
-                  className="p-3 bg-white border-t border-slate-200 flex items-center space-x-2 shrink-0"
-                >
-                  <input
-                    type="text"
-                    value={whatsAppInput}
-                    onChange={(e) => setWhatsAppInput(e.target.value)}
-                    placeholder={
-                      !lead?.phone && !lead?.phoneNormalized
-                        ? "Lead has no phone number to message..."
-                        : "Type a WhatsApp reply..."
-                    }
-                    disabled={(!lead?.phone && !lead?.phoneNormalized) || sendingWhatsApp}
-                    className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 disabled:opacity-50"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!whatsAppInput.trim() || sendingWhatsApp || (!lead?.phone && !lead?.phoneNormalized)}
-                    className="inline-flex items-center space-x-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    {sendingWhatsApp ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Send className="w-3.5 h-3.5" />
-                    )}
-                    <span>Send</span>
-                  </button>
-                </form>
+                {/* Read-Only Mirror Footer */}
+                <div className="px-4 py-2.5 bg-white border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                    <span className="text-[11px] text-slate-600 font-medium">Read-only message mirror synced from linked phone WhatsApp</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400">Replies are sent directly from your phone</span>
+                </div>
               </div>
             )}
           </div>

@@ -41,7 +41,13 @@ const whatsAppMessageSchema = new mongoose.Schema(
     leadId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Lead",
-      required: [true, "Lead ID is required for WhatsApp messages"],
+      default: null,
+      index: true,
+    },
+    normalizedPhone: {
+      type: String,
+      trim: true,
+      default: "",
       index: true,
     },
     phoneNumberId: {
@@ -134,6 +140,9 @@ whatsAppMessageSchema.index({ tenantId: 1, externalMessageId: 1 }, { unique: tru
 
 // Fast chronological timeline retrieval for lead drawer
 whatsAppMessageSchema.index({ tenantId: 1, leadId: 1, timestamp: 1 })
+
+// Fast peer phone chronological history lookups even when unlinked from lead
+whatsAppMessageSchema.index({ tenantId: 1, normalizedPhone: 1, timestamp: 1 })
 
 // Delivery receipts and status updates
 whatsAppMessageSchema.index({ tenantId: 1, externalMessageId: 1, status: 1 })
