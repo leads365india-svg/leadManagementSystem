@@ -4,6 +4,7 @@ const dnsPromises = dns.promises
 const mongoose = require("mongoose")
 const Account = require("../models/Account")
 const User = require("../models/User")
+const audit = require("../services/auditService")
 const { invalidateCustomDomainCache } = require("../utils/customDomainCache")
 
 // Helper to escape regex special characters and prevent ReDoS
@@ -605,17 +606,17 @@ const updateAccount = async (req, res) => {
       primaryColor,
       pageTitle,
       countryCode = "",
+      adminPassword,
     } = req.body
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      res.status(400).json({
-        success: false,
-        error: "Invalid account ID format",
-      })
-      return
+    let account = null
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      account = await Account.findById(id)
+    }
+    if (!account) {
+      account = await Account.findOne({ accountId: id })
     }
 
-    const account = await Account.findById(id)
     if (!account) {
       res.status(404).json({
         success: false,
@@ -718,10 +719,68 @@ const updateAccount = async (req, res) => {
       account.pageTitle = typeof pageTitle === "string" ? pageTitle.trim() : ""
     }
 
+    // Optional Admin Password Reset
+    if (adminPassword !== undefined && adminPassword !== null && String(adminPassword).trim()) {
+      const cleanPassword = String(adminPassword).trim()
+      if (cleanPassword.length < 8) {
+        res.status(400).json({
+          success: false,
+          error: "Admin password must be at least 8 characters long",
+        })
+        return
+      }
+
+      let adminUser = null
+      if (account.adminUserId) {
+        adminUser = await User.findById(account.adminUserId).select("+password")
+      }
+      if (!adminUser && account.adminEmail) {
+        adminUser = await User.findOne({
+          email: account.adminEmail.toLowerCase().trim(),
+          tenantId: account.accountId,
+        }).select("+password")
+      }
+      if (!adminUser && account.adminEmail) {
+        adminUser = await User.findOne({
+          email: account.adminEmail.toLowerCase().trim(),
+        }).select("+password")
+      }
+
+      if (adminUser) {
+        // Set raw password - userSchema.pre("save") will hash it once with bcrypt (no double-hashing)
+        adminUser.password = cleanPassword
+        adminUser.tokenVersion = (adminUser.tokenVersion || 1) + 1
+        if (!adminUser.tenantId) {
+          adminUser.tenantId = account.accountId
+        }
+        await adminUser.save()
+
+        if (!account.adminUserId || account.adminUserId.toString() !== adminUser._id.toString()) {
+          account.adminUserId = adminUser._id
+        }
+
+        await audit.log({
+          tenantId: account.accountId,
+          actor: req.user,
+          action: audit.AUDIT_ACTIONS.ACCOUNT_UPDATED,
+          entity: "account",
+          entityId: account._id,
+          summary: `Super Admin reset password for admin user ${adminUser.email} (${account.companyName})`,
+          req,
+        })
+      } else {
+        res.status(404).json({
+          success: false,
+          error: `Admin user (${account.adminEmail}) not found for this account`,
+        })
+        return
+      }
+    }
+
     await account.save()
     invalidateCustomDomainCache()
 
-    // Sync Admin user details
+    // Sync Admin user details (name, contactNumber)
     if (account.adminUserId) {
       const userUpdates = {}
       if (adminName !== undefined) userUpdates.name = account.adminName

@@ -154,6 +154,36 @@ export function AuthProvider({ children }) {
 
   const checkAuth = useCallback(async () => {
     try {
+      // If unauthenticated visitor is on a login page and has no valid token,
+      // skip calling /auth/me to avoid unnecessary 401 console errors.
+      if (typeof window !== "undefined") {
+        const token = localStorage.getItem("token")
+        let isExpired = true
+        if (token && typeof token === "string") {
+          try {
+            const parts = token.split(".")
+            if (parts.length === 3) {
+              const payload = JSON.parse(atob(parts[1]))
+              isExpired = payload.exp ? Date.now() >= payload.exp * 1000 : false
+            }
+          } catch (_) {
+            isExpired = true
+          }
+        }
+        if (isExpired) {
+          try {
+            localStorage.removeItem("token")
+          } catch (_) {}
+        }
+
+        const isLoginPage = window.location.pathname.includes("/login")
+        if (isExpired && isLoginPage) {
+          setUser(null)
+          setStatus("unauthenticated")
+          return null
+        }
+      }
+
       setStatus("loading")
       const response = await apiClient.getMe()
       if (response.success && response.data?.user) {

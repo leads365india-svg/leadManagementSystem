@@ -185,6 +185,8 @@ export default function SuperAdminDashboardPage() {
     companyName: "",
     displayName: "",
     adminName: "",
+    adminEmail: "",
+    adminPassword: "",
     countryCode: "IN",
     contactNumber: "",
     customDomain: "",
@@ -195,6 +197,7 @@ export default function SuperAdminDashboardPage() {
 
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [showEditPassword, setShowEditPassword] = useState(false)
   const [formErrors, setFormErrors] = useState({})
   const [editFormErrors, setEditFormErrors] = useState({})
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -432,6 +435,11 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
         errors.customDomain = "Invalid domain format. Example: crm.yourcompany.com"
       }
     }
+    if (editFormData.adminPassword && editFormData.adminPassword.trim()) {
+      if (editFormData.adminPassword.trim().length < 8) {
+        errors.adminPassword = "Password must be at least 8 characters long"
+      }
+    }
     setEditFormErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -523,10 +531,12 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
   // Open Edit Modal for an Account
   const handleOpenEditModal = (account) => {
     setEditFormData({
-      id: account.id,
+      id: account.id || account.accountId,
       companyName: account.companyName || "",
       displayName: account.displayName || "",
       adminName: account.adminName || "",
+      adminEmail: account.adminEmail || "",
+      adminPassword: "",
       countryCode: "IN",
       contactNumber: account.contactNumber || "",
       customDomain: account.customDomain || "",
@@ -535,6 +545,7 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
       pageTitle: account.pageTitle || "",
     })
     setEditFormErrors({})
+    setShowEditPassword(false)
     setIsEditModalOpen(true)
   }
 
@@ -549,7 +560,13 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
     try {
       setIsUpdating(true)
       const toastId = toast.loading("Saving account & white-label settings...")
-      const { id, ...payload } = editFormData
+      const { id, adminEmail, ...payload } = editFormData
+      if (!payload.adminPassword || !payload.adminPassword.trim()) {
+        delete payload.adminPassword
+      } else {
+        payload.adminPassword = payload.adminPassword.trim()
+      }
+
       const response = await apiClient.updateSuperAdminAccount(id, payload)
       toast.dismiss(toastId)
 
@@ -1678,6 +1695,41 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                 {/* DNS Notice */}
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px] leading-relaxed">
                   <strong>Notice on Domain Activation:</strong> Custom domain activation remains pending until DNS configuration is verified. Add a <code>CNAME</code> record pointing to <code>cname.vercel-dns.com</code> in your DNS provider.
+                </div>
+              </div>
+
+              {/* Optional Admin Password Reset */}
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Lock className="w-4 h-4 text-indigo-600" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                    Reset Admin Password (Optional)
+                  </h4>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Leave blank to keep current password. Enter 8+ characters to set a new password for <span className="font-semibold text-slate-700">{editFormData.adminEmail || "tenant admin"}</span>.
+                </p>
+                <div className="max-w-sm">
+                  <div className="relative">
+                    <input
+                      type={showEditPassword ? "text" : "password"}
+                      placeholder="Enter new admin password"
+                      value={editFormData.adminPassword}
+                      onChange={(e) => setEditFormData({ ...editFormData, adminPassword: e.target.value })}
+                      className="w-full text-xs px-3 py-2 pr-9 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowEditPassword(!showEditPassword)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      title={showEditPassword ? "Hide password" : "Show password"}
+                    >
+                      {showEditPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  {editFormErrors.adminPassword && (
+                    <p className="text-[11px] text-red-600 mt-1">{editFormErrors.adminPassword}</p>
+                  )}
                 </div>
               </div>
 

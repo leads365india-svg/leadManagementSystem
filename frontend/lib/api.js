@@ -57,6 +57,9 @@ class ApiClient {
 
       if (!response.ok) {
         if (response.status === 401 && typeof window !== "undefined") {
+          try {
+            localStorage.removeItem("token")
+          } catch (_) {}
           const isAuthEndpoint =
             endpoint === "/auth/me" ||
             endpoint === "/auth/login" ||

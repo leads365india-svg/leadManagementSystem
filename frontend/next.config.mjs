@@ -5,6 +5,7 @@ const backendUrl = process.env.INTERNAL_BACKEND_URL
 
 const nextConfig = {
   devIndicators: false,
+  deploymentId: process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || undefined,
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -16,7 +17,7 @@ const nextConfig = {
   },
   webpack: (config, { dev, isServer }) => {
     if (!isServer) {
-      config.output.chunkLoadTimeout = 300000
+      config.output.chunkLoadTimeout = 60000
     }
     if (dev) {
       config.watchOptions = {

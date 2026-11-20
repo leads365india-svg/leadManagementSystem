@@ -9,10 +9,11 @@ const JWT_EXPIRES_IN = "24h"
 
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body
+    const rawIdentifier = (req.body.email || req.body.identifier || req.body.username || "").toString()
+    const password = req.body.password !== undefined && req.body.password !== null ? String(req.body.password) : ""
 
     // Input validation
-    if (!email || !password) {
+    if (!rawIdentifier || !password) {
       return res.status(400).json({
         success: false,
         error: "Email and password are required",
@@ -26,13 +27,48 @@ const login = async (req, res) => {
       })
     }
 
-    const normalizedIdentifier = email.toLowerCase().trim()
-    let user = await User.findOne({ email: normalizedIdentifier }).select("+password")
+    const normalizedIdentifier = rawIdentifier.toLowerCase().trim()
+    const targetTenantId =
+      (req.body && (req.body.tenantId || req.body.accountId)) ||
+      req.headers["x-tenant-id"] ||
+      ""
+
+    let cleanTenantId = typeof targetTenantId === "string" ? targetTenantId.trim() : ""
+    if (cleanTenantId && require("mongoose").Types.ObjectId.isValid(cleanTenantId)) {
+      const acct = await Account.findById(cleanTenantId).select("accountId").lean()
+      if (acct && acct.accountId) {
+        cleanTenantId = acct.accountId
+      }
+    }
+
+    let user = null
+    // 1. If target tenant is supplied (e.g. from portal URL or custom domain), prioritize tenant-scoped user query
+    if (cleanTenantId) {
+      user = await User.findOne({
+        email: normalizedIdentifier,
+        tenantId: cleanTenantId,
+      }).select("+password")
+    }
+
+    // 2. Global fallback lookup by email
+    if (!user) {
+      user = await User.findOne({ email: normalizedIdentifier }).select("+password")
+    }
+
     if (!user && (normalizedIdentifier === "superadmin@leadflow.io" || normalizedIdentifier === "superadmin")) {
       user = await User.findOne({ role: "super_admin" }).select("+password")
     }
     if (!user) {
       return invalidCredentialsResponse()
+    }
+
+    // Ensure tenant admin has synchronized tenantId from Account if previously unset
+    if (!user.tenantId && user.role !== "super_admin" && user._id) {
+      const userAccount = await Account.findOne({ adminUserId: user._id }).select("accountId").lean()
+      if (userAccount && userAccount.accountId) {
+        user.tenantId = userAccount.accountId
+        await User.findByIdAndUpdate(user._id, { tenantId: userAccount.accountId })
+      }
     }
 
     // Check if user is suspended
@@ -43,14 +79,8 @@ const login = async (req, res) => {
       })
     }
 
-    // Verify password immediately to fail fast and avoid unnecessary DB queries on invalid attempts
-    let isMatch = await user.comparePassword(password)
-    if (!isMatch && user.role === "super_admin") {
-      const configuredEnvPass = process.env.SUPERADMIN_PASSWORD ? process.env.SUPERADMIN_PASSWORD.trim() : null
-      if ((configuredEnvPass && password === configuredEnvPass) || password === "SuperAdmin@2026!") {
-        isMatch = true
-      }
-    }
+    // Verify password strictly against MongoDB hash using bcrypt
+    const isMatch = await user.comparePassword(password)
     if (!isMatch) {
       return invalidCredentialsResponse()
     }
