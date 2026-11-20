@@ -320,6 +320,12 @@ class ApiClient {
     })
   }
 
+  async verifySuperAdminAccountDomain(accountId) {
+    return this.request(`/super-admin/accounts/${accountId}/verify-domain`, {
+      method: "POST",
+    })
+  }
+
   async deleteSuperAdminAccount(accountId, payload = {}) {
     return this.request(`/super-admin/accounts/${accountId}`, {
       method: "DELETE",

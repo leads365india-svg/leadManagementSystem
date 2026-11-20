@@ -9,6 +9,7 @@ const {
   updateAccountStatus,
   switchTenantContext,
   deleteAccount,
+  verifyAccountDomain,
 } = require("../controllers/accountController")
 const { getPermissions, updatePermissions } = require("../controllers/permissionController")
 
@@ -26,6 +27,7 @@ router.put("/accounts/:id", updateAccount)
 router.patch("/accounts/:id/status", updateAccountStatus)
 router.delete("/accounts/:id", deleteAccount)
 router.post("/switch-tenant", switchTenantContext)
+router.post("/accounts/:id/verify-domain", verifyAccountDomain)
 
 // Roles & Permissions Configuration
 router.get("/permissions", getPermissions)

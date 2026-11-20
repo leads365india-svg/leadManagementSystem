@@ -1,4 +1,6 @@
 const crypto = require("crypto")
+const dns = require("dns")
+const dnsPromises = dns.promises
 const mongoose = require("mongoose")
 const Account = require("../models/Account")
 const User = require("../models/User")
@@ -19,6 +21,91 @@ const sanitizeDomain = (domain) => {
     .replace(/\/.*$/, "")
     .replace(/:\d+$/, "")
     .trim()
+}
+
+// Automatic & On-Demand DNS Verification Helper
+const verifyCustomDomainDns = async (customDomain) => {
+  const cleanDomain = sanitizeDomain(customDomain)
+  if (!cleanDomain) {
+    return "unconfigured"
+  }
+
+  // Known target patterns for Vercel custom domains
+  const vercelTargets = ["vercel-dns", "cname.vercel-dns.com", "vercel.app"]
+
+  // Setup resolver with reliable public nameservers to avoid local stub resolver issues on Windows/Docker
+  const resolver = new dnsPromises.Resolver()
+  try {
+    resolver.setServers(["8.8.8.8", "1.1.1.1", "8.8.4.4"])
+  } catch (_) {
+    // Fallback if setServers is restricted
+  }
+
+  // 1. Check CNAME resolution
+  try {
+    const cnames = await resolver.resolveCname(cleanDomain).catch(() => dnsPromises.resolveCname(cleanDomain))
+    if (Array.isArray(cnames) && cnames.length > 0) {
+      const isVercelCname = cnames.some((target) => {
+        const lowerTarget = (target || "").toLowerCase()
+        return vercelTargets.some((vt) => lowerTarget.includes(vt))
+      })
+      if (isVercelCname) {
+        return "verified"
+      }
+    }
+  } catch (_) {
+    // CNAME may not exist directly if domain is at apex or using ALIAS/ANAME/A records
+  }
+
+  // 2. Check A Record (IPv4) resolution
+  try {
+    const addresses = await resolver.resolve4(cleanDomain).catch(() => dnsPromises.resolve4(cleanDomain))
+    if (Array.isArray(addresses) && addresses.length > 0) {
+      // Known Vercel Anycast IP addresses
+      const vercelIps = ["76.76.21.21", "216.198.79.1", "216.198.79.65", "64.29.17.1", "64.29.17.65"]
+      const isVercelIp = addresses.some((ip) => vercelIps.includes(ip))
+      if (isVercelIp) {
+        return "verified"
+      }
+    }
+  } catch (_) {
+    // A record query may fail, continue to reachability check
+  }
+
+  // 3. Check HTTPS / HTTP reachability (confirm live routing)
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 4000)
+    const response = await fetch(`https://${cleanDomain}`, {
+      method: "HEAD",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Leads365-DomainVerifier/1.0",
+      },
+    })
+    clearTimeout(timeoutId)
+    if (response && response.status >= 200 && response.status < 500) {
+      return "verified"
+    }
+  } catch (_) {
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3000)
+      const httpRes = await fetch(`http://${cleanDomain}`, {
+        method: "HEAD",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Leads365-DomainVerifier/1.0",
+        },
+      })
+      clearTimeout(timeoutId)
+      if (httpRes && httpRes.status >= 200 && httpRes.status < 500) {
+        return "verified"
+      }
+    } catch (_) {}
+  }
+
+  return "pending"
 }
 
 // Helper to validate domain name format (e.g. crm.domain.com or client-portal.io)
@@ -416,7 +503,13 @@ const createAccount = async (req, res) => {
     })
     await createdUser.save()
 
-    // 2. Create the Associated Leads Account
+    // 2. Verify custom domain DNS if specified
+    let initialDomainStatus = "unconfigured"
+    if (cleanDomain) {
+      initialDomainStatus = await verifyCustomDomainDns(cleanDomain)
+    }
+
+    // 3. Create the Associated Leads Account
     createdAccount = new Account({
       accountId,
       companyName: companyName.trim(),
@@ -428,7 +521,7 @@ const createAccount = async (req, res) => {
       contactNumber: savedContact,
       status: normalizedStatus,
       customDomain: cleanDomain,
-      domainStatus: cleanDomain ? "pending_verification" : "unconfigured",
+      domainStatus: initialDomainStatus,
       logoUrl: typeof logoUrl === "string" ? logoUrl.trim() : "",
       primaryColor: typeof primaryColor === "string" && primaryColor.trim() ? primaryColor.trim() : "#4f46e5",
       pageTitle: typeof pageTitle === "string" ? pageTitle.trim() : "",
@@ -604,9 +697,9 @@ const updateAccount = async (req, res) => {
           })
           return
         }
-        if (account.customDomain !== cleanDomain) {
+        if (account.customDomain !== cleanDomain || account.domainStatus !== "verified") {
           account.customDomain = cleanDomain
-          account.domainStatus = "pending_verification"
+          account.domainStatus = await verifyCustomDomainDns(cleanDomain)
         }
       } else {
         account.customDomain = ""
@@ -1035,6 +1128,71 @@ const deleteAccount = async (req, res) => {
   }
 }
 
+// POST /api/super-admin/accounts/:id/verify-domain
+// On-demand DNS re-verification endpoint
+const verifyAccountDomain = async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!id || typeof id !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "Valid account ID is required",
+      })
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(id)
+      ? { _id: id }
+      : { accountId: id }
+
+    const account = await Account.findOne(query)
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: "Account not found",
+      })
+    }
+
+    if (!account.customDomain) {
+      account.domainStatus = "unconfigured"
+      await account.save()
+      return res.status(400).json({
+        success: false,
+        error: "Account does not have a custom domain configured",
+        data: {
+          accountId: account.accountId,
+          customDomain: "",
+          domainStatus: "unconfigured",
+        },
+      })
+    }
+
+    const verifiedStatus = await verifyCustomDomainDns(account.customDomain)
+    account.domainStatus = verifiedStatus
+    await account.save()
+    invalidateCustomDomainCache()
+
+    return res.status(200).json({
+      success: true,
+      message:
+        verifiedStatus === "verified"
+          ? "Domain DNS verified successfully"
+          : "Domain DNS verification pending (CNAME/A record not detected yet)",
+      data: {
+        id: account._id.toString(),
+        accountId: account.accountId,
+        customDomain: account.customDomain,
+        domainStatus: account.domainStatus,
+      },
+    })
+  } catch (error) {
+    console.error("verifyAccountDomain error:", error)
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to verify domain DNS",
+    })
+  }
+}
+
 module.exports = {
   getAccounts,
   getAccountStats,
@@ -1044,4 +1202,6 @@ module.exports = {
   updateAccountStatus,
   switchTenantContext,
   deleteAccount,
+  verifyAccountDomain,
+  verifyCustomDomainDns,
 }

@@ -67,7 +67,7 @@ const accountSchema = new mongoose.Schema(
     },
     domainStatus: {
       type: String,
-      enum: ["unconfigured", "pending_verification", "active"],
+      enum: ["unconfigured", "pending", "pending_verification", "verified", "active"],
       default: "unconfigured",
     },
     logoUrl: {

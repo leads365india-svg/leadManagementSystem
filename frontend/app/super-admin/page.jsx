@@ -78,6 +78,49 @@ export default function SuperAdminDashboardPage() {
   // Success Notification Banner State
   const [successMessage, setSuccessMessage] = useState(null)
 
+  // DNS Verification In-Flight State
+  const [verifyingDomainId, setVerifyingDomainId] = useState(null)
+
+  const handleVerifyDomain = async (accountId, updateModal = false) => {
+    if (!accountId || verifyingDomainId) return
+    setVerifyingDomainId(accountId)
+    const toastId = toast.loading("Verifying custom domain DNS...")
+    try {
+      const res = await apiClient.verifySuperAdminAccountDomain(accountId)
+      toast.dismiss(toastId)
+      const newStatus = res.data?.domainStatus || (res.success ? "verified" : "pending")
+      if (res.success && (newStatus === "verified" || newStatus === "active")) {
+        toast.success(res.message || "Domain DNS verified successfully!")
+      } else {
+        toast(res.message || "Domain DNS verification pending. Check CNAME record.", {
+          icon: "⏳",
+        })
+      }
+
+      setAccounts((prev) =>
+        prev.map((acc) => {
+          if (acc.id === accountId || acc.accountId === accountId) {
+            return {
+              ...acc,
+              domainStatus: newStatus,
+            }
+          }
+          return acc
+        })
+      )
+
+      if (updateModal) {
+        setSelectedAccount((prev) => (prev ? { ...prev, domainStatus: newStatus } : null))
+      }
+    } catch (err) {
+      toast.dismiss(toastId)
+      console.error("DNS verification failed:", err)
+      toast.error(err.message || "Failed to verify domain DNS")
+    } finally {
+      setVerifyingDomainId(null)
+    }
+  }
+
   // Add Account Form Data
   const handleAccessTenant = async (account) => {
     if (!account || !account.accountId) {
@@ -961,9 +1004,28 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                               {account.customDomain}
                             </span>
                           </div>
-                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 w-fit">
-                            Pending DNS
-                          </span>
+                          {account.domainStatus === "verified" || account.domainStatus === "active" ? (
+                            <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 w-fit">
+                              <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
+                              <span>Verified</span>
+                            </span>
+                          ) : (
+                            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 w-fit">
+                                Pending DNS
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleVerifyDomain(account.id || account.accountId)}
+                                disabled={verifyingDomainId === (account.id || account.accountId)}
+                                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors disabled:opacity-50 cursor-pointer"
+                                title="Re-verify DNS CNAME / A-Record resolution"
+                              >
+                                <RefreshCw className={`w-2.5 h-2.5 ${verifyingDomainId === (account.id || account.accountId) ? "animate-spin" : ""}`} />
+                                <span>Verify DNS</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="flex items-center space-x-1.5">
@@ -1738,9 +1800,41 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Domain Status</span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
-                      {selectedAccount.customDomain ? "Pending DNS Verification" : "Unconfigured"}
-                    </span>
+                    <div className="flex items-center space-x-1.5 mt-0.5">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
+                          selectedAccount.domainStatus === "verified" || selectedAccount.domainStatus === "active"
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            : selectedAccount.customDomain
+                            ? "bg-amber-50 text-amber-700 border border-amber-200"
+                            : "bg-slate-100 text-slate-600 border border-slate-200"
+                        }`}
+                      >
+                        {selectedAccount.customDomain
+                          ? selectedAccount.domainStatus === "verified" || selectedAccount.domainStatus === "active"
+                            ? "Verified"
+                            : "Pending DNS Verification"
+                          : "Unconfigured"}
+                      </span>
+                      {selectedAccount.customDomain &&
+                        selectedAccount.domainStatus !== "verified" &&
+                        selectedAccount.domainStatus !== "active" && (
+                          <button
+                            type="button"
+                            onClick={() => handleVerifyDomain(selectedAccount.id || selectedAccount.accountId, true)}
+                            disabled={verifyingDomainId === (selectedAccount.id || selectedAccount.accountId)}
+                            className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors disabled:opacity-50 cursor-pointer"
+                            title="Verify DNS now"
+                          >
+                            <RefreshCw
+                              className={`w-2.5 h-2.5 ${
+                                verifyingDomainId === (selectedAccount.id || selectedAccount.accountId) ? "animate-spin" : ""
+                              }`}
+                            />
+                            <span>Verify Now</span>
+                          </button>
+                        )}
+                    </div>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Brand Colour</span>
