@@ -155,6 +155,37 @@ const aiCallAnalysisSchema = new mongoose.Schema(
       min: 0.0,
       max: 1.0,
     },
+    productRelevanceScore: {
+      type: Number,
+      default: null,
+      min: 0.0,
+      max: 1.0,
+    },
+    leadQualificationScore: {
+      type: Number,
+      default: null,
+      min: 0.0,
+      max: 1.0,
+    },
+    qualificationStatus: {
+      type: String,
+      enum: ["QUALIFIED", "QUALIFIED_FOLLOW_UP", "DISQUALIFIED", "UNRESOLVED"],
+      default: "UNRESOLVED",
+      index: true,
+    },
+    qualificationReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    customerPurchaseIntent: {
+      type: Boolean,
+      default: false,
+    },
+    isProductRelevant: {
+      type: Boolean,
+      default: false,
+    },
     callOutcome: {
       type: String,
       enum: [
@@ -166,6 +197,7 @@ const aiCallAnalysisSchema = new mongoose.Schema(
         "ESCALATED",
         "WRONG_NUMBER",
         "UNRESOLVED",
+        "OUT_OF_SCOPE",
       ],
       default: "FOLLOW_UP_REQUIRED",
       index: true,

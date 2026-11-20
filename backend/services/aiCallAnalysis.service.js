@@ -1,6 +1,7 @@
 const { sanitizeErrorMessage, resolveGeminiModel, makeHttpsRequest } = require("./aiProvider.service")
 const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
 const BusinessProduct = require("../models/BusinessProduct")
+const { evaluateProductRelevanceAndGate, loadTenantApprovedCatalog } = require("./aiProductRelevanceGate.service")
 
 /**
  * AI Call Analysis Engine - Phase 3: AI Call Intelligence
@@ -14,6 +15,7 @@ const BusinessProduct = require("../models/BusinessProduct")
  * 3. Sentiment is conversation-scoped, not a permanent customer label.
  * 4. Enterprise privacy: 'store: false' for request-level logging control.
  * 5. Gemini 3.8 parameter compliance (no temperature, top_p, top_k, candidate_count).
+ * 6. Mandatory Approved Product Relevance Gate & Strict Speaker Attribution.
  */
 
 const VALID_SENTIMENTS = new Set(["POSITIVE", "NEUTRAL", "NEGATIVE", "MIXED"])
@@ -26,22 +28,29 @@ const VALID_OUTCOMES = new Set([
   "ESCALATED",
   "WRONG_NUMBER",
   "UNRESOLVED",
+  "OUT_OF_SCOPE",
 ])
 
 /**
  * Deterministic NLP Fallback Analysis Generator.
  * Used for offline environments, unconfigured keys, or test verification.
  */
-function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches = [] }) {
+function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches = [], tenantCatalog = null }) {
   const text = (transcript?.transcriptText || "").toLowerCase()
   const segments = transcript?.segments || []
 
-  // Determine sentiment
+  // Check out of scope patterns
+  const isRecruitment = /\b(placement agency|hiring ke regarding|recruitment|vacancy|vacancies|job vacancy|job chahiye)\b/i.test(text)
+  const isVendorPitch = /\b(seo service|digital marketing|personal loan|business loan|credit card|website development)\b/i.test(text)
+  const isWrongNumber = /\b(wrong number|galat number|galat jagah)\b/i.test(text)
+  const isOutOfScope = isRecruitment || isVendorPitch || isWrongNumber
+
+  // Determine sentiment (honest sentiment analysis - polite callers can still be neutral/positive)
   let sentiment = "NEUTRAL"
   let sentimentScore = 0.60
-  if (text.includes("great") || text.includes("perfect") || text.includes("thank you") || text.includes("interested")) {
+  if (text.includes("great") || text.includes("perfect") || text.includes("thank you")) {
     sentiment = "POSITIVE"
-    sentimentScore = 0.85
+    sentimentScore = 0.80
   } else if (text.includes("bad") || text.includes("expensive") || text.includes("cancel") || text.includes("complaint")) {
     sentiment = "NEGATIVE"
     sentimentScore = 0.35
@@ -50,16 +59,70 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     sentimentScore = 0.50
   }
 
-  // Determine outcome
-  let callOutcome = "FOLLOW_UP_REQUIRED"
-  if (text.includes("quotation") || text.includes("demo") || text.includes("interested") || text.includes("pricing")) {
-    callOutcome = "INTERESTED"
-  } else if (text.includes("not interested") || text.includes("don't call") || text.includes("wrong number")) {
+  // Determine outcome based on strict qualification rules
+  let callOutcome = "NOT_INTERESTED"
+  let summary = ""
+  let customerIntent = ""
+  let customerNeeds = []
+  let productInterests = []
+  let nextSteps = []
+  let followUpRecommendations = []
+
+  if (isRecruitment) {
     callOutcome = "NOT_INTERESTED"
+    summary = "External placement/recruitment agency representative contacted the organization inquiring about hiring vacancies. The organization representative stated all vacancies are full. Call is out-of-scope and unrelated to company products."
+    customerIntent = "Inquiring about job vacancies and offering recruitment services."
+    customerNeeds = []
+    productInterests = []
+    nextSteps = ["No action required. Call is out-of-scope."]
+    followUpRecommendations = ["Do not pursue as a CRM lead. Disqualified as non-product call."]
+  } else if (isVendorPitch) {
+    callOutcome = "NOT_INTERESTED"
+    summary = "Third-party vendor pitched unrelated services. Prospect expressed no interest."
+    customerIntent = "Unrelated vendor sales pitch."
+    customerNeeds = []
+    productInterests = []
+    nextSteps = ["No action required."]
+    followUpRecommendations = ["Do not pursue as a CRM lead."]
+  } else if (isWrongNumber) {
+    callOutcome = "NOT_INTERESTED"
+    summary = "Call was identified as a wrong number."
+    customerIntent = "Wrong number."
+    customerNeeds = []
+    productInterests = []
+    nextSteps = []
+    followUpRecommendations = []
+  } else if (text.includes("quotation") || text.includes("demo") || text.includes("pricing") || text.includes("hms") || text.includes("hospital software") || text.includes("buy")) {
+    callOutcome = "INTERESTED"
+    summary = "Customer inquired about product offerings, pricing, and scheduling a walkthrough."
+    customerIntent = "Inquiring about product specifications, pricing, and features."
+    customerNeeds = ["Pricing clarity", "Feature walkthrough"]
+    productInterests = topicMatches.map((t) => t.topicName).filter((n) => !n.startsWith("http")).slice(0, 3)
+    if (productInterests.length === 0) productInterests.push("Core Software Solutions")
+    nextSteps = ["Send detailed commercial proposal and schedule product walkthrough."]
+    followUpRecommendations = ["Follow up within 24-48 business hours with technical specs."]
   } else if (text.includes("call back") || text.includes("later") || text.includes("busy")) {
     callOutcome = "CALL_BACK_LATER"
+    summary = "Customer requested a callback at a later time."
+    customerIntent = "Requesting follow-up callback."
+    customerNeeds = ["Callback when available"]
+    nextSteps = ["Schedule callback as requested."]
+    followUpRecommendations = ["Call back at the customer's specified time."]
   } else if (text.includes("order placed") || text.includes("deal closed") || text.includes("payment done")) {
     callOutcome = "DEAL_CLOSED"
+    summary = "Customer confirmed order and payment terms."
+    customerIntent = "Finalizing purchase / closing deal."
+    customerNeeds = ["Order processing"]
+    nextSteps = ["Process onboarding and dispatch documentation."]
+    followUpRecommendations = ["Assign implementation specialist."]
+  } else {
+    callOutcome = "NOT_INTERESTED"
+    summary = "Conversation had no demonstrable product interest or commercial sales opportunity."
+    customerIntent = "General inquiry without product interest."
+    customerNeeds = []
+    productInterests = []
+    nextSteps = []
+    followUpRecommendations = ["Archive or close without active follow-up."]
   }
 
   // Extract key moments from segments
@@ -69,27 +132,9 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     quote: s.text.length > 120 ? `${s.text.slice(0, 117)}...` : s.text,
   }))
 
-  const summary = `Sales conversation regarding business offerings. Customer discussed requirements and agreed on next steps with the representative.`
-  const customerIntent = "Inquiring about product specifications, pricing, and scheduling a walkthrough."
-  const customerNeeds = ["Pricing clarity", "Feature comparison", "Implementation timeline"]
-  const productInterests = topicMatches.map((t) => t.topicName).slice(0, 3)
-  if (productInterests.length === 0) productInterests.push("General CRM Solutions")
-
   const objections = []
   if (text.includes("expensive") || text.includes("cost")) objections.push("Budget considerations")
   if (text.includes("time") || text.includes("delay")) objections.push("Timeline constraints")
-
-  const competitorMentions = []
-
-  const nextSteps = [
-    "Send detailed commercial proposal and product documentation.",
-    "Schedule follow-up product demonstration.",
-  ]
-
-  const followUpRecommendations = [
-    "Follow up within 24-48 business hours with technical specs.",
-    "Assign a senior product specialist for the demonstration.",
-  ]
 
   return {
     summary,
@@ -97,14 +142,14 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     customerNeeds,
     productInterests,
     objections,
-    competitorMentions,
+    competitorMentions: [],
     sentiment,
     sentimentScore,
     callOutcome,
     keyMoments,
     nextSteps,
     followUpRecommendations,
-    topicMatches,
+    topicMatches: topicMatches.filter((t) => !t.topicName?.startsWith("http")),
     provider: "deterministic-nlp",
     model: "offline-rule-engine",
     usage: {
@@ -157,22 +202,27 @@ ${topicList}\n`
   const systemPrompt = `You are a Senior Sales Intelligence Auditor in Leads-365 CRM.
 Your objective is to extract objective, grounded intelligence from this phone call transcript.
 ${businessSection}${topicMatchesSection}
-STRICT GROUNDING RULES:
-1. Ground every finding strictly in the provided transcript. DO NOT invent prices, dates, unstated commitments, or competitor names.
-2. Label sentiment accurately as POSITIVE, NEUTRAL, NEGATIVE, or MIXED.
-3. RELEVANCE & OUTCOME RULE: Compare the call against the Tenant Business & Products context above. Only classify as \`INTERESTED\`, \`FOLLOW_UP_REQUIRED\`, \`CALL_BACK_LATER\`, or \`DEAL_CLOSED\` if the external party is genuinely inquiring about or considering the tenant's own products/services. If the call is an unrelated pitch (e.g., HR/recruitment agency, vendor sales, spam), or if the prospect states they have no current requirement (even if politely ending the call with 'send details on WhatsApp' or 'will let you know later'), you MUST classify \`callOutcome\` as \`NOT_INTERESTED\` (or \`WRONG_NUMBER\` if wrong party).
-4. Provide meaningful confidence and sentiment scores between 0.0 and 1.0 (do not use 1.0).
-5. Output MUST be valid JSON adhering strictly to this schema:
+STRICT GROUNDING & PRODUCT-RELEVANCE RULES:
+1. STRICT SPEAKER ATTRIBUTION: Carefully distinguish who initiated the call and what each party stated.
+   - If an external caller contacts the organization to offer third-party services (e.g., placement/recruitment agency, job applicants, staffing, loans, SEO, vendor supplies), the caller is NOT inquiring about our products.
+   - Never interpret a company representative's polite reply (e.g., "vacancies full hain, WhatsApp daal do", "send details on WhatsApp", "will let you know") as customer purchase intent or genuine product interest.
+2. PRODUCT RELEVANCE GATE: Compare the call against the Tenant Business & Products context above.
+   - Only classify as \`INTERESTED\`, \`FOLLOW_UP_REQUIRED\`, \`CALL_BACK_LATER\`, or \`DEAL_CLOSED\` if a customer is genuinely inquiring about, evaluating, or purchasing the tenant's own approved products/services.
+   - Website URLs (such as https://www.medical365.in/) are web links, NOT product names. Do NOT use website URLs as product interests.
+   - If the call is an unrelated pitch (e.g., recruitment agency, hiring inquiry, vendor sales pitch, spam, wrong number), or if the prospect explicitly rejects or has no need, you MUST classify \`callOutcome\` as \`NOT_INTERESTED\` (or \`WRONG_NUMBER\` if wrong party).
+   - Under \`productInterests\`, list ONLY the tenant's approved products/modules (e.g., HMS, OPD, IPD, Billing, Pharmacy, EMR). NEVER put 'Placement and hiring services' or any third-party service under \`productInterests\`. Leave it empty \`[]\` for irrelevant calls.
+3. Label sentiment accurately as POSITIVE, NEUTRAL, NEGATIVE, or MIXED based on actual conversation tone. A polite or neutral caller pitching recruitment is still \`NOT_INTERESTED\` in terms of callOutcome.
+4. Output MUST be valid JSON adhering strictly to this schema:
 {
-  "summary": "Executive summary of the call (2-4 sentences)",
-  "customerIntent": "Primary purpose of customer inquiry",
+  "summary": "Executive summary of the call (2-4 sentences). If an external agency called offering recruitment or services, accurately summarize that the caller offered services and the company had no open vacancies.",
+  "customerIntent": "Primary purpose of inquiry (e.g., 'Offering recruitment services (unrelated)' or 'Inquiring about Hospital Management Software demo')",
   "customerNeeds": ["Customer requirement 1", ...],
-  "productInterests": ["Product or service mentioned", ...],
+  "productInterests": ["Approved tenant product or module mentioned", ...],
   "objections": ["Expressed concern or objection", ...],
   "competitorMentions": ["Explicitly named competitor if mentioned", ...],
   "sentiment": "POSITIVE | NEUTRAL | NEGATIVE | MIXED",
   "sentimentScore": 0.50 to 0.95,
-  "callOutcome": "INTERESTED | NOT_INTERESTED | FOLLOW_UP_REQUIRED | CALL_BACK_LATER | DEAL_CLOSED | ESCALATED | WRONG_NUMBER | UNRESOLVED",
+  "callOutcome": "INTERESTED | NOT_INTERESTED | FOLLOW_UP_REQUIRED | CALL_BACK_LATER | DEAL_CLOSED | ESCALATED | WRONG_NUMBER | UNRESOLVED | OUT_OF_SCOPE",
   "keyMoments": [
     {
       "timestamp": <seconds number>,
@@ -319,13 +369,14 @@ async function processCallAnalysis({
     }
   }
 
+  let rawResult = null
   const effectiveKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY
   const hasLiveKey = Boolean(effectiveKey && effectiveKey.trim())
 
   if (hasLiveKey) {
     try {
       console.log(`ℹ️ Invoking Gemini Call Analysis for transcript (${transcript._id || "in-memory"})...`)
-      return await analyzeCallWithGemini({
+      rawResult = await analyzeCallWithGemini({
         transcript,
         topicMatches,
         businessContext: resolvedBusinessContext,
@@ -340,12 +391,47 @@ async function processCallAnalysis({
     }
   }
 
-  if (allowFallback) {
+  if (!rawResult && allowFallback) {
     console.log("ℹ️ Using deterministic fallback call analysis...")
-    return generateDeterministicCallAnalysis({ transcript, call, topicMatches })
+    rawResult = generateDeterministicCallAnalysis({ transcript, call, topicMatches })
   }
 
-  throw new Error("BLOCKED — API credentials unavailable for call analysis and fallback disabled.")
+  if (!rawResult) {
+    throw new Error("BLOCKED — API credentials unavailable for call analysis and fallback disabled.")
+  }
+
+  // Mandatory Post-AI Deterministic Product Relevance & Qualification Gate
+  try {
+    const gateResult = await evaluateProductRelevanceAndGate({
+      transcript,
+      call,
+      rawAnalysis: rawResult,
+      matchedTopics: topicMatches,
+      tenantId: effectiveTenantId,
+    })
+
+    rawResult.callOutcome = gateResult.callOutcome
+    rawResult.productRelevanceScore = gateResult.productRelevanceScore
+    rawResult.leadQualificationScore = gateResult.leadQualificationScore
+    rawResult.qualificationStatus = gateResult.qualificationStatus
+    rawResult.qualificationReason = gateResult.qualificationReason
+    rawResult.customerPurchaseIntent = gateResult.customerPurchaseIntent
+    rawResult.isProductRelevant = gateResult.isProductRelevant
+    rawResult.crmLeadAction = gateResult.crmLeadAction
+    rawResult.topicMatches = gateResult.matchedApprovedTopics
+    rawResult.productInterests = gateResult.filteredProductInterests
+
+    if (gateResult.summary && gateResult.qualificationStatus === "DISQUALIFIED") {
+      rawResult.summary = gateResult.summary
+    }
+    if (gateResult.customerIntent && gateResult.qualificationStatus === "DISQUALIFIED") {
+      rawResult.customerIntent = gateResult.customerIntent
+    }
+  } catch (gateErr) {
+    console.warn("⚠️ Product Relevance Gate error:", sanitizeErrorMessage(gateErr.message))
+  }
+
+  return rawResult
 }
 
 module.exports = {

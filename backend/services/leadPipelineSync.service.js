@@ -39,6 +39,8 @@ const OUTCOME_TO_PIPELINE_MAP = Object.freeze({
   NOT_INTERESTED: "Closed-Lost",
   NOTINTERESTED: "Closed-Lost",
   DECLINED: "Closed-Lost",
+  OUT_OF_SCOPE: "Closed-Lost",
+  OUTOFSCOPE: "Closed-Lost",
 })
 
 const NON_UPDATING_OUTCOMES = new Set([
@@ -337,8 +339,9 @@ async function syncLeadPipelineStatusFromAiCall({
   }
 
   const rawOutcome = analysis.callOutcome
-  const targetStatus = mapAiOutlineToLeadStatus(rawOutcome)
+  let targetStatus = mapAiOutlineToLeadStatus(rawOutcome)
 
+  // Non-updating outcomes (UNRESOLVED, NO_ANSWER, VOICEMAIL, etc.) never mutate lead status
   if (!targetStatus) {
     return {
       success: false,
@@ -346,6 +349,11 @@ async function syncLeadPipelineStatusFromAiCall({
       callOutcome: rawOutcome,
       reason: `Outcome '${rawOutcome}' does not trigger an automatic CRM pipeline update`,
     }
+  }
+
+  // Enforce Product Relevance Gate: Disqualified calls automatically transition to Closed-Lost
+  if (analysis.qualificationStatus === "DISQUALIFIED") {
+    targetStatus = "Closed-Lost"
   }
 
   // Resolve associated Lead
@@ -367,6 +375,18 @@ async function syncLeadPipelineStatusFromAiCall({
   // Evaluate transition protection rules
   const transition = evaluateStatusTransition(currentStatus, targetStatus)
   if (!transition.allowed) {
+    // If idempotent (status already matches target), still synchronize latest AI metadata without adding duplicate history
+    if (transition.idempotent) {
+      lead.metadata = lead.metadata || {}
+      lead.metadata.lastCallOutcome = rawOutcome
+      lead.metadata.productRelevanceScore = analysis.productRelevanceScore ?? 0.0
+      lead.metadata.leadQualificationScore = analysis.leadQualificationScore ?? 0.0
+      lead.metadata.qualificationStatus = analysis.qualificationStatus || null
+      lead.metadata.qualificationReason = analysis.qualificationReason || null
+      lead.metadata.lastAiAnalyzedAt = new Date()
+      lead.markModified("metadata")
+      await lead.save().catch(() => {})
+    }
     return {
       success: false,
       skipped: true,
@@ -385,12 +405,16 @@ async function syncLeadPipelineStatusFromAiCall({
   lead.status = targetStatus
   lead.metadata = lead.metadata || {}
 
+  const transitionReason = targetStatus === "Closed-Lost" && analysis.qualificationReason
+    ? `AI Call Intelligence Disqualified: ${analysis.qualificationReason}`
+    : `AI Call Intelligence Outcome: ${rawOutcome}`
+
   const historyEntry = {
     fromStatus,
     toStatus: targetStatus,
     transitionedAt: new Date(),
     transitionedBy: actor?.name || "AI Call Intelligence",
-    reason: `AI Call Intelligence Outcome: ${rawOutcome}`,
+    reason: transitionReason,
     callId: call?._id || null,
     aiAnalysisId: analysis?._id || null,
   }
@@ -400,6 +424,10 @@ async function syncLeadPipelineStatusFromAiCall({
     : [historyEntry]
 
   lead.metadata.lastCallOutcome = rawOutcome
+  lead.metadata.productRelevanceScore = analysis.productRelevanceScore ?? 0.0
+  lead.metadata.leadQualificationScore = analysis.leadQualificationScore ?? 0.0
+  lead.metadata.qualificationStatus = analysis.qualificationStatus || null
+  lead.metadata.qualificationReason = analysis.qualificationReason || null
   lead.metadata.lastAiAnalyzedAt = new Date()
   lead.markModified("metadata")
   await lead.save()
@@ -419,8 +447,11 @@ async function syncLeadPipelineStatusFromAiCall({
       payload: {
         fromStatus,
         toStatus: targetStatus,
-        reason: `AI Call Intelligence classified outcome as ${rawOutcome}`,
+        reason: transitionReason,
         callOutcome: rawOutcome,
+        productRelevanceScore: analysis.productRelevanceScore,
+        qualificationStatus: analysis.qualificationStatus,
+        qualificationReason: analysis.qualificationReason,
         callId: call?._id ? call._id.toString() : null,
         aiAnalysisId: analysis?._id ? analysis._id.toString() : null,
       },

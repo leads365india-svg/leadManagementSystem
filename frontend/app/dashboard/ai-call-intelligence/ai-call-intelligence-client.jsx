@@ -387,6 +387,7 @@ export default function AICallIntelligenceClient() {
           </span>
         )
       case "NOT_INTERESTED":
+      case "OUT_OF_SCOPE":
       case "WRONG_NUMBER":
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
@@ -1227,6 +1228,39 @@ export default function AICallIntelligenceClient() {
                         <p className="text-xs text-indigo-950 leading-relaxed font-normal">
                           {detailData.analysis.summary}
                         </p>
+                        {typeof detailData.analysis.productRelevanceScore === "number" && (
+                          <div className="mt-3 pt-3 border-t border-indigo-100 flex flex-wrap items-center justify-between text-xs gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-600">Product Relevance:</span>
+                              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                detailData.analysis.productRelevanceScore >= 0.70
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : detailData.analysis.productRelevanceScore >= 0.10
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-rose-100 text-rose-800"
+                              }`}>
+                                {(detailData.analysis.productRelevanceScore * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-600">CRM Qualification:</span>
+                              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                detailData.analysis.qualificationStatus === "QUALIFIED"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : detailData.analysis.qualificationStatus === "QUALIFIED_FOLLOW_UP"
+                                  ? "bg-indigo-100 text-indigo-800"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}>
+                                {detailData.analysis.qualificationStatus || (detailData.analysis.productRelevanceScore < 0.10 ? "DISQUALIFIED" : "QUALIFIED")}
+                              </span>
+                              {detailData.analysis.qualificationReason && (
+                                <span className="text-[10px] text-slate-500 font-mono">
+                                  ({detailData.analysis.qualificationReason})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Customer Intent & Requirements Grid */}
