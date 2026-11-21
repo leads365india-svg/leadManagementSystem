@@ -292,15 +292,27 @@ function syncCallFields(doc) {
     doc.durationSeconds = doc.duration
   }
 
-  // Sync direction (mirrors inbound <-> INCOMING, outbound <-> OUTGOING)
+  // Sync direction (mirrors inbound <-> INCOMING, outbound <-> OUTGOING, preserves MISSED / REJECTED)
   if (doc.callDirection) {
-    const isIncoming = doc.callDirection.toLowerCase() === "incoming" || doc.callDirection.toLowerCase() === "inbound"
-    doc.direction = isIncoming ? "inbound" : "outbound"
-    doc.callDirection = isIncoming ? "INCOMING" : "OUTGOING"
+    const upper = String(doc.callDirection).toUpperCase()
+    if (upper === "MISSED" || upper === "REJECTED") {
+      doc.callDirection = upper
+      doc.direction = upper
+    } else {
+      const isIncoming = doc.callDirection.toLowerCase() === "incoming" || doc.callDirection.toLowerCase() === "inbound"
+      doc.direction = isIncoming ? "inbound" : "outbound"
+      doc.callDirection = isIncoming ? "INCOMING" : "OUTGOING"
+    }
   } else if (doc.direction) {
-    const isIncoming = doc.direction.toLowerCase() === "inbound" || doc.direction.toLowerCase() === "incoming"
-    doc.callDirection = isIncoming ? "INCOMING" : "OUTGOING"
-    doc.direction = isIncoming ? "inbound" : "outbound"
+    const upper = String(doc.direction).toUpperCase()
+    if (upper === "MISSED" || upper === "REJECTED") {
+      doc.callDirection = upper
+      doc.direction = upper
+    } else {
+      const isIncoming = doc.direction.toLowerCase() === "inbound" || doc.direction.toLowerCase() === "incoming"
+      doc.callDirection = isIncoming ? "INCOMING" : "OUTGOING"
+      doc.direction = isIncoming ? "inbound" : "outbound"
+    }
   }
 
   // Sync outcome / disposition

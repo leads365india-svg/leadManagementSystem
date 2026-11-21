@@ -251,6 +251,26 @@ const aiCallAnalysisSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    callbackDirection: {
+      type: String,
+      enum: ["AGENT_CALLBACK", "EXPECTED_CUSTOMER_CALLBACK", "RECONNECT", null],
+      default: null,
+    },
+    direction: {
+      type: String,
+      enum: ["OUTBOUND", "INBOUND", null],
+      default: null,
+    },
+    taskAction: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    directionDescription: {
+      type: String,
+      default: "",
+      trim: true,
+    },
     scheduledFollowUpId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "FollowUp",

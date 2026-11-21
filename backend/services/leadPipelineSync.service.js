@@ -88,7 +88,7 @@ function mapAiOutlineToLeadStatus(callOutcome) {
  * @param {string} targetStatus - Proposed target status
  * @returns {{ allowed: boolean, idempotent?: boolean, protected?: boolean, reason: string }}
  */
-function evaluateStatusTransition(currentStatus, targetStatus) {
+function evaluateStatusTransition(currentStatus, targetStatus, lead = null) {
   if (!targetStatus) {
     return {
       allowed: false,
@@ -114,8 +114,21 @@ function evaluateStatusTransition(currentStatus, targetStatus) {
     }
   }
 
-  // Rule 5: Closed-Lost cannot be reopened automatically by AI
+  // Rule 5: Closed-Lost cannot be reopened automatically by AI, UNLESS previously closed solely by AI Call Intelligence
   if (currentStatus === "Closed-Lost") {
+    const statusHistory = Array.isArray(lead?.metadata?.statusHistory) ? lead.metadata.statusHistory : []
+    const lastTransition = statusHistory[statusHistory.length - 1]
+    const closedByAi = lastTransition && (
+      lastTransition.transitionedBy === "AI Call Intelligence" ||
+      String(lastTransition.reason || "").includes("AI Call Intelligence")
+    )
+    if (closedByAi && (targetStatus === "Engaged" || targetStatus === "New")) {
+      return {
+        allowed: true,
+        reason: `Repairing AI-generated Closed-Lost status: Call verified as qualified product enquiry (${targetStatus})`,
+      }
+    }
+
     return {
       allowed: false,
       protected: true,
@@ -408,7 +421,7 @@ async function syncLeadPipelineStatusFromAiCall({
   const currentStatus = lead.status || "New"
 
   // Evaluate transition protection rules
-  const transition = evaluateStatusTransition(currentStatus, targetStatus)
+  const transition = evaluateStatusTransition(currentStatus, targetStatus, lead)
   if (!transition.allowed) {
     // If idempotent (status already matches target), still synchronize latest AI metadata without adding duplicate history
     if (transition.idempotent) {

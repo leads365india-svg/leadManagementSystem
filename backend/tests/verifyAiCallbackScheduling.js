@@ -90,6 +90,31 @@ async function runTests() {
   }
 
   // ---------------------------------------------------------------------------
+  // SCENARIO 1B: Exact Hindi Customer Request ('Aap mujhe kal 11 baje call karo.')
+  // ---------------------------------------------------------------------------
+  console.log("\n[Scenario 1B] Exact Hindi Customer Request ('Aap mujhe kal 11 baje call karo.')")
+  {
+    const ref = new Date("2026-11-21T08:00:00.000Z")
+    const res = extractCallbackIntent("Aap mujhe kal 11 baje call karo.", {
+      referenceTimestamp: ref,
+      timezone: "Asia/Kolkata",
+      segments: [
+        { speaker: "Customer", text: "Aap mujhe kal 11 baje call karo." },
+      ],
+    })
+
+    assert(res.callbackRequested === true, "Identified callback requested = true")
+    assert(res.callbackDirection === "AGENT_CALLBACK", `Direction is AGENT_CALLBACK (got: ${res.callbackDirection})`)
+    assert(res.taskAction === "Call customer", `Task action is 'Call customer' (got: ${res.taskAction})`)
+    const parsedDate = new Date(res.requestedCallbackDateTime)
+    const kolkataParts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", day: "numeric", month: "numeric", hour12: false }).formatToParts(parsedDate)
+    const pMap = {}
+    kolkataParts.forEach((p) => { pMap[p.type] = p.value })
+    assert(pMap.day === "22", `Scheduled date is 22 Nov (got: ${pMap.day})`)
+    assert(pMap.hour === "11", `Scheduled hour is 11 AM (got: ${pMap.hour})`)
+  }
+
+  // ---------------------------------------------------------------------------
   // SCENARIO 2: Natural English Callback Extraction
   // ---------------------------------------------------------------------------
   console.log("\n[Scenario 2] Natural English Callback Extraction ('Tomorrow at 2:30 PM')")

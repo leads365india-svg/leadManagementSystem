@@ -128,7 +128,30 @@ async function scheduleAutomaticCallbackFromAiCall({
     : ""
   const customerName = targetLead.name || call.customerName || "Customer"
   const customerPhone = targetLead.phone || call.phoneNumber || call.phoneNormalized || ""
-  const assignedTo = targetLead.assignedTo || call.agentId || null
+  const assignedTo = targetLead.assignedTo || call.agentName || "Agent"
+  const assignedStaffId = targetLead.assignedStaffId || (call.agentId ? call.agentId.toString() : "unassigned")
+
+  const callbackDirection = analysis.callbackDirection || "AGENT_CALLBACK"
+  const direction = callbackDirection === "AGENT_CALLBACK"
+    ? "OUTBOUND"
+    : callbackDirection === "EXPECTED_CUSTOMER_CALLBACK"
+    ? "INBOUND"
+    : "OUTBOUND"
+
+  const taskAction = analysis.taskAction || (
+    callbackDirection === "EXPECTED_CUSTOMER_CALLBACK"
+      ? "Check whether the customer called; follow up if they did not."
+      : "Call customer"
+  )
+  const directionDescription = analysis.directionDescription || (
+    callbackDirection === "AGENT_CALLBACK"
+      ? "Customer requested agent callback"
+      : "Customer promised to call at agreed time"
+  )
+
+  const callbackTitle = callbackDirection === "EXPECTED_CUSTOMER_CALLBACK"
+    ? `Expected Customer Call: ${customerName}`
+    : `Call ${customerName}`
 
   // 4. Check for existing pending or due follow-up for this lead to prevent duplicates
   let followUp = await FollowUp.findOne({
@@ -137,6 +160,16 @@ async function scheduleAutomaticCallbackFromAiCall({
     status: { $in: ["pending", "due"] },
     deletedAt: null,
   }).sort({ scheduledAt: 1 }).setOptions({ skipTenantFilter: true })
+
+  // Also check by sourceCallId or idempotencyKey if leadId search misses
+  if (!followUp && call._id) {
+    followUp = await FollowUp.findOne({
+      tenantId: effectiveTenantId,
+      sourceCallId: call._id.toString(),
+      status: { $in: ["pending", "due"] },
+      deletedAt: null,
+    }).setOptions({ skipTenantFilter: true })
+  }
 
   let isRescheduled = false
   const previousScheduledAt = followUp ? followUp.scheduledAt : null
@@ -148,6 +181,11 @@ async function scheduleAutomaticCallbackFromAiCall({
     followUp.callbackAt = scheduledAt
     followUp.callbackTimezone = timezone
     followUp.callbackReason = reason
+    followUp.callbackDirection = callbackDirection
+    followUp.direction = direction
+    followUp.taskAction = taskAction
+    followUp.directionDescription = directionDescription
+    followUp.title = callbackTitle
     followUp.status = "pending"
     followUp.priority = "high"
     followUp.reminderSentAt = null
@@ -155,20 +193,33 @@ async function scheduleAutomaticCallbackFromAiCall({
     followUp.productContext = productContext || followUp.productContext
     if (call._id) followUp.sourceCallId = call._id
     if (analysis._id) followUp.aiAnalysisId = analysis._id
-    followUp.notes = `${followUp.notes ? followUp.notes + "\n" : ""}Rescheduled via AI Call: ${reason} (${humanTime})`
+    followUp.metadata = {
+      ...(followUp.metadata || {}),
+      callbackDirection,
+      direction,
+      taskAction,
+      directionDescription,
+      rescheduledVia: "AI_CALL_INTELLIGENCE",
+    }
+    followUp.notes = `Requested via AI Call Intelligence: ${reason}. Action: ${taskAction}${productContext ? " | Product: " + productContext : ""}`
     await followUp.save()
   } else {
     // Create new FollowUp record
     followUp = new FollowUp({
       tenantId: effectiveTenantId,
       leadId: targetLead._id,
-      assignedTo: assignedTo && assignedTo !== "unassigned" ? assignedTo : null,
-      title: `AI Callback: ${customerName}`,
-      notes: `Requested via AI Call Intelligence: ${reason}`,
+      assignedTo: assignedTo && assignedTo !== "unassigned" ? assignedTo : (call.agentName || "Agent"),
+      assignedStaffId: assignedStaffId && assignedStaffId !== "unassigned" ? assignedStaffId : (call.agentId ? call.agentId.toString() : "unassigned"),
+      title: callbackTitle,
+      notes: `Requested via AI Call Intelligence: ${reason}. Action: ${taskAction}${productContext ? " | Product: " + productContext : ""}`,
       scheduledAt,
       callbackAt: scheduledAt,
       callbackTimezone: timezone,
       callbackReason: reason,
+      callbackDirection,
+      direction,
+      taskAction,
+      directionDescription,
       productContext,
       customerName,
       customerPhone,
@@ -176,8 +227,16 @@ async function scheduleAutomaticCallbackFromAiCall({
       priority: "high",
       status: "pending",
       sourceCallId: call._id || null,
+      idempotencyKey: `ai_fu_${targetLead._id}_${call._id}`,
       aiAnalysisId: analysis._id || null,
       createdBy: actor?.name || "AI Call Intelligence",
+      metadata: {
+        callbackDirection,
+        direction,
+        taskAction,
+        directionDescription,
+        scheduledVia: "AI_CALL_INTELLIGENCE",
+      },
     })
     await followUp.save()
   }
@@ -237,7 +296,11 @@ async function scheduleAutomaticCallbackFromAiCall({
   }
 
   // 8. Dispatch Push Notification to assigned employee's active mobile devices
-  const agentId = targetLead.assignedTo || (followUp.assignedTo ? followUp.assignedTo.toString() : null)
+  const agentId = (followUp.assignedStaffId && followUp.assignedStaffId !== "unassigned" && mongoose.Types.ObjectId.isValid(followUp.assignedStaffId))
+    ? followUp.assignedStaffId
+    : (targetLead.assignedStaffId && mongoose.Types.ObjectId.isValid(targetLead.assignedStaffId)
+      ? targetLead.assignedStaffId
+      : (mongoose.Types.ObjectId.isValid(targetLead.assignedTo) ? targetLead.assignedTo : null))
   let pushResult = null
   if (agentId && agentId !== "unassigned") {
     try {

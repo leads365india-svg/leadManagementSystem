@@ -218,6 +218,7 @@ const reportMobileCall = async (req, res) => {
       String(call_outcome || "").toLowerCase().includes("declined")
 
     const isIncomingDirection = (call_direction === "INCOMING" || call_direction === "inbound") && !isMissedOrRejected
+    const isOutgoingDirection = call_direction === "OUTGOING" || call_direction === "outbound"
     const isAnsweredCall = !isMissedOrRejected && typeof duration_seconds === "number" && duration_seconds >= configuredMinDuration
     const callerDigits = (normPhone || "").replace(/\D/g, "")
     const isValidCallerId = callerDigits.length >= 7 &&
@@ -228,7 +229,7 @@ const reportMobileCall = async (req, res) => {
 
     // Strictly enforce server-controlled authorization:
     // Tenant must have explicitly enabled the feature; client cannot unilaterally authorize auto-creation.
-    const isAutoLead = tenantAutoLeadEnabled && clientRequestedAutoLead && isIncomingDirection && isAnsweredCall && isValidCallerId
+    const isAutoLead = tenantAutoLeadEnabled && clientRequestedAutoLead && isValidCallerId && ((isIncomingDirection && isAnsweredCall) || (isMissedOrRejected && !isOutgoingDirection))
 
     let lead = null
     let autoLeadCreated = false
@@ -279,7 +280,7 @@ const reportMobileCall = async (req, res) => {
         const leadService = require("../services/leadService")
         const autoLeadResult = await leadService.createOrMergeLead({
           tenantId: targetTenantId,
-          source: "Incoming Call",
+          source: isMissedOrRejected ? "Missed Call" : "Incoming Call",
           payload: {
             name: `Unknown Caller - ${normPhone}`,
             phone: phone_number.trim(),
@@ -287,7 +288,9 @@ const reportMobileCall = async (req, res) => {
             ownerId: user.id || user._id,
             assignedStaffId: (user.id || user._id)?.toString(),
             assignedTo: user.name || "Agent",
-            message: `Auto-captured from answered incoming call (${duration_seconds || 0}s)`,
+            message: isMissedOrRejected
+              ? "Auto-captured from missed call (0s)"
+              : `Auto-captured from answered incoming call (${duration_seconds || 0}s)`,
             metadata: {
               captureSource: "ANDROID_AUTO_CALL_CAPTURE",
               autoCaptured: true,
@@ -550,7 +553,9 @@ const reportMobileCall = async (req, res) => {
     const minTime = start_time_ms - 5000
     const maxTime = start_time_ms + 5000
     const isIncoming = (call_direction === "INCOMING" || call_direction === "inbound")
-    const directionValues = isIncoming ? ["INCOMING", "inbound"] : ["OUTGOING", "outbound"]
+    const directionValues = isMissedOrRejected
+      ? ["MISSED", "REJECTED"]
+      : (isIncoming ? ["INCOMING", "inbound"] : ["OUTGOING", "outbound"])
 
     const candidateQuery = {
       tenantId: targetTenantId,
@@ -610,6 +615,13 @@ const reportMobileCall = async (req, res) => {
     }
 
     // 4. Create and Persist Call Record
+    const resolvedCallDirection = isMissedOrRejected
+      ? (call_direction === "REJECTED" || call_direction === "rejected" ? "REJECTED" : "MISSED")
+      : (call_direction || (isUnlinkedCall ? "INCOMING" : "OUTGOING"))
+    const resolvedCallOutcome = (call_outcome && call_outcome !== "Connected")
+      ? call_outcome
+      : (isMissedOrRejected ? "Missed" : "Connected")
+
     const newCall = await Call.create({
       clientCallId: trimmedClientCallId,
       leadId: lead ? lead._id : null,
@@ -618,11 +630,11 @@ const reportMobileCall = async (req, res) => {
       agentId: user.id,
       agentName: user.name || "Agent",
       phoneNumber: phone_number.trim(),
-      callDirection: call_direction || (isUnlinkedCall ? "INCOMING" : "OUTGOING"),
+      callDirection: resolvedCallDirection,
       startTimeMs: start_time_ms,
       durationSeconds: duration_seconds || 0,
-      callOutcome: call_outcome || "Connected",
-      notes: notes ? notes.trim() : (isUnlinkedCall ? "Unlinked Call (Website Call attribution unverified)" : ""),
+      callOutcome: resolvedCallOutcome,
+      notes: notes ? notes.trim() : (isUnlinkedCall ? (isMissedOrRejected ? "Unlinked Missed Call" : "Unlinked Call (Website Call attribution unverified)") : ""),
       nextFollowUpAt: next_followup_at || null,
       simId: sim_id ? sim_id.trim() : null,
       metadata: {
@@ -2173,8 +2185,11 @@ async function syncLeads(req, res) {
  * POST /api/mobile/calls
  */
 async function reportCall(req, res) {
+  if (req.body && (req.body.client_call_id || req.body.phone_number || req.body.auto_create_lead)) {
+    return reportMobileCall(req, res)
+  }
   try {
-    const tenantId = req.tenantId
+    const tenantId = req.tenantId || req.user?.tenantId
     const agentId = req.user?._id || req.user?.id
     const deviceId = req.device?._id || req.device?.id
 

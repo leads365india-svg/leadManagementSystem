@@ -43,6 +43,7 @@ import {
   Activity,
   Award,
   ChevronDown,
+  Calendar,
 } from "lucide-react"
 
 // Formatting helper for duration seconds
@@ -1328,6 +1329,54 @@ export default function AICallIntelligenceClient() {
                                 </button>
                               </div>
                             ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Scheduled Follow-Up / Reconnection Card */}
+                      {(detailData.analysis.callbackRequested || detailData.analysis.requestedCallbackDateTime) && (
+                        <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/70 shadow-2xs">
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 rounded-lg bg-indigo-600 text-white shrink-0 mt-0.5">
+                              <Calendar className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <h4 className="text-xs font-bold text-indigo-950">
+                                  Scheduled Reconnection / Automatic Follow-Up
+                                </h4>
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                  detailData.analysis.callbackDirection === "EXPECTED_CUSTOMER_CALLBACK"
+                                    ? "bg-amber-100 text-amber-800 border border-amber-200"
+                                    : detailData.analysis.callbackDirection === "AGENT_CALLBACK"
+                                    ? "bg-blue-100 text-blue-800 border border-blue-200"
+                                    : "bg-purple-100 text-purple-800 border border-purple-200"
+                                }`}>
+                                  {detailData.analysis.callbackDirection === "EXPECTED_CUSTOMER_CALLBACK"
+                                    ? "Expected Inbound Call"
+                                    : detailData.analysis.callbackDirection === "AGENT_CALLBACK"
+                                    ? "Agent Outbound Callback"
+                                    : "Agreed Reconnection"}
+                                </span>
+                              </div>
+                              <p className="text-xs font-semibold text-slate-800 mt-1">
+                                {new Date(detailData.analysis.requestedCallbackDateTime).toLocaleString("en-IN", {
+                                  timeZone: "Asia/Kolkata",
+                                  dateStyle: "full",
+                                  timeStyle: "short",
+                                })}
+                              </p>
+                              {detailData.analysis.taskAction && (
+                                <p className="text-xs text-slate-700 mt-1 flex items-center gap-1.5">
+                                  <span className="font-semibold text-slate-800">Action:</span> {detailData.analysis.taskAction}
+                                </p>
+                              )}
+                              {detailData.analysis.directionDescription && (
+                                <p className="text-[11px] text-slate-500 italic mt-0.5">
+                                  &quot;{detailData.analysis.directionDescription}&quot;
+                                </p>
+                              )}
+                            </div>
                           </div>
                         </div>
                       )}

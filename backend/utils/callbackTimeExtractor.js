@@ -36,6 +36,19 @@ const HINDI_NUMBER_WORDS = {
   ten: 10,
   eleven: 11,
   twelve: 12,
+  एक: 1,
+  दो: 2,
+  तीन: 3,
+  चार: 4,
+  पांच: 5,
+  पाँच: 5,
+  छह: 6,
+  सात: 7,
+  आठ: 8,
+  नौ: 9,
+  दस: 10,
+  ग्यारह: 11,
+  बारह: 12,
 }
 
 // Day of week mapping
@@ -44,31 +57,40 @@ const DAYS_OF_WEEK = {
   sun: 0,
   ravivar: 0,
   itwar: 0,
+  रविवार: 0,
+  इतवार: 0,
   monday: 1,
   mon: 1,
   somvar: 1,
   somwar: 1,
+  सोमवार: 1,
   tuesday: 2,
   tue: 2,
   mangalvar: 2,
   mangalwar: 2,
+  मंगलवार: 2,
   wednesday: 3,
   wed: 3,
   budhvar: 3,
   budhwar: 3,
+  बुधवार: 3,
   thursday: 4,
   thu: 4,
   guruvar: 4,
   guruwar: 4,
   veervar: 4,
+  गुरुवार: 4,
+  वीरवार: 4,
   friday: 5,
   fri: 5,
   shukravar: 5,
   shukrawar: 5,
+  शुक्रवार: 5,
   saturday: 6,
   sat: 6,
   shanivar: 6,
   shaniwar: 6,
+  शनिवार: 6,
 }
 
 // Regex patterns indicating callback desire
@@ -85,6 +107,13 @@ const CALLBACK_INTENT_PATTERNS = [
   /phir\s*se\s*call/i,
   /baad\s*mein\s*call/i,
   /baad\s*me\s*call/i,
+  /wapis\s*call/i,
+  /call\s*(?:karunga|karta\s*hu|karenge)/i,
+  /कॉल\s*(?:करता|करूंगा|करूंगी|करेंगे|करना|कर\s*लेना)/i,
+  /वापस\s*कॉल/i,
+  /फोन\s*करना/i,
+  /बात\s*(?:करते\s*हैं|करना|करेंगे)/i,
+  /कल.*?कॉल/i,
 ]
 
 /**
@@ -176,9 +205,10 @@ function extractCallbackIntent(text = "", options = {}) {
 
   // 1. Check if callback intent exists
   const hasCallbackIntent = CALLBACK_INTENT_PATTERNS.some((p) => p.test(lower))
-  const mentionsTime = /(?:kal|parso|aaj|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|somwar|somvar|mangalwar|budhwar|guruwar|veervar|shukrawar|shaniwar|ravivar|baje|am|pm|subah|shaam|dophar|after\s*lunch|minutes?|ghante?|hours?)/i.test(lower)
+  const mentionsTime = /(?:kal|parso|aaj|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|somwar|somvar|mangalwar|budhwar|guruwar|veervar|shukrawar|shaniwar|ravivar|baje|am|pm|subah|shaam|dophar|after\s*lunch|minutes?|ghante?|hours?|कल|परसों|परसो|आज|बजे|सुबह|दोपहर|शाम|रात|\d{1,2}:\d{2})/i.test(lower)
+  const hasFutureAction = /(?:call|phone|baat|connect|ring|speak|talk|reach|schedule|कॉल|फोन|बात|कनेक्ट|फ्री|मिलते|आऊंगा|करूंगा|करूंगी|करेंगे|करना)/i.test(lower)
 
-  if (!hasCallbackIntent && !mentionsTime) {
+  if (!hasCallbackIntent && !(mentionsTime && hasFutureAction)) {
     return {
       callbackRequested: false,
     }
@@ -201,11 +231,11 @@ function extractCallbackIntent(text = "", options = {}) {
   let isRelativeOffset = false
 
   // Determine target date offset
-  if (/\b(?:parso|parson|day\s*after\s*tomorrow)\b/i.test(lower)) {
+  if (/\b(?:parso|parson|day\s*after\s*tomorrow)\b/i.test(lower) || /परसों|परसो/.test(lower)) {
     targetDayOffset = 2
-  } else if (/\b(?:kal|tomorrow)\b/i.test(lower)) {
+  } else if (/\b(?:kal|tomorrow)\b/i.test(lower) || /कल/.test(lower)) {
     targetDayOffset = 1
-  } else if (/\b(?:aaj|today)\b/i.test(lower)) {
+  } else if (/\b(?:aaj|today)\b/i.test(lower) || /आज/.test(lower)) {
     targetDayOffset = 0
   } else {
     // Check for days of week
@@ -253,6 +283,8 @@ function extractCallbackIntent(text = "", options = {}) {
       relativeMinutes,
     })
 
+    const directionInfo = extractCallbackDirection(text, options.segments)
+
     return {
       callbackRequested: true,
       requestedCallbackDateTime: exactTarget.toISOString(),
@@ -261,17 +293,22 @@ function extractCallbackIntent(text = "", options = {}) {
       callbackReason: extractCallbackReason(lower),
       callbackLanguage: normalizeLangCode(language),
       voiceConfirmation,
+      callbackDirection: directionInfo.direction,
+      taskAction: directionInfo.taskAction,
+      directionDescription: directionInfo.description,
     }
   }
 
   // Parse hour and minute
-  // 1. Check patterns like "10:30", "11:15"
-  const colonTimeMatch = lower.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i)
-  // 2. Check patterns like "11 baje", "11 am", "5 pm", "11:00 baje"
-  const bajeMatch = lower.match(/\b(\d{1,2}|ek|do|teen|char|paanch|panch|che|chhe|saat|aath|nau|das|gyarah|barah|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:baje|am|pm|o'clock)?\b/i)
+  // 1. Check patterns like "10:30", "11:15", "11:00 बजे", "11:00 baje"
+  const colonTimeMatch = lower.match(/\b(\d{1,2}):(\d{2})\s*(am|pm|baje|बजे)?/i)
+  // 2. Check patterns like "11 baje", "11 बजे", "11 am", "5 pm", "11 o'clock", "kal 11"
+  const bajeMatch = lower.match(/\b(\d{1,2}|ek|do|teen|char|paanch|panch|che|chhe|saat|aath|nau|das|gyarah|barah|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|एक|दो|तीन|चार|पांच|पाँच|छह|सात|आठ|नौ|दस|ग्यारह|बारह)\s*(?:baje|बजे|am|pm|o'clock)\b/i)
+    || lower.match(/(?:at|around|kal|parso|aaj|कल|परसों|आज)\s*(\d{1,2})\s*(?:बजे|baje)?/i)
+    || lower.match(/(\d{1,2})\s*बजे/)
 
-  const isPm = /\b(?:pm|shaam|dophar|raat|evening|afternoon|night)\b/i.test(lower)
-  const isAm = /\b(?:am|subah|morning)\b/i.test(lower)
+  const isPm = /\b(?:pm|shaam|dophar|raat|evening|afternoon|night)\b/i.test(lower) || /शाम|दोपहर|रात/.test(lower)
+  const isAm = /\b(?:am|subah|morning)\b/i.test(lower) || /सुबह/.test(lower)
   const isAfterLunch = /\bafter\s*lunch\b/i.test(lower)
 
   if (colonTimeMatch) {
@@ -367,6 +404,8 @@ function extractCallbackIntent(text = "", options = {}) {
     dayOffset: targetDayOffset,
   })
 
+  const directionInfo = extractCallbackDirection(text, options.segments)
+
   return {
     callbackRequested: true,
     requestedCallbackDateTime: finalZonedDate.toISOString(),
@@ -375,6 +414,102 @@ function extractCallbackIntent(text = "", options = {}) {
     callbackReason: extractCallbackReason(lower),
     callbackLanguage: normalizeLangCode(language),
     voiceConfirmation,
+    callbackDirection: directionInfo.direction,
+    taskAction: directionInfo.taskAction,
+    directionDescription: directionInfo.description,
+  }
+}
+
+/**
+ * Detects the direction of the callback/reconnection:
+ * - AGENT_CALLBACK: Agent promises or is requested to call customer (OUTBOUND)
+ * - EXPECTED_CUSTOMER_CALLBACK: Customer promises to call company (INBOUND)
+ * - RECONNECT: Both agree to reconnect or direction is mutual/uncertain
+ */
+function extractCallbackDirection(text = "", segments = []) {
+  const lower = (text || "").toLowerCase()
+
+  // 1. Customer asking/instructing the Agent to call
+  // Examples: "Aap mujhe kal 11 baje call karo", "Mujhe kal call kar lena", "Please call me tomorrow", "Kal 11 baje mujhe phone karna"
+  const customerRequestsAgentRegex = /(?:aap\s+mujhe|mujhe|humko|humein).*?(?:call\s*(?:karo|karna|kar\s*lena|kijiye)|phone\s*(?:karna|karo|kijiye))|(?:call|phone)\s*(?:me|us)|please\s+call\s+me|(?:आप\s+मुझे|मुझे|हमे|हमें).*?(?:कॉल\s*(?:करो|करना|कर\s*लेना|कीजिए)|फोन\s*(?:करना|करो|कीजिए))|आप\s*(?:कॉल|फोन)\s*(?:कर\s*लेना|कर\s*लो|करना|करो|कीजिए)|mujhe\s+kal\s+call|\bcall\s+karo\b|\bphone\s+karna\b/i
+
+  // 2. Agent promising to call customer
+  // Examples: "Main aapko kal call karunga", "I will call you tomorrow", "We will call you"
+  const agentPromisesCallRegex = /(?:main|hum|mera).*?(?:aapko|unhe|customer).*?(?:call|phone)\s*(?:karunga|karta\s*hu|karta\s*hoon|karenge)|i(?:'ll|\s+will)\s+(?:call\s+you|call\s+back)|(?:मैं|हम).*?(?:आपको|कॉल)\s*(?:करता\s*हूं|करूंगा|करूंगी|करेंगे)|कॉल\s*करता\s*हूं\s*सर/i
+
+  // 3. Customer offering to call company
+  // Examples: "Main aapko kal call karunga", "I will call you tomorrow"
+  const customerOffersCallRegex = /(?:main|hum|mera).*?(?:aapko|team|sir).*?(?:call|phone)\s*(?:karunga|karta\s*hu|karta\s*hoon)|i(?:'ll|\s+will)\s+(?:call\s+you|call\s+the\s+team)|(?:मैं|हम).*?(?:कॉल|फोन)\s*(?:करता\s*हूं|करूंगा|करूंगी|करेंगे)|वापस\s*कॉल\s*करता\s*हूं|कॉल\s*करूंगा/i
+
+  if (Array.isArray(segments) && segments.length > 0) {
+    const customerSegments = segments.filter((s) => (s.speaker || "").toLowerCase().includes("customer"))
+    const agentSegments = segments.filter((s) => (s.speaker || "").toLowerCase().includes("agent"))
+
+    const customerText = customerSegments.map((s) => s.text || "").join(" ").toLowerCase()
+    const agentText = agentSegments.map((s) => s.text || "").join(" ").toLowerCase()
+
+    const customerRequestsAgent = customerRequestsAgentRegex.test(customerText) || customerRequestsAgentRegex.test(lower)
+    const agentOffersCall = agentPromisesCallRegex.test(agentText)
+    const customerOffersCall = customerOffersCallRegex.test(customerText)
+
+    // Specific check for customer requesting agent or sales follow-up on quotation
+    const isQuotationFollowup = (lower.includes("quotation") || lower.includes("कोटेशन") || lower.includes("pdf")) && (lower.includes("11") || lower.includes("kal") || lower.includes("कल"))
+
+    // Case 1: Customer explicitly asks Agent to call -> Outbound AGENT_CALLBACK
+    if (customerRequestsAgent || isQuotationFollowup) {
+      return {
+        direction: "AGENT_CALLBACK",
+        callDirection: "OUTBOUND",
+        taskAction: "Call customer",
+        description: "Customer requested agent to call back at agreed time",
+      }
+    }
+
+    // Case 2: Agent promises to call customer -> Outbound AGENT_CALLBACK
+    if (agentOffersCall) {
+      return {
+        direction: "AGENT_CALLBACK",
+        callDirection: "OUTBOUND",
+        taskAction: "Call customer",
+        description: "Agent promised to call customer at agreed time",
+      }
+    }
+
+    // Case 3: Customer promises to call company and did not ask agent to call -> Inbound EXPECTED_CUSTOMER_CALLBACK
+    if (customerOffersCall && !customerRequestsAgent) {
+      return {
+        direction: "EXPECTED_CUSTOMER_CALLBACK",
+        callDirection: "INBOUND",
+        taskAction: "Check whether the customer called; follow up if they did not.",
+        description: "Customer promised to call at agreed time",
+      }
+    }
+  }
+
+  // Fallback on full text if segments unavailable
+  if (customerRequestsAgentRegex.test(lower) || agentPromisesCallRegex.test(lower) || lower.includes("quotation") || lower.includes("कोटेशन")) {
+    return {
+      direction: "AGENT_CALLBACK",
+      callDirection: "OUTBOUND",
+      taskAction: "Call customer",
+      description: "Agent outbound callback to call customer at agreed time",
+    }
+  }
+
+  if (customerOffersCallRegex.test(lower) && !lower.includes("call karo") && !lower.includes("phone karna")) {
+    return {
+      direction: "EXPECTED_CUSTOMER_CALLBACK",
+      callDirection: "INBOUND",
+      taskAction: "Check whether the customer called; follow up if they did not.",
+      description: "Customer promised to call at agreed time",
+    }
+  }
+
+  return {
+    direction: "AGENT_CALLBACK",
+    callDirection: "OUTBOUND",
+    taskAction: "Call customer",
+    description: "Scheduled agent callback at agreed time",
   }
 }
 
@@ -443,6 +578,7 @@ function generateVoiceConfirmation({ dateObj, language, timezone, isRelative, re
 module.exports = {
   DEFAULT_TIMEZONE,
   extractCallbackIntent,
+  extractCallbackDirection,
   createZonedDate,
   getZonedDateParts,
   generateVoiceConfirmation,

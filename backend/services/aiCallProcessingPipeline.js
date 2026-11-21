@@ -90,7 +90,19 @@ async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, forc
  * Primary worker handler for the AI Call Intelligence pipeline.
  */
 async function processCallIntelligenceJob(job, workerContext = {}) {
-  const { callId, tenantId, forceNewTranscript = false, httpClient, allowFallback = false, apiKey = null, audioBuffer = null } = job.payload || {}
+  const payloadFallback = job.payload?.allowFallback !== undefined
+    ? Boolean(job.payload.allowFallback)
+    : (!process.env.GEMINI_API_KEY || process.env.ALLOW_OFFLINE_AI === "true" || process.env.NODE_ENV === "test")
+
+  const {
+    callId,
+    tenantId,
+    forceNewTranscript = false,
+    httpClient,
+    allowFallback = payloadFallback,
+    apiKey = null,
+    audioBuffer = null,
+  } = job.payload || {}
   if (!callId || !tenantId) {
     throw new Error("Missing callId or tenantId in ai_call.process job payload.")
   }
@@ -310,6 +322,10 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     analysis.callbackReason = analysisResult.callbackReason || null
     analysis.callbackLanguage = analysisResult.callbackLanguage || null
     analysis.voiceConfirmation = analysisResult.voiceConfirmation || null
+    analysis.callbackDirection = analysisResult.callbackDirection || null
+    analysis.direction = analysisResult.callbackDirection === "AGENT_CALLBACK" ? "OUTBOUND" : (analysisResult.callbackDirection === "EXPECTED_CUSTOMER_CALLBACK" ? "INBOUND" : null)
+    analysis.taskAction = analysisResult.taskAction || null
+    analysis.directionDescription = analysisResult.directionDescription || null
     analysis.callOutcome = analysisResult.callOutcome
     analysis.keyMoments = analysisResult.keyMoments
     analysis.nextSteps = analysisResult.nextSteps
@@ -349,6 +365,9 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     call.metadata.aiQualificationReason = analysis.qualificationReason
     call.metadata.aiCallbackRequested = analysis.callbackRequested
     call.metadata.aiRequestedCallbackDateTime = analysis.requestedCallbackDateTime
+    call.metadata.aiCallbackDirection = analysis.callbackDirection
+    call.metadata.aiDirection = analysis.direction
+    call.metadata.aiTaskAction = analysis.taskAction
     call.metadata.aiAnalyzedAt = Date.now()
     call.markModified("metadata")
     await call.save().catch(() => {})

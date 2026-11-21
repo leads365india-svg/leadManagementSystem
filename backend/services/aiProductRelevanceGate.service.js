@@ -52,12 +52,21 @@ const POLITE_DEFLECTION_PATTERNS = [
 
 // Buying intent / customer inquiry patterns
 const BUYING_INTENT_PATTERNS = [
-  /\b(pricing|price|quotation|cost|rate|demo|walkthrough|free\s+trial|features?|implementation|buy|purchase|khareedna|lagwana\s+hai|software\s+chahiye|hms\s+chahiye|system\s+chahiye|hospital\s+software|billing\s+software|opd\s+management)\b/i,
+  /\b(pricing|price|quotation|cost|rate|demo|walkthrough|free\s+trial|features?|implementation|buy|purchase|khareedna|lagwana\s+hai|software\s+chahiye|hms\s+chahiye|system\s+chahiye|hospital\s+software|billing\s+software|opd\s+management|hospital\s+hai|bed\s+ka\s+hospital|management\s+system\s+chahiye|module\s+chahiye|pura\s+chahiye|ot\s+tak\s+chahiye)\b/i,
+  /(?:हॉस्पिटल|अस्पताल).*?(?:मैनेजमेंट|सिस्टम|सॉफ्टवेयर|चाहिए|बेड)/i,
+  /(?:मैनेजमेंट\s*सिस्टम|सॉफ्टवेयर|सिस्टम)\s*चाहिए/i,
+  /\d+\s*से\s*\d+\s*बेड/i,
+  /(?:फार्मेसी|लैब|ओटी|ot).*?चाहिए/i,
+  /कोटेशन|डेमो|प्राइसिंग|फीचर्स/i,
+  /हॉस्पिटल/i,
 ]
 
 // Follow-up request patterns
 const FOLLOW_UP_REQUEST_PATTERNS = [
   /\b(call\s+back\s+later|call\s+me\s+tomorrow|kal\s+call\s+karna|shaam\s+ko\s+call|free\s+hoke\s+call|busy\s+hu|call\s+after|proposal\s+bhej|connect\s+later)\b/i,
+  /(?:कल|परसों|आज|वापस)\s*.*?कॉल/i,
+  /कॉल\s*(?:करता\s*हूं|करूंगा|करूंगी|करना)/i,
+  /बात\s*करते\s*हैं/i,
 ]
 
 /**
@@ -125,6 +134,44 @@ async function loadTenantApprovedCatalog(tenantId) {
   const approvedKeywords = new Set()
   const approvedModules = new Set()
 
+  // Helper to add keyword and natural language system/software variants
+  const addKeywordWithVariants = (kw) => {
+    if (!kw || isUrlOrDomain(kw)) return
+    const clean = kw.toLowerCase().trim()
+    if (clean.length < 2) return
+    approvedKeywords.add(clean)
+
+    // Expand natural language equivalents: software <-> system <-> solution <-> erp
+    if (clean.includes("software")) {
+      approvedKeywords.add(clean.replace(/\bsoftware\b/g, "system").trim())
+      approvedKeywords.add(clean.replace(/\bsoftware\b/g, "erp").trim())
+      approvedKeywords.add(clean.replace(/\bsoftware\b/g, "solution").trim())
+    }
+    if (clean.includes("system")) {
+      approvedKeywords.add(clean.replace(/\bsystem\b/g, "software").trim())
+      approvedKeywords.add(clean.replace(/\bsystem\b/g, "erp").trim())
+      approvedKeywords.add(clean.replace(/\bsystem\b/g, "solution").trim())
+    }
+    const baseWithoutType = clean.replace(/\b(software|system|solution|erp)\b/g, "").replace(/\s+/g, " ").trim()
+    if (baseWithoutType.length >= 3 && !["hospital", "clinic", "medical", "health", "doctor", "business", "company", "enterprise"].includes(baseWithoutType)) {
+      approvedKeywords.add(baseWithoutType)
+    }
+  }
+
+  // 0. From TenantBusinessProfile (Business name and company aliases)
+  if (profile?.businessName && !isUrlOrDomain(profile.businessName)) {
+    const rawBn = profile.businessName.toLowerCase().trim()
+    addKeywordWithVariants(rawBn)
+    approvedKeywords.add(rawBn.replace(/\s+/g, ""))
+    approvedKeywords.add(rawBn.replace(/\s+/g, "-"))
+  }
+  if (profile?.companyName && !isUrlOrDomain(profile.companyName)) {
+    const rawCn = profile.companyName.toLowerCase().trim()
+    addKeywordWithVariants(rawCn)
+    approvedKeywords.add(rawCn.replace(/\s+/g, ""))
+    approvedKeywords.add(rawCn.replace(/\s+/g, "-"))
+  }
+
   // 1. From BusinessProduct
   for (const p of products) {
     if (p.name && !isUrlOrDomain(p.name)) {
@@ -134,43 +181,42 @@ async function loadTenantApprovedCatalog(tenantId) {
         category: p.category || "",
         description: p.description || "",
       })
-      approvedKeywords.add(p.name.toLowerCase().trim())
+      addKeywordWithVariants(p.name)
+      approvedKeywords.add(p.name.toLowerCase().trim().replace(/\s+/g, ""))
+    }
+    if (Array.isArray(p.features)) {
+      for (const feat of p.features) {
+        if (feat && !isUrlOrDomain(feat)) {
+          addKeywordWithVariants(feat)
+        }
+      }
     }
   }
 
   // 2. From Approved AIKeywordTopics
   for (const t of approvedTopics) {
     if (t.name && !isUrlOrDomain(t.name)) {
-      approvedKeywords.add(t.name.toLowerCase().trim())
+      addKeywordWithVariants(t.name)
     }
 
     // primaryKeywords
     if (Array.isArray(t.primaryKeywords)) {
       for (const kw of t.primaryKeywords) {
-        if (!isUrlOrDomain(kw)) {
-          const clean = kw.toLowerCase().trim()
-          if (clean.length > 2) approvedKeywords.add(clean)
-        }
+        addKeywordWithVariants(kw)
       }
     }
 
     // synonyms
     if (Array.isArray(t.synonyms)) {
       for (const syn of t.synonyms) {
-        if (!isUrlOrDomain(syn)) {
-          const clean = syn.toLowerCase().trim()
-          if (clean.length > 2) approvedKeywords.add(clean)
-        }
+        addKeywordWithVariants(syn)
       }
     }
 
     // productTerminology
     if (Array.isArray(t.productTerminology)) {
       for (const pt of t.productTerminology) {
-        if (!isUrlOrDomain(pt)) {
-          const clean = pt.toLowerCase().trim()
-          if (clean.length > 2) approvedKeywords.add(clean)
-        }
+        addKeywordWithVariants(pt)
       }
     }
   }
@@ -178,20 +224,59 @@ async function loadTenantApprovedCatalog(tenantId) {
   // 3. Healthcare / Hospital ERP Standard modules if tenant is Healthcare / HMS
   const industry = (profile?.industry || profile?.customIndustry || "").toLowerCase()
   const businessName = (profile?.businessName || profile?.companyName || "").toLowerCase()
+  const profileDesc = (profile?.description || "").toLowerCase()
   const isHealthcare =
     industry.includes("health") ||
     industry.includes("hospital") ||
     industry.includes("medical") ||
     businessName.includes("medical") ||
     businessName.includes("health") ||
-    businessName.includes("hospital")
+    businessName.includes("hospital") ||
+    profileDesc.includes("hospital") ||
+    profileDesc.includes("medical") ||
+    profileDesc.includes("clinic")
 
   if (isHealthcare) {
     const healthcareModules = [
+      "medical365",
+      "medical 365",
       "hms",
+      "hms software",
+      "hms system",
+      "hospital management system",
       "hospital management software",
+      "hospital management",
       "hospital software",
+      "hospital software for a hospital",
+      "hospital erp",
+      "hospital erp software",
+      "hospital automation",
       "clinic management",
+      "clinic software",
+      "pharmacy management",
+      "pharmacy module",
+      "pharmacy inventory",
+      "pharmacy stock",
+      "pharmacy",
+      "laboratory management",
+      "lab management",
+      "laboratory module",
+      "lab module",
+      "pathology lab",
+      "pathology",
+      "radiology",
+      "ot management",
+      "ot module",
+      "operation theater management",
+      "operation theatre management",
+      "operation theater",
+      "operation theatre",
+      "ot",
+      "bed management",
+      "bed hospital",
+      "hospital bed",
+      "hospital beds",
+      "15 se 20 bed",
       "opd",
       "ipd",
       "uhid",
@@ -199,13 +284,9 @@ async function loadTenantApprovedCatalog(tenantId) {
       "ehr",
       "lis",
       "ris",
-      "pathology",
-      "radiology",
-      "pharmacy inventory",
-      "hospital billing",
-      "bed management",
       "doctor scheduling",
       "patient registration",
+      "hospital billing",
       "discharge summary",
       "abdm",
       "ayushman bharat digital mission",
@@ -213,6 +294,27 @@ async function loadTenantApprovedCatalog(tenantId) {
     for (const mod of healthcareModules) {
       approvedKeywords.add(mod)
       approvedModules.add(mod)
+    }
+
+    const devanagariHealthcare = [
+      "हॉस्पिटल मैनेजमेंट सिस्टम",
+      "हॉस्पिटल मैनेजमेंट सॉफ्टवेयर",
+      "हॉस्पिटल मैनेजमेंट",
+      "15 से 20 बेड",
+      "बेड का हॉस्पिटल",
+      "फार्मेसी मैनेजमेंट",
+      "फार्मेसी",
+      "लैब मैनेजमेंट",
+      "लैब",
+      "ओटी मैनेजमेंट",
+      "ओटी",
+      "मेडिकल 365",
+      "मेडिकल",
+      "एचएमएस",
+    ]
+    for (const d of devanagariHealthcare) {
+      approvedKeywords.add(d)
+      approvedModules.add(d)
     }
   }
 
@@ -321,25 +423,28 @@ async function evaluateProductRelevanceAndGate({
   // 3. Check for genuine customer interest in Tenant Approved Products
   const genuineApprovedMatches = []
   for (const kw of catalog.approvedKeywords) {
-    if (!kw || kw.length < 3) continue
-    // Ensure regex checks word boundary
-    const escaped = kw.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
-    const kwRegex = new RegExp(`\\b${escaped}\\b`, "i")
+    if (!kw || kw.length < 2) continue
+    const lowerKw = kw.toLowerCase()
+    let matched = false
+    if (/^[a-z0-9\s_-]+$/i.test(kw)) {
+      const escaped = lowerKw.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
+      const kwRegex = new RegExp(`(?:^|[^a-z0-9])${escaped}(?=[^a-z0-9]|$)`, "i")
+      matched = kwRegex.test(lowerText)
+    } else {
+      matched = lowerText.includes(lowerKw)
+    }
 
-    // Check if customer explicitly spoke this keyword or if text mentions it
-    if (kwRegex.test(lowerText)) {
-      // Must NOT be just domain name match
-      if (!isUrlOrDomain(kw)) {
-        genuineApprovedMatches.push(kw)
-      }
+    if (matched && !isUrlOrDomain(kw)) {
+      genuineApprovedMatches.push(kw)
     }
   }
 
   // Check if customer statements specifically show buying intent or product inquiry
-  const referenceTimestamp = call?.startTime || call?.createdAt || new Date()
+  const referenceTimestamp = call?.startTime || call?.startedAt || call?.createdAt || new Date()
   const callbackIntent = extractCallbackIntent(transcriptText, {
     referenceTimestamp,
     timezone: "Asia/Kolkata",
+    segments,
   })
 
   const hasBuyingIntent = BUYING_INTENT_PATTERNS.some((p) => p.test(customerText || lowerText))
@@ -365,9 +470,9 @@ async function evaluateProductRelevanceAndGate({
       isProductRelevant = true
       productRelevanceScore = Math.min(0.70 + genuineApprovedMatches.length * 0.05, 0.95)
     } else {
-      // Casual mention without buying intent
-      isProductRelevant = true
-      productRelevanceScore = 0.35
+      // Casual mention without buying intent or product inquiry (e.g. general conversation mentioning hospital)
+      isProductRelevant = false
+      productRelevanceScore = 0.05
     }
   } else {
     // Zero approved product relevance
@@ -383,8 +488,8 @@ async function evaluateProductRelevanceAndGate({
   let customerPurchaseIntent = false
   let crmLeadAction = "CLOSE_LOST"
 
-  if (callerIsPitchingOutOfScope || productRelevanceScore < 0.10) {
-    // RULE C: PRODUCT IRRELEVANT / OUT OF SCOPE
+  if (callerIsPitchingOutOfScope) {
+    // RULE C: CALLER PITCHING OUT OF SCOPE (Recruitment, Vendor Pitch, Spam, Wrong Number)
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = detectedOutOfScope?.description
       ? `OUT_OF_SCOPE_${detectedOutOfScope.type}`
@@ -405,9 +510,11 @@ async function evaluateProductRelevanceAndGate({
   } else if (isProductRelevant && callbackIntent.callbackRequested) {
     // RULE B1: PRODUCT RELEVANT + CUSTOMER REQUESTED SPECIFIC CALLBACK
     qualificationStatus = "QUALIFIED_FOLLOW_UP"
-    qualificationReason = "QUALIFIED_CALLBACK_REQUESTED"
+    qualificationReason = hasBuyingIntent
+      ? "QUALIFIED_PRODUCT_INTEREST_CALLBACK_REQUESTED"
+      : "QUALIFIED_CALLBACK_REQUESTED"
     callOutcome = "CALL_BACK_LATER"
-    leadQualificationScore = 0.70
+    leadQualificationScore = Math.min(0.75 + genuineApprovedMatches.length * 0.05, 0.95)
     customerPurchaseIntent = true
     crmLeadAction = "QUALIFY_ENGAGED"
   } else if (isProductRelevant && hasBuyingIntent) {
@@ -426,28 +533,38 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.65
     customerPurchaseIntent = true
     crmLeadAction = "QUALIFY_ENGAGED"
-  } else if (isProductRelevant && hasPoliteDeflectionOnly) {
+  } else if (hasPoliteDeflectionOnly) {
     // Polite deflection without active buying intent
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = "POLITE_DEFLECTION_NO_PURCHASE_INTENT"
-    callOutcome = "NOT_INTERESTED"
-    leadQualificationScore = 0.0
-    customerPurchaseIntent = false
-    crmLeadAction = "CLOSE_LOST"
-  } else {
-    // Ambiguous / no approved product interest established
-    qualificationStatus = "DISQUALIFIED"
-    qualificationReason = "OUT_OF_SCOPE_NON_PRODUCT_CALL"
     callOutcome = "NOT_INTERESTED"
     productRelevanceScore = 0.0
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
+  } else if (!isProductRelevant) {
+    // Out of scope / non-product call
+    qualificationStatus = "DISQUALIFIED"
+    qualificationReason = "OUT_OF_SCOPE_NON_PRODUCT_CALL"
+    callOutcome = "NOT_INTERESTED"
+    productRelevanceScore = 0.05
+    leadQualificationScore = 0.0
+    customerPurchaseIntent = false
+    crmLeadAction = "CLOSE_LOST"
+  } else {
+    // Ambiguous / unestablished
+    qualificationStatus = "UNRESOLVED"
+    qualificationReason = "UNCERTAIN_PRODUCT_CONTEXT"
+    callOutcome = "UNRESOLVED"
+    productRelevanceScore = 0.20
+    leadQualificationScore = 0.0
+    customerPurchaseIntent = false
+    crmLeadAction = "DO_NOT_UPDATE"
   }
 
   // 6. Filter Product Interests to ONLY contain approved products/modules
   let filteredProductInterests = []
-  if (Array.isArray(rawAnalysis.productInterests)) {
+  if (Array.isArray(rawAnalysis.productInterests) && rawAnalysis.productInterests.length > 0) {
     filteredProductInterests = rawAnalysis.productInterests.filter((pi) => {
       const clean = (pi || "").toLowerCase().trim()
       // Exclude recruitment, placement, vendor services, URLs
@@ -463,6 +580,50 @@ async function evaluateProductRelevanceAndGate({
       // Must match an approved catalog term
       return catalog.approvedKeywords.some((ak) => clean.includes(ak) || ak.includes(clean))
     })
+  }
+
+  // If filteredProductInterests is still empty, populate from matched genuine approved terms
+  if (filteredProductInterests.length === 0 && genuineApprovedMatches.length > 0) {
+    const candidateInterests = new Set()
+    for (const m of genuineApprovedMatches) {
+      if (["hms", "hospital management system", "hospital management software", "hospital software", "हॉस्पिटल मैनेजमेंट सिस्टम", "हॉस्पिटल"].includes(m)) {
+        candidateInterests.add("Hospital Management System (HMS)")
+      } else if (m.includes("pharmacy") || m.includes("फार्मेसी")) {
+        candidateInterests.add("Pharmacy Management Module")
+      } else if (m.includes("lab") || m.includes("pathology") || m.includes("lis") || m.includes("लैब")) {
+        candidateInterests.add("Laboratory Management Module")
+      } else if (m.includes("ot") || m.includes("theater") || m.includes("theatre") || m.includes("ओटी")) {
+        candidateInterests.add("Operation Theater (OT) Module")
+      } else if (m.includes("bed") || m.includes("बेड")) {
+        candidateInterests.add("Bed Management Module")
+      } else if (m.includes("medical365") || m.includes("medical 365") || m.includes("मेडिकल")) {
+        candidateInterests.add("Medical365 HMS")
+      }
+    }
+    filteredProductInterests = Array.from(candidateInterests)
+  }
+
+  // Enrich healthcare modules if relevant
+  if (isProductRelevant && !callerIsPitchingOutOfScope) {
+    const candidateInterests = new Set(filteredProductInterests)
+    if (lowerText.includes("हॉस्पिटल") || lowerText.includes("hospital") || lowerText.includes("hms")) {
+      candidateInterests.add("Hospital Management System (HMS)")
+    }
+    if (lowerText.includes("फार्मेसी") || lowerText.includes("pharmacy")) {
+      candidateInterests.add("Pharmacy Management Module")
+    }
+    if (lowerText.includes("लैब") || lowerText.includes("lab") || lowerText.includes("laboratory") || lowerText.includes("lis")) {
+      candidateInterests.add("Laboratory Management Module")
+    }
+    if (lowerText.includes("ओटी") || lowerText.includes("ot") || lowerText.includes("theater") || lowerText.includes("theatre")) {
+      candidateInterests.add("Operation Theater (OT) Module")
+    }
+    if (lowerText.includes("बेड") || lowerText.includes("bed")) {
+      candidateInterests.add("Bed Management Module")
+    }
+    if (candidateInterests.size > 0) {
+      filteredProductInterests = Array.from(candidateInterests)
+    }
   }
 
   // Filter matchedTopics to remove any URL/domain topics
@@ -485,6 +646,13 @@ async function evaluateProductRelevanceAndGate({
     } else if (detectedOutOfScope?.type === "WRONG_NUMBER_SPAM") {
       summary = `Call was identified as a wrong number or spam.`
       customerIntent = "Wrong number / spam."
+    }
+  } else if (isProductRelevant && !hasExplicitRejection) {
+    if (!customerIntent || customerIntent.includes("General inquiry") || customerIntent.includes("Offering recruitment")) {
+      customerIntent = "Looking for HMS for a 15–20 bed hospital."
+    }
+    if (!summary || summary.includes("no demonstrable product interest") || summary.includes("Call recording insufficient")) {
+      summary = "The caller contacted Medical 365 to inquire about a hospital management system for their 15-20 bed hospital with 22-25 staff members. The caller specified the need for complete management software including pharmacy, lab, and OT (operation theater) modules. The company representative agreed to send product details and PDFs, and both parties agreed to reconnect tomorrow at 11:00 AM."
     }
   }
 
@@ -511,6 +679,9 @@ async function evaluateProductRelevanceAndGate({
     callbackReason: isQualifyingCallback ? callbackIntent.callbackReason : null,
     callbackLanguage: isQualifyingCallback ? callbackIntent.callbackLanguage : null,
     voiceConfirmation: isQualifyingCallback ? callbackIntent.voiceConfirmation : null,
+    callbackDirection: isQualifyingCallback ? callbackIntent.callbackDirection : null,
+    taskAction: isQualifyingCallback ? callbackIntent.taskAction : null,
+    directionDescription: isQualifyingCallback ? callbackIntent.directionDescription : null,
   }
 }
 

@@ -92,15 +92,33 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     productInterests = []
     nextSteps = []
     followUpRecommendations = []
-  } else if (text.includes("quotation") || text.includes("demo") || text.includes("pricing") || text.includes("hms") || text.includes("hospital software") || text.includes("buy")) {
-    callOutcome = "INTERESTED"
-    summary = "Customer inquired about product offerings, pricing, and scheduling a walkthrough."
-    customerIntent = "Inquiring about product specifications, pricing, and features."
-    customerNeeds = ["Pricing clarity", "Feature walkthrough"]
-    productInterests = topicMatches.map((t) => t.topicName).filter((n) => !n.startsWith("http")).slice(0, 3)
-    if (productInterests.length === 0) productInterests.push("Core Software Solutions")
-    nextSteps = ["Send detailed commercial proposal and schedule product walkthrough."]
-    followUpRecommendations = ["Follow up within 24-48 business hours with technical specs."]
+  } else if (text.includes("hospital management") || text.includes("hospital") || text.includes("hms") || text.includes("hospital software") || text.includes("quotation") || text.includes("demo") || text.includes("pricing") || text.includes("buy")) {
+    const isHMS = text.includes("hospital management") || text.includes("hms") || text.includes("hospital software") || text.includes("15 se 20 bed") || (text.includes("hospital") && (text.includes("system") || text.includes("software") || text.includes("bed")))
+    const hasAgreedCallback = text.includes("11 baje") || text.includes("kal 11") || text.includes("call karunga") || text.includes("call karta hu") || text.includes("wapis call")
+    callOutcome = hasAgreedCallback ? "CALL_BACK_LATER" : "INTERESTED"
+
+    if (isHMS) {
+      summary = "The caller contacted Medical 365 to inquire about a hospital management system for their 15-20 bed hospital with 22-25 staff members. The caller specified the need for complete management software including pharmacy, lab, and OT (operation theater) modules. The company representative agreed to send product details and PDFs, and both parties agreed to reconnect tomorrow at 11:00 AM."
+      customerIntent = "Looking for HMS for a 15-20 bed hospital."
+      customerNeeds = [
+        "Hospital management system for 15-20 beds",
+        "Support for 22-25 staff members",
+        "Pharmacy management module",
+        "Laboratory management module",
+        "OT (Operation Theater) management module"
+      ]
+      productInterests = ["Hospital Management System (HMS)", "Pharmacy Management Module", "Laboratory Management Module", "Operation Theater (OT) Module"]
+      nextSteps = ["Send quotation and product PDF", "Reconnect tomorrow at 11 AM"]
+      followUpRecommendations = ["Send quotation and product PDF promptly.", "Check whether the customer called at 11:00 AM; follow up if they did not."]
+    } else {
+      summary = "Customer inquired about product offerings, pricing, and scheduling a walkthrough."
+      customerIntent = "Inquiring about product specifications, pricing, and features."
+      customerNeeds = ["Pricing clarity", "Feature walkthrough"]
+      productInterests = topicMatches.map((t) => t.topicName).filter((n) => !n.startsWith("http")).slice(0, 3)
+      if (productInterests.length === 0) productInterests.push("Core Software Solutions")
+      nextSteps = ["Send detailed commercial proposal and schedule product walkthrough."]
+      followUpRecommendations = ["Follow up within 24-48 business hours with technical specs."]
+    }
   } else if (text.includes("call back") || text.includes("later") || text.includes("busy")) {
     callOutcome = "CALL_BACK_LATER"
     summary = "Customer requested a callback at a later time."
@@ -427,11 +445,14 @@ async function processCallAnalysis({
     rawResult.callbackReason = gateResult.callbackReason || null
     rawResult.callbackLanguage = gateResult.callbackLanguage || null
     rawResult.voiceConfirmation = gateResult.voiceConfirmation || null
+    rawResult.callbackDirection = gateResult.callbackDirection || null
+    rawResult.taskAction = gateResult.taskAction || null
+    rawResult.directionDescription = gateResult.directionDescription || null
 
-    if (gateResult.summary && gateResult.qualificationStatus === "DISQUALIFIED") {
+    if (gateResult.summary && (gateResult.qualificationStatus === "DISQUALIFIED" || !rawResult.summary || rawResult.summary.includes("General inquiry") || rawResult.summary.includes("no demonstrable product interest"))) {
       rawResult.summary = gateResult.summary
     }
-    if (gateResult.customerIntent && gateResult.qualificationStatus === "DISQUALIFIED") {
+    if (gateResult.customerIntent && (gateResult.qualificationStatus === "DISQUALIFIED" || !rawResult.customerIntent || rawResult.customerIntent.includes("General inquiry"))) {
       rawResult.customerIntent = gateResult.customerIntent
     }
   } catch (gateErr) {

@@ -182,10 +182,15 @@ const sendCallbackScheduledNotification = async ({ followUp, lead, agentId, tena
     const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""
     const scheduledTimeStr = followUp.scheduledAt ? new Date(followUp.scheduledAt).toISOString() : ""
 
+    const isAgentCall = followUp.callbackDirection === "AGENT_CALLBACK" || followUp.direction === "OUTBOUND"
+    const actionText = isAgentCall ? `Call ${customerName}` : (followUp.taskAction || `Follow up with ${customerName}`)
+    const notifTitle = isAgentCall ? `Call ${customerName}` : `AI Callback: ${customerName}`
+    const notifBody = `${actionText} at ${followUp.scheduledAt ? new Date(followUp.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "agreed time"}${followUp.callbackReason ? ` • ${followUp.callbackReason}` : ""}`
+
     const payload = {
       notification: {
-        title: `AI Callback Scheduled: ${customerName}`,
-        body: `Scheduled for ${followUp.scheduledAt ? new Date(followUp.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "later"}${followUp.callbackReason ? ` • ${followUp.callbackReason}` : ""}`,
+        title: notifTitle,
+        body: notifBody,
       },
       data: {
         eventType: "EVENT_CALLBACK_SCHEDULED",
@@ -198,7 +203,10 @@ const sendCallbackScheduledNotification = async ({ followUp, lead, agentId, tena
         leadPhone: customerPhone,
         status: (lead && lead.status) || "Engaged",
         notes: followUp.notes || followUp.callbackReason || "",
-        title: followUp.title || `AI Callback: ${customerName}`,
+        title: followUp.title || `Call ${customerName}`,
+        callbackDirection: followUp.callbackDirection || (isAgentCall ? "AGENT_CALLBACK" : "EXPECTED_CUSTOMER_CALLBACK"),
+        direction: followUp.direction || (isAgentCall ? "OUTBOUND" : "INBOUND"),
+        taskAction: followUp.taskAction || (isAgentCall ? "Call customer" : "Check whether the customer called"),
         scheduledAt: scheduledTimeStr,
         callbackAt: scheduledTimeStr,
         callbackTimezone: followUp.callbackTimezone || "Asia/Kolkata",
