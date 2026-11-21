@@ -123,9 +123,8 @@ const extractCandidateTokens = (req) => {
     if (isSuperAdminRoute) {
       if (req.cookies.superadmin_token) {
         tokens.push(req.cookies.superadmin_token)
-      } else if (req.cookies.client_token) {
-        tokens.push(req.cookies.client_token)
       }
+      // Strictly ignore req.cookies.client_token on Super Admin routes (returns 401 unauthenticated)
     } else {
       if (req.cookies.client_token) {
         tokens.push(req.cookies.client_token)

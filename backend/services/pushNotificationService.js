@@ -161,6 +161,251 @@ const sendLeadReassignedAwayNotification = async ({ leadId, previousAgentId, ten
   }
 }
 
+/**
+ * Send AI callback scheduled push notification to the assigned agent's devices
+ */
+const sendCallbackScheduledNotification = async ({ followUp, lead, agentId, tenantId }) => {
+  try {
+    if (!followUp || !agentId || agentId === "unassigned") return null
+
+    const query = {
+      userId: agentId,
+      status: "ACTIVE",
+      fcmToken: { $ne: null, $exists: true },
+    }
+    if (tenantId) query.tenantId = tenantId
+
+    const devices = await Device.find(query).lean()
+    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+
+    const customerName = (lead && lead.name) || followUp.customerName || "Customer"
+    const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""
+    const scheduledTimeStr = followUp.scheduledAt ? new Date(followUp.scheduledAt).toISOString() : ""
+
+    const payload = {
+      notification: {
+        title: `AI Callback Scheduled: ${customerName}`,
+        body: `Scheduled for ${followUp.scheduledAt ? new Date(followUp.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "later"}${followUp.callbackReason ? ` • ${followUp.callbackReason}` : ""}`,
+      },
+      data: {
+        eventType: "EVENT_CALLBACK_SCHEDULED",
+        type: "EVENT_CALLBACK_SCHEDULED",
+        followUpId: followUp._id ? followUp._id.toString() : String(followUp.id || ""),
+        leadId: lead && (lead._id || lead.id) ? (lead._id || lead.id).toString() : "",
+        leadName: customerName,
+        name: customerName,
+        phone: customerPhone,
+        leadPhone: customerPhone,
+        status: (lead && lead.status) || "Engaged",
+        notes: followUp.notes || followUp.callbackReason || "",
+        title: followUp.title || `AI Callback: ${customerName}`,
+        scheduledAt: scheduledTimeStr,
+        callbackAt: scheduledTimeStr,
+        callbackTimezone: followUp.callbackTimezone || "Asia/Kolkata",
+        productContext: followUp.productContext || "",
+        scheduledTimestamp: String(Date.now()),
+      },
+    }
+
+    const record = {
+      type: "EVENT_CALLBACK_SCHEDULED",
+      agentId,
+      tenantId,
+      followUpId: payload.data.followUpId,
+      leadId: payload.data.leadId,
+      deviceCount: tokens.length,
+      tokens,
+      payload,
+      timestamp: Date.now(),
+      sentViaFirebase: false,
+    }
+
+    if (isFirebaseInitialized && firebaseAdmin && tokens.length > 0) {
+      try {
+        await firebaseAdmin.messaging().sendEachForMulticast({
+          tokens,
+          notification: payload.notification,
+          data: payload.data,
+        })
+        record.sentViaFirebase = true
+      } catch (err) {
+        record.firebaseError = err.message
+      }
+    }
+
+    dispatchedHistory.push(record)
+    if (dispatchedHistory.length > 100) dispatchedHistory.shift()
+    return record
+  } catch (error) {
+    console.error("Error sending callback scheduled push:", error.message)
+    return null
+  }
+}
+
+/**
+ * Send callback reminder (5 minutes before or due now) push notification
+ */
+const sendCallbackReminderNotification = async ({ followUp, lead, agentId, tenantId, reminderType = "5_MINUTES_BEFORE" }) => {
+  try {
+    if (!followUp || !agentId || agentId === "unassigned") return null
+
+    const query = {
+      userId: agentId,
+      status: "ACTIVE",
+      fcmToken: { $ne: null, $exists: true },
+    }
+    if (tenantId) query.tenantId = tenantId
+
+    const devices = await Device.find(query).lean()
+    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+
+    const customerName = (lead && lead.name) || followUp.customerName || "Customer"
+    const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""
+    const isDueNow = reminderType === "DUE_NOW"
+    const eventType = isDueNow ? "EVENT_CALLBACK_DUE" : "EVENT_CALLBACK_REMINDER"
+
+    const notificationTitle = isDueNow
+      ? `Callback Due Now: ${customerName}`
+      : `Upcoming Callback in 5 mins: ${customerName}`
+
+    const notificationBody = `${customerPhone ? customerPhone + " • " : ""}${followUp.callbackReason || followUp.title || "Scheduled Follow-up"}`
+
+    const payload = {
+      notification: {
+        title: notificationTitle,
+        body: notificationBody,
+      },
+      data: {
+        eventType,
+        type: eventType,
+        reminderType,
+        followUpId: followUp._id ? followUp._id.toString() : String(followUp.id || ""),
+        leadId: lead && (lead._id || lead.id) ? (lead._id || lead.id).toString() : "",
+        leadName: customerName,
+        name: customerName,
+        phone: customerPhone,
+        leadPhone: customerPhone,
+        title: followUp.title || `Callback: ${customerName}`,
+        notes: followUp.notes || followUp.callbackReason || "",
+        scheduledAt: followUp.scheduledAt ? new Date(followUp.scheduledAt).toISOString() : "",
+        callbackAt: followUp.callbackAt ? new Date(followUp.callbackAt).toISOString() : "",
+        callbackTimezone: followUp.callbackTimezone || "Asia/Kolkata",
+        productContext: followUp.productContext || "",
+        timestamp: String(Date.now()),
+      },
+    }
+
+    const record = {
+      type: eventType,
+      agentId,
+      tenantId,
+      followUpId: payload.data.followUpId,
+      leadId: payload.data.leadId,
+      deviceCount: tokens.length,
+      tokens,
+      payload,
+      timestamp: Date.now(),
+      sentViaFirebase: false,
+    }
+
+    if (isFirebaseInitialized && firebaseAdmin && tokens.length > 0) {
+      try {
+        await firebaseAdmin.messaging().sendEachForMulticast({
+          tokens,
+          notification: payload.notification,
+          data: payload.data,
+        })
+        record.sentViaFirebase = true
+      } catch (err) {
+        record.firebaseError = err.message
+      }
+    }
+
+    dispatchedHistory.push(record)
+    if (dispatchedHistory.length > 100) dispatchedHistory.shift()
+    return record
+  } catch (error) {
+    console.error("Error sending callback reminder push:", error.message)
+    return null
+  }
+}
+
+/**
+ * Send callback rescheduled push notification
+ */
+const sendCallbackRescheduledNotification = async ({ followUp, lead, agentId, tenantId }) => {
+  try {
+    if (!followUp || !agentId || agentId === "unassigned") return null
+
+    const query = {
+      userId: agentId,
+      status: "ACTIVE",
+      fcmToken: { $ne: null, $exists: true },
+    }
+    if (tenantId) query.tenantId = tenantId
+
+    const devices = await Device.find(query).lean()
+    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+
+    const customerName = (lead && lead.name) || followUp.customerName || "Customer"
+    const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""
+
+    const payload = {
+      notification: {
+        title: `Callback Rescheduled: ${customerName}`,
+        body: `Updated to ${followUp.scheduledAt ? new Date(followUp.scheduledAt).toLocaleString() : "new time"}`,
+      },
+      data: {
+        eventType: "EVENT_CALLBACK_RESCHEDULED",
+        type: "EVENT_CALLBACK_RESCHEDULED",
+        followUpId: followUp._id ? followUp._id.toString() : String(followUp.id || ""),
+        leadId: lead && (lead._id || lead.id) ? (lead._id || lead.id).toString() : "",
+        leadName: customerName,
+        name: customerName,
+        phone: customerPhone,
+        leadPhone: customerPhone,
+        title: followUp.title || `AI Callback: ${customerName}`,
+        notes: followUp.notes || followUp.callbackReason || "",
+        scheduledAt: followUp.scheduledAt ? new Date(followUp.scheduledAt).toISOString() : "",
+        timestamp: String(Date.now()),
+      },
+    }
+
+    const record = {
+      type: "EVENT_CALLBACK_RESCHEDULED",
+      agentId,
+      tenantId,
+      followUpId: payload.data.followUpId,
+      leadId: payload.data.leadId,
+      deviceCount: tokens.length,
+      tokens,
+      payload,
+      timestamp: Date.now(),
+      sentViaFirebase: false,
+    }
+
+    if (isFirebaseInitialized && firebaseAdmin && tokens.length > 0) {
+      try {
+        await firebaseAdmin.messaging().sendEachForMulticast({
+          tokens,
+          notification: payload.notification,
+          data: payload.data,
+        })
+        record.sentViaFirebase = true
+      } catch (err) {
+        record.firebaseError = err.message
+      }
+    }
+
+    dispatchedHistory.push(record)
+    if (dispatchedHistory.length > 100) dispatchedHistory.shift()
+    return record
+  } catch (error) {
+    console.error("Error sending callback rescheduled push:", error.message)
+    return null
+  }
+}
+
 const getDispatchedHistory = () => [...dispatchedHistory]
 const clearDispatchedHistory = () => {
   dispatchedHistory.length = 0
@@ -171,6 +416,9 @@ const isConfigured = () => isFirebaseInitialized
 module.exports = {
   sendLeadAssignedNotification,
   sendLeadReassignedAwayNotification,
+  sendCallbackScheduledNotification,
+  sendCallbackReminderNotification,
+  sendCallbackRescheduledNotification,
   getDispatchedHistory,
   clearDispatchedHistory,
   isConfigured,

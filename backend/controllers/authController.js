@@ -7,10 +7,23 @@ const audit = require("../services/auditService")
 
 const JWT_EXPIRES_IN = "24h"
 
+const getSuperAdminConfig = () => {
+  const rawEmail = process.env.SUPER_ADMIN_EMAIL || process.env.SUPERADMIN_EMAIL || ""
+  const rawPassword = process.env.SUPER_ADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD || ""
+  const rawName = process.env.SUPER_ADMIN_NAME || process.env.SUPERADMIN_NAME || ""
+
+  return {
+    configuredEmail: typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : "",
+    configuredPassword: typeof rawPassword === "string" ? rawPassword.trim() : "",
+    configuredName: typeof rawName === "string" ? rawName.trim() : "",
+  }
+}
+
 const login = async (req, res) => {
   try {
     const rawIdentifier = (req.body.email || req.body.identifier || req.body.username || "").toString()
     const password = req.body.password !== undefined && req.body.password !== null ? String(req.body.password) : ""
+    const isSuperAdminPortal = req.body.portal === "super_admin" || req.body.isSuperAdminLogin === true
 
     // Input validation
     if (!rawIdentifier || !password) {
@@ -41,7 +54,11 @@ const login = async (req, res) => {
       }
     }
 
+    const { configuredEmail, configuredPassword, configuredName } = getSuperAdminConfig()
+    const isSuperAdminIdentifier = Boolean(configuredEmail && normalizedIdentifier === configuredEmail)
+
     let user = null
+
     // 1. If target tenant is supplied (e.g. from portal URL or custom domain), prioritize tenant-scoped user query
     if (cleanTenantId) {
       user = await User.findOne({
@@ -50,39 +67,135 @@ const login = async (req, res) => {
       }).select("+password")
     }
 
-    // 2. Global fallback lookup by email
+    // 2. Global lookup by email
     if (!user) {
       user = await User.findOne({ email: normalizedIdentifier }).select("+password")
     }
 
-    if (!user && (normalizedIdentifier === "superadmin@leadflow.io" || normalizedIdentifier === "superadmin")) {
-      user = await User.findOne({ role: "super_admin" }).select("+password")
-    }
-    if (!user) {
-      return invalidCredentialsResponse()
-    }
+    // If identifier matches configured Super Admin email or user in DB has role super_admin
+    const isSuperAdminUser = isSuperAdminIdentifier || (user && user.role === "super_admin")
 
-    // Ensure tenant admin has synchronized tenantId from Account if previously unset
-    if (!user.tenantId && user.role !== "super_admin" && user._id) {
-      const userAccount = await Account.findOne({ adminUserId: user._id }).select("accountId").lean()
-      if (userAccount && userAccount.accountId) {
-        user.tenantId = userAccount.accountId
-        await User.findByIdAndUpdate(user._id, { tenantId: userAccount.accountId })
+    if (isSuperAdminPortal || isSuperAdminUser) {
+      // Super Admin Authentication Path
+      // Missing environment credentials must fail closed
+      if (!configuredEmail || !configuredPassword) {
+        console.error("❌ Super Admin login failed: SUPER_ADMIN_EMAIL or SUPER_ADMIN_PASSWORD not configured in environment.")
+        return res.status(500).json({
+          success: false,
+          error: "Super Admin authentication is not configured on the server. Please contact system administrator.",
+        })
       }
-    }
 
-    // Check if user is suspended
-    if (user.status === "suspended") {
-      return res.status(403).json({
-        success: false,
-        error: "Account has been suspended. Please contact support.",
-      })
-    }
+      // When authenticating as the environment-configured Super Admin, enforce environment configuration
+      if (isSuperAdminIdentifier || (!user && isSuperAdminPortal)) {
+        if (normalizedIdentifier !== configuredEmail) {
+          return invalidCredentialsResponse()
+        }
 
-    // Verify password strictly against MongoDB hash using bcrypt
-    const isMatch = await user.comparePassword(password)
-    if (!isMatch) {
-      return invalidCredentialsResponse()
+        // Constant-time timing-safe password comparison against environment password
+        const isPasswordMatch = crypto.timingSafeEqual(
+          Buffer.from(crypto.createHash("sha256").update(password).digest("hex")),
+          Buffer.from(crypto.createHash("sha256").update(configuredPassword).digest("hex")),
+        )
+        if (!isPasswordMatch) {
+          return invalidCredentialsResponse()
+        }
+
+        // Retrieve or sync Super Admin account in MongoDB
+        if (!user) {
+          user = await User.findOne({ role: "super_admin" }).select("+password")
+        }
+        if (!user) {
+          user = new User({
+            name: configuredName || "Super Admin",
+            email: configuredEmail,
+            password: configuredPassword,
+            role: "super_admin",
+            status: "active",
+            tenantId: null,
+          })
+          await user.save()
+        } else {
+          let needsSave = false
+          if (user.email !== configuredEmail) {
+            user.email = configuredEmail
+            needsSave = true
+          }
+          if (user.role !== "super_admin") {
+            user.role = "super_admin"
+            needsSave = true
+          }
+          if (user.status !== "active" || user.isActive === false) {
+            user.status = "active"
+            user.isActive = true
+            needsSave = true
+          }
+          const hashMatches = await user.comparePassword(configuredPassword)
+          if (!hashMatches) {
+            user.password = configuredPassword
+            needsSave = true
+          }
+          if (needsSave) {
+            await user.save()
+          }
+        }
+      } else if (user && user.role === "super_admin") {
+        // Super Admin in database (e.g. from tests or prior migration)
+        const isMatch = await user.comparePassword(password)
+        if (!isMatch) {
+          return invalidCredentialsResponse()
+        }
+      } else {
+        // Non-super-admin user attempting to login through Super Admin portal
+        return res.status(403).json({
+          success: false,
+          error: "Access denied: Non-Super Admin accounts cannot log in through the Super Admin portal.",
+        })
+      }
+
+      // Disallow Super Admin credentials from authenticating into a tenant-specific portal
+      if (cleanTenantId && !isSuperAdminPortal) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied: Super Admin credentials cannot be used for tenant portal login.",
+        })
+      }
+    } else {
+      // Tenant / Client User Authentication Path
+      if (!user) {
+        return invalidCredentialsResponse()
+      }
+
+      // Tenant users must never be super_admin
+      if (user.role === "super_admin") {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied: Super Admin credentials cannot be used for tenant portal login.",
+        })
+      }
+
+      // Ensure tenant admin has synchronized tenantId from Account if previously unset
+      if (!user.tenantId && user._id) {
+        const userAccount = await Account.findOne({ adminUserId: user._id }).select("accountId").lean()
+        if (userAccount && userAccount.accountId) {
+          user.tenantId = userAccount.accountId
+          await User.findByIdAndUpdate(user._id, { tenantId: userAccount.accountId })
+        }
+      }
+
+      // Check if user is suspended
+      if (user.status === "suspended") {
+        return res.status(403).json({
+          success: false,
+          error: "Account has been suspended. Please contact support.",
+        })
+      }
+
+      // Verify password strictly against MongoDB hash using bcrypt
+      const isMatch = await user.comparePassword(password)
+      if (!isMatch) {
+        return invalidCredentialsResponse()
+      }
     }
 
     // Strict Domain-to-Tenant Lock for White-Label Domains

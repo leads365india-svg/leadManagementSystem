@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
+import { buildCustomDomainUrl } from "@/lib/domain"
 import { toast } from "react-hot-toast"
 import {
   Shield,
@@ -945,7 +946,23 @@ export default function RolesPermissionsPage() {
                     {selectedTenantAccount.customDomain && (
                       <div className="border-l border-slate-200 pl-3">
                         <p className="text-[10px] font-semibold text-slate-400 uppercase">White-Label Domain</p>
-                        <p className="font-mono text-emerald-700 font-bold">{selectedTenantAccount.customDomain}</p>
+                        {(() => {
+                          const domainUrl = buildCustomDomainUrl(selectedTenantAccount.customDomain)
+                          return domainUrl ? (
+                            <a
+                              href={domainUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="group inline-flex items-center space-x-1 font-mono text-emerald-700 hover:text-emerald-800 hover:underline font-bold transition-colors"
+                              title={`Open ${domainUrl} in new tab`}
+                            >
+                              <span>{selectedTenantAccount.customDomain}</span>
+                              <ExternalLink className="w-3 h-3 text-emerald-600 shrink-0 group-hover:scale-110 transition-transform" />
+                            </a>
+                          ) : (
+                            <p className="font-mono text-emerald-700 font-bold">{selectedTenantAccount.customDomain}</p>
+                          )
+                        })()}
                       </div>
                     )}
                     <div className="border-l border-slate-200 pl-3">

@@ -127,6 +127,16 @@ const leadSchema = new mongoose.Schema(
       default: "New",
       required: [true, "Status is required"],
     },
+    nextFollowUpDate: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    followUpStatus: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     tenantId: {
       type: String,
       required: [true, "Tenant ID is required"],

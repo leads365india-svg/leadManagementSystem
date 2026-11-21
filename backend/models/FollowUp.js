@@ -35,10 +35,48 @@ const followUpSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "completed", "cancelled"],
+      enum: ["pending", "due", "completed", "cancelled", "rescheduled", "missed"],
       default: "pending",
       required: true,
       index: true,
+    },
+    callbackAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    callbackTimezone: {
+      type: String,
+      default: "Asia/Kolkata",
+      trim: true,
+    },
+    callbackReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    productContext: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    customerName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    customerPhone: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    reminderSentAt: {
+      type: Date,
+      default: null,
+    },
+    dueNotificationSentAt: {
+      type: Date,
+      default: null,
     },
     priority: {
       type: String,
@@ -114,6 +152,24 @@ followUpSchema.pre("validate", function () {
   }
   if (typeof this.idempotencyKey === "string" && !this.idempotencyKey.trim()) {
     this.idempotencyKey = null
+  }
+  if (!this.callbackAt && this.scheduledAt) {
+    this.callbackAt = this.scheduledAt
+  } else if (!this.scheduledAt && this.callbackAt) {
+    this.scheduledAt = this.callbackAt
+  }
+})
+
+// Keep callbackAt and scheduledAt synchronized on update queries
+followUpSchema.pre(["findOneAndUpdate", "updateOne", "updateMany"], function () {
+  const update = this.getUpdate()
+  if (!update) return
+
+  const setObj = update.$set || update
+  if (setObj.scheduledAt && !setObj.callbackAt) {
+    setObj.callbackAt = setObj.scheduledAt
+  } else if (setObj.callbackAt && !setObj.scheduledAt) {
+    setObj.scheduledAt = setObj.callbackAt
   }
 })
 

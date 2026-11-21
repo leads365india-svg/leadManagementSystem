@@ -47,6 +47,7 @@ import {
   X,
   Plus,
   Building2,
+  Bell,
 } from "lucide-react"
 
 // Complete Six-Category CRM Navigation Structure (Granular RBAC permission keys assigned)
@@ -330,6 +331,9 @@ export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [expandedMobileCategory, setExpandedMobileCategory] = useState(null)
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
+  const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false)
+  const [callbacksList, setCallbacksList] = useState([])
+  const [callbackCounts, setCallbackCounts] = useState({ today: 0, overdue: 0, total: 0 })
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [mounted, setMounted] = useState(false)
@@ -341,6 +345,37 @@ export default function Header() {
   const { branding, isWhiteLabel } = useBranding()
   const [logoError, setLogoError] = useState(false)
   const user = authUser
+
+  // Load and poll pending AI callbacks and reminders for notification bell
+  useEffect(() => {
+    let isMounted = true
+    const loadCallbacks = async () => {
+      try {
+        if (!user) return
+        const [statsRes, listRes] = await Promise.all([
+          apiClient.getFollowUpStats().catch(() => null),
+          apiClient.getFollowUps({ status: "pending", limit: 5, sortBy: "scheduledAt", sortOrder: "asc" }).catch(() => null),
+        ])
+        if (!isMounted) return
+        if (statsRes?.success && statsRes.data) {
+          setCallbackCounts({
+            today: statsRes.data.today || 0,
+            overdue: statsRes.data.overdue || 0,
+            total: (statsRes.data.today || 0) + (statsRes.data.overdue || 0),
+          })
+        }
+        if (listRes?.success && listRes.data?.followUps) {
+          setCallbacksList(listRes.data.followUps)
+        }
+      } catch (_) {}
+    }
+    loadCallbacks()
+    const timer = setInterval(loadCallbacks, 60000)
+    return () => {
+      isMounted = false
+      clearInterval(timer)
+    }
+  }, [user])
 
   // Filter NAV_CATEGORIES dynamically based on user role and granular permissions
   const filteredNavCategories = useMemo(() => {
@@ -811,6 +846,102 @@ export default function Header() {
                 </button>
               </div>
             )}
+
+            {/* AI Callback Notification Bell */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setNotificationDropdownOpen(!notificationDropdownOpen)
+                  setUserDropdownOpen(false)
+                  setActiveDropdown(null)
+                }}
+                title="Scheduled Callbacks & Reminders"
+                aria-label="Scheduled Callbacks & Reminders"
+                className="relative p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors focus:outline-none cursor-pointer"
+              >
+                <Bell className="w-4 h-4" />
+                {callbackCounts.total > 0 && (
+                  <span className="absolute top-1.5 right-1.5 flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                  </span>
+                )}
+              </button>
+
+              {/* Callback Reminders Dropdown */}
+              {notificationDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 py-2.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                  <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-bold text-slate-900 leading-snug">Callback Reminders</p>
+                      <p className="text-[11px] text-slate-500">
+                        {callbackCounts.today} today • {callbackCounts.overdue} overdue
+                      </p>
+                    </div>
+                    <Link
+                      href="/communication/follow-ups"
+                      onClick={() => setNotificationDropdownOpen(false)}
+                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
+                    >
+                      View all
+                    </Link>
+                  </div>
+
+                  <div className="py-1 max-h-64 overflow-y-auto">
+                    {callbacksList.length === 0 ? (
+                      <div className="py-6 text-center text-slate-400">
+                        <Clock className="w-6 h-6 mx-auto mb-1 text-slate-300" />
+                        <p className="text-xs text-slate-500 font-medium">No pending callbacks</p>
+                        <p className="text-[10px] text-slate-400">You're all caught up!</p>
+                      </div>
+                    ) : (
+                      callbacksList.map((cb) => (
+                        <Link
+                          key={cb._id || cb.id}
+                          href="/communication/follow-ups"
+                          onClick={() => setNotificationDropdownOpen(false)}
+                          className="block px-4 py-2.5 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-semibold text-slate-900 truncate">
+                              {cb.customerName || cb.lead?.name || cb.title}
+                            </span>
+                            <span
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                cb.isOverdue
+                                  ? "bg-red-100 text-red-700"
+                                  : cb.isToday
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-blue-100 text-blue-700"
+                              }`}
+                            >
+                              {cb.isOverdue ? "Overdue" : cb.isToday ? "Today" : "Upcoming"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 line-clamp-1">
+                            {cb.notes || cb.callbackReason || "Scheduled follow-up"}
+                          </p>
+                          <p className="text-[10px] font-mono text-slate-400 mt-1">
+                            {cb.scheduledAt ? new Date(cb.scheduledAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : ""}
+                          </p>
+                        </Link>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="px-4 pt-2 border-t border-slate-100 text-center">
+                    <Link
+                      href="/communication/follow-ups"
+                      onClick={() => setNotificationDropdownOpen(false)}
+                      className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+                    >
+                      Manage All Follow-ups & Callbacks →
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Fullscreen Toggle */}
             <button

@@ -167,6 +167,12 @@ function registerAllHandlers() {
       sampleMessage: job.payload?.message || "Sample recurring job heartbeat verified",
     }
   })
+
+  // 8. AI Callback Reminders & Due Check Handler
+  queue.registerHandler("followup.reminder_check", async () => {
+    const { checkAndDispatchDueReminders } = require("../services/aiCallbackScheduling.service")
+    return await checkAndDispatchDueReminders()
+  })
 }
 
 module.exports = {

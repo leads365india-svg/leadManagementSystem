@@ -304,16 +304,19 @@ const getFollowUpStats = async (req, res) => {
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
     const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
 
-    const [total, upcoming, overdue, today, completed] = await Promise.all([
+    const activeStatusQuery = { $in: ["pending", "due"] }
+
+    const [total, upcoming, overdue, today, completed, pending] = await Promise.all([
       FollowUp.countDocuments(baseQuery),
-      FollowUp.countDocuments({ ...baseQuery, status: "pending", scheduledAt: { $gt: endOfToday } }),
-      FollowUp.countDocuments({ ...baseQuery, status: "pending", scheduledAt: { $lt: now } }),
+      FollowUp.countDocuments({ ...baseQuery, status: activeStatusQuery, scheduledAt: { $gt: endOfToday } }),
+      FollowUp.countDocuments({ ...baseQuery, status: activeStatusQuery, scheduledAt: { $lt: now } }),
       FollowUp.countDocuments({
         ...baseQuery,
-        status: "pending",
+        status: activeStatusQuery,
         scheduledAt: { $gte: now, $lte: endOfToday },
       }),
       FollowUp.countDocuments({ ...baseQuery, status: "completed" }),
+      FollowUp.countDocuments({ ...baseQuery, status: activeStatusQuery }),
     ])
 
     const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0
@@ -326,6 +329,7 @@ const getFollowUpStats = async (req, res) => {
         overdue,
         today,
         completed,
+        pending,
         completionRate,
       },
     })
@@ -743,7 +747,7 @@ const updateFollowUp = async (req, res) => {
     }
 
     if (status !== undefined) {
-      const ALLOWED_STATUSES = ["pending", "completed", "cancelled"]
+      const ALLOWED_STATUSES = ["pending", "due", "completed", "cancelled", "rescheduled", "missed"]
       const normalizedStatus = status.toLowerCase().trim()
       if (!ALLOWED_STATUSES.includes(normalizedStatus)) {
         res.status(400).json({
@@ -759,6 +763,12 @@ const updateFollowUp = async (req, res) => {
       }
     }
 
+    if (scheduledAt !== undefined) {
+      updates.reminderSentAt = null
+      updates.dueNotificationSentAt = null
+      updates.callbackAt = updates.scheduledAt
+    }
+
     if (notes !== undefined) updates.notes = typeof notes === "string" ? notes.trim() : ""
     if (assignedTo !== undefined) updates.assignedTo = typeof assignedTo === "string" ? assignedTo.trim() : "Unassigned"
     if (req.body.completionNotes !== undefined) {
@@ -768,6 +778,37 @@ const updateFollowUp = async (req, res) => {
     const updated = await FollowUp.findOneAndUpdate(query, updates, { new: true, runValidators: true })
       .populate("leadId", "name email phone status metadata source assignedTo")
       .lean()
+
+    // Sync Lead nextFollowUpDate & status
+    try {
+      if (updated?.leadId?._id) {
+        const remainingPending = await FollowUp.findOne({
+          tenantId: updated.tenantId,
+          leadId: updated.leadId._id,
+          status: { $in: ["pending", "due"] },
+          deletedAt: null,
+        }).sort({ scheduledAt: 1 }).setOptions({ skipTenantFilter: true })
+
+        const leadUpdates = remainingPending
+          ? { nextFollowUpDate: remainingPending.scheduledAt, followUpStatus: remainingPending.status === "due" ? "due" : "scheduled" }
+          : { nextFollowUpDate: null, followUpStatus: updated.status === "completed" ? "completed" : null }
+
+        await Lead.findByIdAndUpdate(updated.leadId._id, leadUpdates)
+      }
+    } catch (_) {}
+
+    // Send push notification if rescheduled
+    if (scheduledAt !== undefined && updated?.assignedTo && updated.assignedTo !== "Unassigned") {
+      try {
+        const pushNotificationService = require("../services/pushNotificationService")
+        pushNotificationService.sendCallbackRescheduledNotification({
+          followUp: updated,
+          lead: updated.leadId,
+          agentId: String(updated.assignedTo),
+          tenantId: updated.tenantId,
+        }).catch(() => {})
+      } catch (_) {}
+    }
 
     res.status(200).json({
       success: true,
@@ -834,13 +875,44 @@ const completeFollowUp = async (req, res) => {
       .populate("leadId", "name email phone status metadata source assignedTo")
       .lean()
 
-    // Sync lead metadata
+    // Sync lead metadata & nextFollowUpDate
     try {
       if (completed.leadId?._id) {
         const lead = await Lead.findById(completed.leadId._id)
         if (lead) {
           const nextMeta = { ...(lead.metadata || {}), lastFollowUpCompleted: new Date() }
-          await Lead.findByIdAndUpdate(lead._id, { metadata: nextMeta })
+          const remainingPending = await FollowUp.findOne({
+            tenantId: lead.tenantId,
+            leadId: lead._id,
+            status: { $in: ["pending", "due"] },
+            deletedAt: null,
+          }).sort({ scheduledAt: 1 }).setOptions({ skipTenantFilter: true })
+
+          const leadUpdates = remainingPending
+            ? { metadata: nextMeta, nextFollowUpDate: remainingPending.scheduledAt, followUpStatus: remainingPending.status === "due" ? "due" : "scheduled" }
+            : { metadata: nextMeta, nextFollowUpDate: null, followUpStatus: "completed" }
+
+          await Lead.findByIdAndUpdate(lead._id, leadUpdates)
+
+          // Record discrete activity
+          const { activity } = require("../services/activityService")
+          await activity.record({
+            tenantId: lead.tenantId,
+            leadId: lead._id,
+            type: "lead.followup_completed",
+            actor: {
+              name: req.user.name || "User",
+              role: req.user.role || "user",
+              email: req.user.email || "",
+              id: req.user._id || req.user.id || null,
+            },
+            payload: {
+              followUpId: completed._id.toString(),
+              title: completed.title,
+              completionNotes: completed.completionNotes,
+              completedAt: completed.completedAt,
+            },
+          }).catch(() => {})
         }
       }
     } catch (_) {}

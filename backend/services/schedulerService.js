@@ -175,6 +175,14 @@ registerSchedule({
   payload: { retentionDays: 30 },
 })
 
+registerSchedule({
+  id: "callback-reminders-check",
+  name: "followup.reminder_check",
+  intervalMs: 60000, // Check every 60 seconds
+  payload: { description: "Periodic callback reminder and due-status dispatcher" },
+  runImmediately: true,
+})
+
 module.exports = {
   registerSchedule,
   startScheduler,

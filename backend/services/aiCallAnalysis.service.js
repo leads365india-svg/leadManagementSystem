@@ -420,6 +420,13 @@ async function processCallAnalysis({
     rawResult.crmLeadAction = gateResult.crmLeadAction
     rawResult.topicMatches = gateResult.matchedApprovedTopics
     rawResult.productInterests = gateResult.filteredProductInterests
+    rawResult.callbackRequested = Boolean(gateResult.callbackRequested)
+    rawResult.requestedCallbackDateTime = gateResult.requestedCallbackDateTime || null
+    rawResult.callbackTimezone = gateResult.callbackTimezone || "Asia/Kolkata"
+    rawResult.callbackTimePrecision = gateResult.callbackTimePrecision || null
+    rawResult.callbackReason = gateResult.callbackReason || null
+    rawResult.callbackLanguage = gateResult.callbackLanguage || null
+    rawResult.voiceConfirmation = gateResult.voiceConfirmation || null
 
     if (gateResult.summary && gateResult.qualificationStatus === "DISQUALIFIED") {
       rawResult.summary = gateResult.summary

@@ -67,3 +67,65 @@ export function isWhiteLabelDomain(hostname) {
 export function isSuperAdminAllowedDomain(hostname) {
   return !isWhiteLabelDomain(hostname)
 }
+
+/**
+ * Safely constructs a validated HTTPS URL from a stored custom domain value.
+ *
+ * Rules:
+ * - Rejects empty, null, non-string, or dangerous schemes (javascript:, data:, vbscript:, file:).
+ * - If value already starts with https://, retains protocol without duplicating.
+ * - If value starts with http://, upgrades to https://.
+ * - If value has no protocol, prepends https://.
+ * - Preserves any valid subdomain or path.
+ * - Returns null for invalid or malicious inputs.
+ */
+export function buildCustomDomainUrl(domain) {
+  if (!domain || typeof domain !== "string") return null
+  const trimmed = domain.trim()
+  if (!trimmed) return null
+
+  // Reject dangerous schemes
+  const lower = trimmed.toLowerCase()
+  if (
+    lower.startsWith("javascript:") ||
+    lower.startsWith("data:") ||
+    lower.startsWith("vbscript:") ||
+    lower.startsWith("file:")
+  ) {
+    return null
+  }
+
+  // Reject strings with dangerous characters or control characters
+  if (/[\s<>"'`\\]/.test(trimmed)) {
+    return null
+  }
+
+  let candidate = trimmed
+  if (/^https?:\/\//i.test(candidate)) {
+    if (/^http:\/\//i.test(candidate)) {
+      candidate = candidate.replace(/^http:\/\//i, "https://")
+    }
+  } else if (candidate.startsWith("//")) {
+    candidate = `https:${candidate}`
+  } else {
+    candidate = `https://${candidate}`
+  }
+
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== "https:") {
+      return null
+    }
+    // Must contain a valid hostname with at least one dot or localhost
+    if (!parsed.hostname || (!parsed.hostname.includes(".") && parsed.hostname !== "localhost")) {
+      return null
+    }
+    // Hostname must conform to valid domain characters
+    if (!/^[a-zA-Z0-9.-]+$/.test(parsed.hostname)) {
+      return null
+    }
+    return parsed.href
+  } catch (_e) {
+    return null
+  }
+}

@@ -19,6 +19,8 @@ import {
   Filter,
   Sparkles,
   PhoneCall,
+  Calendar,
+  AlertCircle,
 } from "lucide-react"
 
 export default function ClientPortalDashboard() {
@@ -34,6 +36,14 @@ export default function ClientPortalDashboard() {
       "Closed-Lost": 0,
     },
     conversionRate: 0,
+  })
+  const [followUpStats, setFollowUpStats] = useState({
+    today: 0,
+    upcoming: 0,
+    overdue: 0,
+    completed: 0,
+    pending: 0,
+    total: 0,
   })
   const [recentLeads, setRecentLeads] = useState([])
   const [user, setUser] = useState(authUser || null)
@@ -76,9 +86,10 @@ export default function ClientPortalDashboard() {
   const loadData = useCallback(async () => {
     try {
       setRefreshing(true)
-      const [statsRes, leadsRes] = await Promise.all([
+      const [statsRes, leadsRes, fuStatsRes] = await Promise.all([
         apiClient.getLeadStats(),
         apiClient.getLeads({ limit: 5, sortBy: "createdAt", sortOrder: "desc" }),
+        apiClient.getFollowUpStats().catch(() => null),
       ])
 
       if (statsRes.success && statsRes.data) {
@@ -87,6 +98,10 @@ export default function ClientPortalDashboard() {
 
       if (leadsRes.success && leadsRes.data?.leads) {
         setRecentLeads(leadsRes.data.leads)
+      }
+
+      if (fuStatsRes?.success && fuStatsRes.data) {
+        setFollowUpStats(fuStatsRes.data)
       }
     } catch (error) {
       console.error("Failed to load portal data:", error)
@@ -282,6 +297,92 @@ export default function ClientPortalDashboard() {
               <p className="text-xl font-bold text-slate-900 mt-2">{stage.count}</p>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* AI Callback Tasks & Follow-up Reminders */}
+      <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+              <Calendar className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Scheduled Callbacks & Reminders</h3>
+              <p className="text-xs text-slate-500">Live AI-scheduled callbacks, customer follow-up alarms & task metrics</p>
+            </div>
+          </div>
+          <Link
+            href="/communication/follow-ups"
+            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
+          >
+            <span>Open All Callbacks</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2">
+          <Link
+            href="/communication/follow-ups?tab=today"
+            className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 text-left hover:bg-amber-50 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-amber-800">Today's Due</span>
+              <Clock className="w-3.5 h-3.5 text-amber-600" />
+            </div>
+            <p className="text-2xl font-bold text-amber-900 mt-2">{followUpStats.today || 0}</p>
+            <p className="text-[10px] text-amber-700/80 mt-0.5">Need attention today</p>
+          </Link>
+
+          <Link
+            href="/communication/follow-ups?tab=upcoming"
+            className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200/80 text-left hover:bg-blue-50 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-blue-800">Upcoming</span>
+              <Calendar className="w-3.5 h-3.5 text-blue-600" />
+            </div>
+            <p className="text-2xl font-bold text-blue-900 mt-2">{followUpStats.upcoming || 0}</p>
+            <p className="text-[10px] text-blue-700/80 mt-0.5">Scheduled future</p>
+          </Link>
+
+          <Link
+            href="/communication/follow-ups?tab=overdue"
+            className="p-3.5 rounded-xl bg-red-50/60 border border-red-200/80 text-left hover:bg-red-50 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-red-800">Overdue</span>
+              <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+            </div>
+            <p className="text-2xl font-bold text-red-900 mt-2">{followUpStats.overdue || 0}</p>
+            <p className="text-[10px] text-red-700/80 mt-0.5">Missed scheduled time</p>
+          </Link>
+
+          <Link
+            href="/communication/follow-ups?status=completed"
+            className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200/80 text-left hover:bg-emerald-50 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-emerald-800">Completed</span>
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+            </div>
+            <p className="text-2xl font-bold text-emerald-900 mt-2">{followUpStats.completed || 0}</p>
+            <p className="text-[10px] text-emerald-700/80 mt-0.5">Successfully called</p>
+          </Link>
+
+          <Link
+            href="/communication/follow-ups?status=pending"
+            className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-200/80 text-left hover:bg-indigo-50 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-indigo-800">Total Pending</span>
+              <Users className="w-3.5 h-3.5 text-indigo-600" />
+            </div>
+            <p className="text-2xl font-bold text-indigo-900 mt-2">
+              {followUpStats.pending || ((followUpStats.today || 0) + (followUpStats.upcoming || 0) + (followUpStats.overdue || 0)) || 0}
+            </p>
+            <p className="text-[10px] text-indigo-700/80 mt-0.5">Active callback queue</p>
+          </Link>
         </div>
       </div>
 

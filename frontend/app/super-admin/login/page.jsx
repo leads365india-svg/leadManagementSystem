@@ -86,17 +86,14 @@ export default function SuperAdminLoginPage() {
       const response = await login({
         email: cleanEmail,
         password,
+        portal: "super_admin",
       })
 
       if (response && response.success && response.data?.user) {
         setIsRedirecting(true)
-        if (response.data.user.role === "account_admin") {
-          router.replace("/portal")
-          return
-        }
         if (response.data.user.role !== "super_admin") {
           setIsRedirecting(false)
-          setError("Access denied. Please check your account role.")
+          setError("Access denied: Only Super Admin accounts are permitted.")
           await apiClient.logout()
           isSubmittingRef.current = false
           setLoading(false)

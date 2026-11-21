@@ -290,6 +290,41 @@ async function resolveLeadForCall({ call, tenantId }) {
 }
 
 /**
+ * Handles automatic callback creation or cleanup during pipeline sync
+ */
+async function handleCallbackSchedulingForSync({ call, analysis, tenantId, lead, actor }) {
+  if (!call || !analysis || !tenantId) return null
+
+  if (analysis.qualificationStatus === "DISQUALIFIED" || analysis.callOutcome === "NOT_INTERESTED") {
+    try {
+      const FollowUp = require("../models/FollowUp")
+      await FollowUp.updateMany(
+        { tenantId, sourceCallId: call._id, status: { $in: ["pending", "due"] } },
+        { status: "cancelled", completionNotes: "Cancelled: Call disqualified by AI Product Relevance Gate" }
+      )
+    } catch (_) {}
+    return null
+  }
+
+  if (analysis.callbackRequested && analysis.isProductRelevant && analysis.qualificationStatus !== "DISQUALIFIED") {
+    try {
+      const { scheduleAutomaticCallbackFromAiCall } = require("./aiCallbackScheduling.service")
+      return await scheduleAutomaticCallbackFromAiCall({
+        call,
+        analysis,
+        tenantId,
+        lead,
+        actor,
+      })
+    } catch (cbErr) {
+      console.warn("[LeadPipelineSync] Warning scheduling automatic callback:", cbErr.message)
+      return null
+    }
+  }
+  return null
+}
+
+/**
  * Synchronizes AI Call Intelligence analysis results to CRM Lead pipeline status.
  * Centralized, reusable service invoked by worker pipeline, manual analyze controller, and background jobs.
  * 
@@ -386,6 +421,9 @@ async function syncLeadPipelineStatusFromAiCall({
       lead.metadata.lastAiAnalyzedAt = new Date()
       lead.markModified("metadata")
       await lead.save().catch(() => {})
+
+      // Automatic callback scheduling / cleanup even if status was already matching
+      await handleCallbackSchedulingForSync({ call, analysis, tenantId: effectiveTenantId, lead, actor })
     }
     return {
       success: false,
@@ -493,6 +531,15 @@ async function syncLeadPipelineStatusFromAiCall({
     }).catch(() => {})
   }
 
+  // Automatic AI Callback Scheduling
+  const callbackResult = await handleCallbackSchedulingForSync({
+    call,
+    analysis,
+    tenantId: effectiveTenantId,
+    lead,
+    actor,
+  })
+
   return {
     success: true,
     leadId: lead._id,
@@ -502,6 +549,8 @@ async function syncLeadPipelineStatusFromAiCall({
     callOutcome: rawOutcome,
     matchMethod: resolution.matchMethod,
     callLinked,
+    callbackScheduled: Boolean(callbackResult?.scheduled),
+    followUpId: callbackResult?.followUpId || null,
   }
 }
 

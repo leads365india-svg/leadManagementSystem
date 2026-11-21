@@ -3,6 +3,7 @@ const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
 const BusinessProduct = require("../models/BusinessProduct")
 const { AIKeywordTopic } = require("../models/AIKeywordTopic")
 const { AIKnowledgeSource } = require("../models/AIKnowledgeSource")
+const { extractCallbackIntent } = require("../utils/callbackTimeExtractor")
 
 /**
  * Strict Product-Relevance Gate for AI Call Intelligence and Automatic CRM Lead Qualification
@@ -335,8 +336,14 @@ async function evaluateProductRelevanceAndGate({
   }
 
   // Check if customer statements specifically show buying intent or product inquiry
+  const referenceTimestamp = call?.startTime || call?.createdAt || new Date()
+  const callbackIntent = extractCallbackIntent(transcriptText, {
+    referenceTimestamp,
+    timezone: "Asia/Kolkata",
+  })
+
   const hasBuyingIntent = BUYING_INTENT_PATTERNS.some((p) => p.test(customerText || lowerText))
-  const hasFollowUpRequest = FOLLOW_UP_REQUEST_PATTERNS.some((p) => p.test(customerText || lowerText))
+  const hasFollowUpRequest = FOLLOW_UP_REQUEST_PATTERNS.some((p) => p.test(customerText || lowerText)) || callbackIntent.callbackRequested
   const hasExplicitRejection = EXPLICIT_REJECTION_PATTERNS.some((p) => p.test(customerText || lowerText))
   const hasPoliteDeflectionOnly = POLITE_DEFLECTION_PATTERNS.some((p) => p.test(customerText || lowerText))
 
@@ -395,6 +402,14 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
+  } else if (isProductRelevant && callbackIntent.callbackRequested) {
+    // RULE B1: PRODUCT RELEVANT + CUSTOMER REQUESTED SPECIFIC CALLBACK
+    qualificationStatus = "QUALIFIED_FOLLOW_UP"
+    qualificationReason = "QUALIFIED_CALLBACK_REQUESTED"
+    callOutcome = "CALL_BACK_LATER"
+    leadQualificationScore = 0.70
+    customerPurchaseIntent = true
+    crmLeadAction = "QUALIFY_ENGAGED"
   } else if (isProductRelevant && hasBuyingIntent) {
     // RULE A: PRODUCT RELEVANT + CUSTOMER INTERESTED
     qualificationStatus = "QUALIFIED"
@@ -404,7 +419,7 @@ async function evaluateProductRelevanceAndGate({
     customerPurchaseIntent = true
     crmLeadAction = "QUALIFY_ENGAGED"
   } else if (isProductRelevant && hasFollowUpRequest) {
-    // RULE B: PRODUCT RELEVANT + CUSTOMER NEEDS FOLLOW-UP
+    // RULE B2: PRODUCT RELEVANT + GENERAL FOLLOW-UP REQUESTED
     qualificationStatus = "QUALIFIED_FOLLOW_UP"
     qualificationReason = "QUALIFIED_FOLLOW_UP_REQUESTED"
     callOutcome = "FOLLOW_UP_REQUIRED"
@@ -473,6 +488,8 @@ async function evaluateProductRelevanceAndGate({
     }
   }
 
+  const isQualifyingCallback = isProductRelevant && !callerIsPitchingOutOfScope && !hasExplicitRejection && callbackIntent.callbackRequested
+
   return {
     isProductRelevant,
     productRelevanceScore: Number(productRelevanceScore.toFixed(2)),
@@ -487,6 +504,13 @@ async function evaluateProductRelevanceAndGate({
     summary,
     customerIntent,
     crmLeadAction,
+    callbackRequested: isQualifyingCallback,
+    requestedCallbackDateTime: isQualifyingCallback ? callbackIntent.requestedCallbackDateTime : null,
+    callbackTimezone: callbackIntent.callbackTimezone || "Asia/Kolkata",
+    callbackTimePrecision: isQualifyingCallback ? callbackIntent.callbackTimePrecision : null,
+    callbackReason: isQualifyingCallback ? callbackIntent.callbackReason : null,
+    callbackLanguage: isQualifyingCallback ? callbackIntent.callbackLanguage : null,
+    voiceConfirmation: isQualifyingCallback ? callbackIntent.voiceConfirmation : null,
   }
 }
 

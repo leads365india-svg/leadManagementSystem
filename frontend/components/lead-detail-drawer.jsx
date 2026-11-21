@@ -359,6 +359,21 @@ export default function LeadDetailDrawer({
     }
   }, [leadId])
 
+  const handleCompleteFollowUp = async (followUpId) => {
+    try {
+      const res = await apiClient.completeFollowUp(followUpId, { completionNotes: "Completed from Lead Drawer" })
+      if (res.success) {
+        toast.success("Follow-up marked completed")
+        fetchLeadFollowUps()
+        if (typeof onLeadUpdated === "function") onLeadUpdated()
+      } else {
+        toast.error(res.error || "Failed to complete follow-up")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to complete follow-up")
+    }
+  }
+
   // Phase 10: Fetch real chronological activity timeline from API
   const fetchLeadActivities = useCallback(async () => {
     if (!leadId) return
@@ -1323,37 +1338,77 @@ export default function LeadDetailDrawer({
                   <div className="space-y-2.5">
                     {followUps.map((fu) => {
                       const isCompleted = fu.status === "completed"
+                      const isDue = fu.status === "due"
                       const isOverdue =
-                        fu.status === "pending" && new Date(fu.scheduledAt) < new Date()
+                        (fu.status === "pending" || fu.status === "due") && new Date(fu.scheduledAt) < new Date()
                       return (
                         <div
                           key={fu._id || fu.id}
                           className="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl flex items-start justify-between gap-3 text-xs"
                         >
-                          <div className="space-y-1">
+                          <div className="space-y-1 flex-1 min-w-0">
                             <div className="flex items-center space-x-2">
-                              <span className="font-bold text-slate-900">{fu.title || fu.type}</span>
+                              <span className="font-bold text-slate-900 truncate">{fu.title || fu.type}</span>
                               <span
                                 className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                   isCompleted
                                     ? "bg-emerald-100 text-emerald-800"
+                                    : isDue
+                                    ? "bg-amber-100 text-amber-800 animate-pulse"
                                     : isOverdue
                                     ? "bg-rose-100 text-rose-800"
                                     : "bg-blue-100 text-blue-800"
                                 }`}
                               >
-                                {isCompleted ? "Completed" : isOverdue ? "Overdue" : "Pending"}
+                                {isCompleted ? "Completed" : isDue ? "Due Now" : isOverdue ? "Overdue" : "Pending"}
                               </span>
                             </div>
                             <p className="text-slate-500 font-mono text-[11px]">
-                              {new Date(fu.scheduledAt).toLocaleString()}
+                              {fu.scheduledAt ? new Date(fu.scheduledAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : ""}
+                              {fu.callbackTimezone ? ` (${fu.callbackTimezone})` : ""}
                             </p>
-                            {fu.notes && <p className="text-slate-600 mt-1">{fu.notes}</p>}
+                            {fu.callbackReason && (
+                              <p className="text-indigo-700 font-medium text-[11px]">
+                                Reason: {fu.callbackReason}
+                              </p>
+                            )}
+                            {fu.productContext && (
+                              <p className="text-slate-500 text-[10px]">
+                                Product: {fu.productContext}
+                              </p>
+                            )}
+                            {fu.notes && fu.notes !== fu.callbackReason && (
+                              <p className="text-slate-600 mt-1 text-[11px]">{fu.notes}</p>
+                            )}
                           </div>
 
-                          <span className="px-2 py-1 rounded bg-slate-100 text-[10px] font-semibold text-slate-600 uppercase">
-                            {fu.priority || "Medium"}
-                          </span>
+                          <div className="flex flex-col items-end space-y-2 shrink-0">
+                            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-600 uppercase">
+                              {fu.priority || "Medium"}
+                            </span>
+                            {!isCompleted && (
+                              <div className="flex items-center space-x-1.5 pt-1">
+                                {lead?.phone && (
+                                  <a
+                                    href={`tel:${lead.phone}`}
+                                    className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                                    title="Call Customer"
+                                  >
+                                    <Phone className="w-3.5 h-3.5" />
+                                  </a>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleCompleteFollowUp(fu._id || fu.id)}
+                                  className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 text-[11px] font-semibold transition-colors cursor-pointer"
+                                  title="Mark as Completed"
+                                >
+                                  <Check className="w-3 h-3" />
+                                  <span>Done</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )
                     })}

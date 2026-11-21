@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import { apiClient } from "@/lib/api"
+import { buildCustomDomainUrl } from "@/lib/domain"
 import { toast } from "react-hot-toast"
 import {
   Building2,
@@ -994,43 +995,72 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                       {account.adminEmail}
                     </td>
 
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
                       {account.customDomain ? (
                         <div className="flex flex-col space-y-1">
-                          <div className="flex items-center space-x-1">
-                            <Globe className="w-3 h-3 text-indigo-600 shrink-0" />
-                            <span className="font-mono font-medium text-slate-800 text-[11px] truncate max-w-[130px]">
-                              {account.customDomain}
-                            </span>
-                          </div>
-                          {account.domainStatus === "verified" || account.domainStatus === "active" ? (
-                            <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 w-fit">
-                              <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
-                              <span>Verified</span>
-                            </span>
-                          ) : (
-                            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 w-fit">
-                                Pending DNS
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleVerifyDomain(account.id || account.accountId)}
-                                disabled={verifyingDomainId === (account.id || account.accountId)}
-                                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors disabled:opacity-50 cursor-pointer"
-                                title="Re-verify DNS CNAME / A-Record resolution"
-                              >
-                                <RefreshCw className={`w-2.5 h-2.5 ${verifyingDomainId === (account.id || account.accountId) ? "animate-spin" : ""}`} />
-                                <span>Verify DNS</span>
-                              </button>
-                            </div>
-                          )}
+                          {(() => {
+                            const domainUrl = buildCustomDomainUrl(account.customDomain)
+                            const isDomainVerified = account.domainStatus === "verified" || account.domainStatus === "active"
+                            return (
+                              <>
+                                <div className="flex items-center space-x-1">
+                                  {domainUrl ? (
+                                    <a
+                                      href={domainUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="group/domain inline-flex items-center space-x-1 font-mono font-medium text-indigo-600 hover:text-indigo-800 hover:underline text-[11px] truncate max-w-[150px] transition-colors"
+                                      title={`Open ${domainUrl} in new tab`}
+                                    >
+                                      <Globe className="w-3 h-3 text-indigo-600 shrink-0 group-hover/domain:scale-110 transition-transform" />
+                                      <span className="truncate">{account.customDomain}</span>
+                                      <ExternalLink className="w-2.5 h-2.5 text-slate-400 group-hover/domain:text-indigo-600 shrink-0" />
+                                    </a>
+                                  ) : (
+                                    <div className="flex items-center space-x-1">
+                                      <Globe className="w-3 h-3 text-slate-400 shrink-0" />
+                                      <span className="font-mono font-medium text-slate-800 text-[11px] truncate max-w-[130px]">
+                                        {account.customDomain}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                                {isDomainVerified ? (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 w-fit">
+                                    <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
+                                    <span>Verified</span>
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 w-fit">
+                                      Pending DNS
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleVerifyDomain(account.id || account.accountId)
+                                      }}
+                                      disabled={verifyingDomainId === (account.id || account.accountId)}
+                                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors disabled:opacity-50 cursor-pointer"
+                                      title="Re-verify DNS CNAME / A-Record resolution"
+                                    >
+                                      <RefreshCw className={`w-2.5 h-2.5 ${verifyingDomainId === (account.id || account.accountId) ? "animate-spin" : ""}`} />
+                                      <span>Verify DNS</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </>
+                            )
+                          })()}
                         </div>
                       ) : (
                         <div className="flex items-center space-x-1.5">
                           <Link
                             href={`/portal/login?tenant=${account.accountId}`}
                             target="_blank"
+                            onClick={(e) => e.stopPropagation()}
                             className="inline-flex items-center space-x-1 text-[11px] font-mono text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200/80 transition-colors"
                             title="Open Client Portal in New Tab"
                           >
@@ -1814,9 +1844,30 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                 <div className="grid grid-cols-2 gap-3 text-xs pt-1">
                   <div>
                     <span className="text-slate-400 block text-[11px]">Custom Domain</span>
-                    <span className="font-mono text-slate-800">
-                      {selectedAccount.customDomain || "Not configured"}
-                    </span>
+                    {selectedAccount.customDomain ? (
+                      (() => {
+                        const domainUrl = buildCustomDomainUrl(selectedAccount.customDomain)
+                        return domainUrl ? (
+                          <a
+                            href={domainUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="group inline-flex items-center space-x-1.5 font-mono text-indigo-600 hover:text-indigo-800 hover:underline font-medium text-xs transition-colors mt-0.5"
+                            title={`Open ${domainUrl} in new tab`}
+                          >
+                            <Globe className="w-3.5 h-3.5 text-indigo-600 shrink-0 group-hover:scale-110 transition-transform" />
+                            <span>{selectedAccount.customDomain}</span>
+                            <ExternalLink className="w-3 h-3 text-slate-400 group-hover:text-indigo-600 shrink-0" />
+                          </a>
+                        ) : (
+                          <span className="font-mono text-slate-800 mt-0.5 block">
+                            {selectedAccount.customDomain}
+                          </span>
+                        )
+                      })()
+                    ) : (
+                      <span className="text-slate-400 italic text-xs mt-0.5 block">Not configured</span>
+                    )}
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">Domain Status</span>

@@ -52,15 +52,13 @@ const bootstrapSuperAdmin = async () => {
     const superAdminExists = await User.findOne({ role: "super_admin" }).select("+password")
 
     // 5. Inspect and validate environment configuration for Super Admin seeding
-    const configuredPassword = typeof process.env.SUPERADMIN_PASSWORD === "string"
-      ? process.env.SUPERADMIN_PASSWORD.trim()
-      : ""
-    const configuredEmail = typeof process.env.SUPERADMIN_EMAIL === "string"
-      ? process.env.SUPERADMIN_EMAIL.toLowerCase().trim()
-      : ""
-    const configuredName = typeof process.env.SUPERADMIN_NAME === "string"
-      ? process.env.SUPERADMIN_NAME.trim()
-      : ""
+    const rawPassword = process.env.SUPER_ADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD || ""
+    const rawEmail = process.env.SUPER_ADMIN_EMAIL || process.env.SUPERADMIN_EMAIL || ""
+    const rawName = process.env.SUPER_ADMIN_NAME || process.env.SUPERADMIN_NAME || ""
+
+    const configuredPassword = typeof rawPassword === "string" ? rawPassword.trim() : ""
+    const configuredEmail = typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : ""
+    const configuredName = typeof rawName === "string" ? rawName.trim() : ""
 
     // 6. Handle existing Super Admin account state safely
     if (superAdminExists) {
@@ -134,9 +132,18 @@ const bootstrapSuperAdmin = async () => {
 
     // 7. First-time bootstrap or explicit FORCE_RESEED recreation
     if (!superAdminExists) {
-      const email = configuredEmail || "superadmin@leadflow.io"
-      const password = configuredPassword || "SuperAdmin@2026!"
-      const name = configuredName || "LeadFlow Super Admin"
+      if (!configuredEmail || !configuredPassword) {
+        console.warn("⚠️ Super Admin credentials not configured in environment. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD (or SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD). Automatic fallback creation skipped.")
+        return {
+          success: false,
+          status: "unconfigured",
+          error: "SUPERADMIN_EMAIL and SUPERADMIN_PASSWORD environment variables are required.",
+        }
+      }
+
+      const email = configuredEmail
+      const password = configuredPassword
+      const name = configuredName || "Super Admin"
 
       const superAdmin = new User({
         name,

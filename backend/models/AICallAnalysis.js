@@ -215,6 +215,48 @@ const aiCallAnalysisSchema = new mongoose.Schema(
         trim: true,
       },
     ],
+    // Structured Automatic Callback Scheduling
+    callbackRequested: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    requestedCallbackDateTime: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    callbackTimezone: {
+      type: String,
+      default: "Asia/Kolkata",
+      trim: true,
+    },
+    callbackTimePrecision: {
+      type: String,
+      enum: ["EXACT", "APPROXIMATE", "AMBIGUOUS"],
+      default: "EXACT",
+    },
+    callbackReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    callbackLanguage: {
+      type: String,
+      default: "English",
+      trim: true,
+    },
+    voiceConfirmation: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    scheduledFollowUpId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FollowUp",
+      default: null,
+      index: true,
+    },
     topicMatches: [matchedTopicSchema],
     provider: {
       type: String,

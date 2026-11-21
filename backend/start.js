@@ -443,6 +443,8 @@ const startServer = async () => {
 
     if (process.env.DISABLE_EMBEDDED_WORKER !== "true") {
       const worker = require("./worker")
+      const scheduler = require("./services/schedulerService")
+      scheduler.startScheduler()
       worker.processNext()
       console.log("✅ Background queue worker polling loop active.")
     }
