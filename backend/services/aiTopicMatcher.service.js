@@ -15,15 +15,15 @@ const { sanitizeErrorMessage } = require("./aiProvider.service")
  */
 
 /**
- * Normalizes text to lowercase alphanumeric tokens.
+ * Normalizes text to lowercase Unicode-safe alphanumeric tokens (supports English, Hindi Devanagari, numbers).
  */
 function tokenize(text) {
   if (!text || typeof text !== "string") return []
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 2)
+    .filter((w) => w.length > 1)
 }
 
 /**

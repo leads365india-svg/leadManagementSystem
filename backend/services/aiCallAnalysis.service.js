@@ -92,33 +92,115 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     productInterests = []
     nextSteps = []
     followUpRecommendations = []
-  } else if (text.includes("hospital management") || text.includes("hospital") || text.includes("hms") || text.includes("hospital software") || text.includes("quotation") || text.includes("demo") || text.includes("pricing") || text.includes("buy")) {
-    const isHMS = text.includes("hospital management") || text.includes("hms") || text.includes("hospital software") || text.includes("15 se 20 bed") || (text.includes("hospital") && (text.includes("system") || text.includes("software") || text.includes("bed")))
-    const hasAgreedCallback = text.includes("11 baje") || text.includes("kal 11") || text.includes("call karunga") || text.includes("call karta hu") || text.includes("wapis call")
+  } else if (
+    text.includes("pricing") ||
+    text.includes("quotation") ||
+    text.includes("demo") ||
+    text.includes("buy") ||
+    text.includes("chahiye") ||
+    text.includes("software") ||
+    text.includes("system") ||
+    text.includes("erp") ||
+    text.includes("crm") ||
+    text.includes("solution") ||
+    topicMatches.length > 0
+  ) {
+    const hasAgreedCallback =
+      text.includes("11 baje") ||
+      text.includes("kal 11") ||
+      text.includes("call karunga") ||
+      text.includes("call karta hu") ||
+      text.includes("wapis call") ||
+      text.includes("call back") ||
+      text.includes("call me")
     callOutcome = hasAgreedCallback ? "CALL_BACK_LATER" : "INTERESTED"
 
-    if (isHMS) {
-      summary = "The caller contacted Medical 365 to inquire about a hospital management system for their 15-20 bed hospital with 22-25 staff members. The caller specified the need for complete management software including pharmacy, lab, and OT (operation theater) modules. The company representative agreed to send product details and PDFs, and both parties agreed to reconnect tomorrow at 11:00 AM."
-      customerIntent = "Looking for HMS for a 15-20 bed hospital."
-      customerNeeds = [
-        "Hospital management system for 15-20 beds",
-        "Support for 22-25 staff members",
-        "Pharmacy management module",
-        "Laboratory management module",
-        "OT (Operation Theater) management module"
-      ]
-      productInterests = ["Hospital Management System (HMS)", "Pharmacy Management Module", "Laboratory Management Module", "Operation Theater (OT) Module"]
-      nextSteps = ["Send quotation and product PDF", "Reconnect tomorrow at 11 AM"]
-      followUpRecommendations = ["Send quotation and product PDF promptly.", "Check whether the customer called at 11:00 AM; follow up if they did not."]
-    } else {
-      summary = "Customer inquired about product offerings, pricing, and scheduling a walkthrough."
-      customerIntent = "Inquiring about product specifications, pricing, and features."
-      customerNeeds = ["Pricing clarity", "Feature walkthrough"]
-      productInterests = topicMatches.map((t) => t.topicName).filter((n) => !n.startsWith("http")).slice(0, 3)
-      if (productInterests.length === 0) productInterests.push("Core Software Solutions")
-      nextSteps = ["Send detailed commercial proposal and schedule product walkthrough."]
-      followUpRecommendations = ["Follow up within 24-48 business hours with technical specs."]
+    const company = tenantCatalog?.companyName || "the organization"
+
+    // Extract scale / capacity mentions from transcript (beds, students, users, staff, seats, rooms, etc.)
+    const scaleMatch = text.match(/\b(\d+(?:\s*(?:se|\-|to)\s*\d+)?\s*(?:bed|beds|student|students|user|users|staff|staffs|employee|employees|seat|seats|room|rooms|unit|units|branch|branches))\b/i)
+    const scaleText = scaleMatch ? scaleMatch[1] : ""
+
+    const staffMatch = text.match(/\b(\d+(?:\s*(?:se|\-|to)\s*\d+)?\s*(?:staff|employees?|members?|agents?))\b/i)
+    const staffText = staffMatch && staffMatch[1] !== scaleText ? staffMatch[1] : ""
+
+    // Resolve product interests from topicMatches or tenantCatalog products
+    const interestSet = new Set()
+    for (const tm of topicMatches) {
+      const name = tm.name || tm.topicName
+      if (name && !name.startsWith("http")) interestSet.add(name)
     }
+    if (tenantCatalog?.products) {
+      for (const p of tenantCatalog.products) {
+        if (p.name && text.includes(p.name.toLowerCase())) interestSet.add(p.name)
+      }
+    }
+    // If still empty, check key module terms mentioned in text
+    if (interestSet.size === 0) {
+      const commonModules = [
+        { key: "hospital", title: "Hospital Management Software" },
+        { key: "hms", title: "Hospital Management System (HMS)" },
+        { key: "pharmacy", title: "Pharmacy Management Module" },
+        { key: "lab", title: "Laboratory Management Module" },
+        { key: "ot", title: "Operation Theater (OT) Module" },
+        { key: "bed", title: "Bed Management Module" },
+        { key: "school", title: "School Management ERP" },
+        { key: "attendance", title: "Attendance Management Module" },
+        { key: "fee", title: "Fee Collection System" },
+        { key: "property", title: "Real Estate Property CRM" },
+        { key: "inventory", title: "Inventory Management Module" },
+        { key: "billing", title: "Billing & Invoicing Software" },
+        { key: "gst", title: "GST Accounting Software" },
+      ]
+      for (const m of commonModules) {
+        if (text.includes(m.key)) interestSet.add(m.title)
+      }
+    }
+    if (interestSet.size === 0) {
+      interestSet.add("Core Software Solutions")
+    }
+
+    productInterests = Array.from(interestSet)
+    const primaryInterest = productInterests[0] || "product solutions"
+
+    // Construct customer needs
+    customerNeeds = []
+    if (scaleText) customerNeeds.push(`Support for ${scaleText}`)
+    if (staffText) customerNeeds.push(`Support for ${staffText}`)
+    for (const pi of productInterests.slice(1, 4)) {
+      customerNeeds.push(pi)
+    }
+    if (customerNeeds.length === 0) {
+      customerNeeds = ["Pricing clarity", "Feature walkthrough"]
+    }
+
+    customerIntent = `Inquiring about ${primaryInterest}${scaleText ? ` for a ${scaleText}` : ""}.`
+
+    // Grounded summary construction
+    let builtSummary = `The caller contacted ${company} to inquire about ${primaryInterest}`
+    if (scaleText) builtSummary += ` for their ${scaleText}`
+    if (staffText) builtSummary += ` with ${staffText}`
+    builtSummary += "."
+    const additionalModules = productInterests.slice(1, 4).join(", ")
+    if (additionalModules) {
+      builtSummary += ` The caller specified the need for complete management software including ${additionalModules}.`
+    }
+    if (text.includes("quotation") || text.includes("pdf") || text.includes("details")) {
+      builtSummary += ` The company representative agreed to send product details and PDFs.`
+    }
+    if (hasAgreedCallback) {
+      builtSummary += ` Both parties agreed to reconnect on follow-up.`
+    }
+    summary = builtSummary
+
+    nextSteps = [
+      text.includes("quotation") || text.includes("pdf") ? "Send quotation and product PDF" : "Share detailed commercial proposal",
+      hasAgreedCallback ? "Reconnect at agreed follow-up time" : "Schedule live product walkthrough"
+    ]
+    followUpRecommendations = [
+      "Send quotation and product documentation promptly.",
+      "Follow up on scheduled callback."
+    ]
   } else if (text.includes("call back") || text.includes("later") || text.includes("busy")) {
     callOutcome = "CALL_BACK_LATER"
     summary = "Customer requested a callback at a later time."
@@ -226,14 +308,14 @@ STRICT GROUNDING & PRODUCT-RELEVANCE RULES:
    - Never interpret a company representative's polite reply (e.g., "vacancies full hain, WhatsApp daal do", "send details on WhatsApp", "will let you know") as customer purchase intent or genuine product interest.
 2. PRODUCT RELEVANCE GATE: Compare the call against the Tenant Business & Products context above.
    - Only classify as \`INTERESTED\`, \`FOLLOW_UP_REQUIRED\`, \`CALL_BACK_LATER\`, or \`DEAL_CLOSED\` if a customer is genuinely inquiring about, evaluating, or purchasing the tenant's own approved products/services.
-   - Website URLs (such as https://www.medical365.in/) are web links, NOT product names. Do NOT use website URLs as product interests.
+   - Website URLs (such as https://example.com/ or tenant websites) are web links, NOT product names. Do NOT use website URLs as product interests.
    - If the call is an unrelated pitch (e.g., recruitment agency, hiring inquiry, vendor sales pitch, spam, wrong number), or if the prospect explicitly rejects or has no need, you MUST classify \`callOutcome\` as \`NOT_INTERESTED\` (or \`WRONG_NUMBER\` if wrong party).
-   - Under \`productInterests\`, list ONLY the tenant's approved products/modules (e.g., HMS, OPD, IPD, Billing, Pharmacy, EMR). NEVER put 'Placement and hiring services' or any third-party service under \`productInterests\`. Leave it empty \`[]\` for irrelevant calls.
+   - Under \`productInterests\`, list ONLY the tenant's approved products/modules from the Tenant Business & Products context above. NEVER put 'Placement and hiring services' or any third-party service under \`productInterests\`. Leave it empty \`[]\` for irrelevant calls.
 3. Label sentiment accurately as POSITIVE, NEUTRAL, NEGATIVE, or MIXED based on actual conversation tone. A polite or neutral caller pitching recruitment is still \`NOT_INTERESTED\` in terms of callOutcome.
 4. Output MUST be valid JSON adhering strictly to this schema:
 {
   "summary": "Executive summary of the call (2-4 sentences). If an external agency called offering recruitment or services, accurately summarize that the caller offered services and the company had no open vacancies.",
-  "customerIntent": "Primary purpose of inquiry (e.g., 'Offering recruitment services (unrelated)' or 'Inquiring about Hospital Management Software demo')",
+  "customerIntent": "Primary purpose of inquiry (e.g., 'Offering recruitment services (unrelated)' or 'Inquiring about product demo/pricing')",
   "customerNeeds": ["Customer requirement 1", ...],
   "productInterests": ["Approved tenant product or module mentioned", ...],
   "objections": ["Expressed concern or objection", ...],
@@ -411,7 +493,7 @@ async function processCallAnalysis({
 
   if (!rawResult && allowFallback) {
     console.log("ℹ️ Using deterministic fallback call analysis...")
-    rawResult = generateDeterministicCallAnalysis({ transcript, call, topicMatches })
+    rawResult = generateDeterministicCallAnalysis({ transcript, call, topicMatches, tenantCatalog: resolvedBusinessContext })
   }
 
   if (!rawResult) {

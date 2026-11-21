@@ -1,20 +1,24 @@
 const mongoose = require("mongoose")
-const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
-const BusinessProduct = require("../models/BusinessProduct")
-const { AIKeywordTopic } = require("../models/AIKeywordTopic")
-const { AIKnowledgeSource } = require("../models/AIKnowledgeSource")
+const {
+  getTenantProductKnowledge,
+  matchTranscriptAgainstKnowledge,
+  isUrlOrDomain,
+  sanitizeTerm,
+  formatCanonicalInterestTitle,
+} = require("./tenantProductKnowledge.service")
 const { extractCallbackIntent } = require("../utils/callbackTimeExtractor")
 
 /**
  * Strict Product-Relevance Gate for AI Call Intelligence and Automatic CRM Lead Qualification
  * 
- * Enforces deterministic qualification boundaries:
- * 1. Checks customer conversation against tenant's approved products and topics.
+ * Enforces universal multi-tenant qualification boundaries:
+ * 1. Checks customer conversation dynamically against the authenticated tenant's approved products and topics.
  * 2. Distinguishes Agent pitch vs Customer intent with strict speaker attribution.
  * 3. Identifies out-of-scope calls (recruitment agencies, job seekers, generic marketing, vendor pitches, spam).
  * 4. Treats polite deflections (e.g., 'WhatsApp daal do' when rejecting) as non-qualifying.
- * 5. URL and domain matches (e.g., https://www.medical365.in/) are strictly excluded from product evidence.
- * 6. Enforces Deterministic Rules A, B, C, D, E after AI analysis.
+ * 5. URL and domain matches (e.g., https://example.com/) are strictly excluded from product evidence.
+ * 6. Domain-agnostic buying-intent and callback commitment recognition.
+ * 7. Enforces Deterministic Rules A, B, C, D, E after AI analysis.
  */
 
 // Out-of-scope intent patterns (Regexes for English, Hindi, Hinglish)
@@ -25,10 +29,10 @@ const OUT_OF_SCOPE_PATTERNS = [
     regex: /\b(placement\s+agency|hiring\s+ke\s+regarding|hiring\s+chal\s+rahi|recruitment\s+agency|consultancy\s+se|job\s+vacancy|vacancies|job\s+chahiye|resume|cv\s+share|staffing\s+solution|candidates?\s+provide|interview|open\s+positions?|job\s+opening|naukri)\b/i,
     description: "Recruitment/placement agency or hiring inquiry",
   },
-  // Unrelated vendor services (SEO, digital marketing, loans, real estate, insurance, office supplies)
+  // Unrelated vendor services (SEO, digital marketing, loans, real estate if not real estate tenant, insurance, office supplies)
   {
     type: "UNRELATED_VENDOR_SALES",
-    regex: /\b(personal\s+loan|business\s+loan|credit\s+card|insurance\s+policy|seo\s+services?|digital\s+marketing\s+agency|website\s+development\s+services?|app\s+development\s+agency|office\s+space\s+for\s+rent|commercial\s+property|interior\s+design\s+vendor|printing\s+services?)\b/i,
+    regex: /\b(personal\s+loan|business\s+loan|credit\s+card|insurance\s+policy|seo\s+services?|digital\s+marketing\s+agency|website\s+development\s+services?|app\s+development\s+agency|office\s+space\s+for\s+rent|commercial\s+property\s+sale|interior\s+design\s+vendor|printing\s+services?)\b/i,
     description: "Unrelated vendor sales pitch",
   },
   // Wrong number / personal
@@ -50,296 +54,54 @@ const POLITE_DEFLECTION_PATTERNS = [
   /\b(whatsapp\s+daal\s+do|whatsapp\s+kar\s+do|whatsapp\s+par\s+bhej\s+do|send\s+on\s+whatsapp|share\s+on\s+whatsapp|mail\s+kar\s+do|email\s+bhej\s+do|baad\s+me\s+dekhenge|hoga\s+to\s+batayenge|dekhte\s+hain)\b/i,
 ]
 
-// Buying intent / customer inquiry patterns
+// Universal Domain-Agnostic Buying Intent & Customer Commercial Inquiry Patterns
+// (Entity matching is handled dynamically via tenant product catalog; these regexes evaluate commercial intent)
 const BUYING_INTENT_PATTERNS = [
-  /\b(pricing|price|quotation|cost|rate|demo|walkthrough|free\s+trial|features?|implementation|buy|purchase|khareedna|lagwana\s+hai|software\s+chahiye|hms\s+chahiye|system\s+chahiye|hospital\s+software|billing\s+software|opd\s+management|hospital\s+hai|bed\s+ka\s+hospital|management\s+system\s+chahiye|module\s+chahiye|pura\s+chahiye|ot\s+tak\s+chahiye)\b/i,
-  /(?:हॉस्पिटल|अस्पताल).*?(?:मैनेजमेंट|सिस्टम|सॉफ्टवेयर|चाहिए|बेड)/i,
-  /(?:मैनेजमेंट\s*सिस्टम|सॉफ्टवेयर|सिस्टम)\s*चाहिए/i,
-  /\d+\s*से\s*\d+\s*बेड/i,
-  /(?:फार्मेसी|लैब|ओटी|ot).*?चाहिए/i,
-  /कोटेशन|डेमो|प्राइसिंग|फीचर्स/i,
-  /हॉस्पिटल/i,
+  // Pricing, quote, rate, cost inquiries
+  /\b(pricing|price|quotation|quote|cost|rate|commercials?|charges?|how\s+much|kitna\s+lagega|kitne\s+ka\s+hai|kya\s+charge\s+hai|kya\s+rate\s+hai|rate\s+batao|quotation\s+bhej(?:o|na)?|proposal\s+bhej(?:o|na)?|rate\s+vagaira|quotation\s+vagaira|estimate)\b/i,
+  /(?:कोटेशन|प्राइसिंग|प्राइस|रेट|खर्च|लागत|कितना\s*लगेगा|चार्ज)/u,
+
+  // Demo, trial, walkthrough, sample, live presentation inquiries
+  /\b(demo|walkthrough|trial|free\s+trial|presentation|sample|demo\s+chahiye|demo\s+dikhao|demo\s+karwa(?:o|na)|demo\s+dekhna)\b/i,
+  /(?:डेमो|ट्रायल|सैम्पल)/u,
+
+  // Commercial desire / need / purchase / implementation / installation / setup (excluding negative "nahi chahiye")
+  /(?<!(?:nahi|na|mat|bilkul\s+nahi)\s+)\b(chahiye|chahiye\s+tha|chahiye\s+thi|lagwana\s+hai|khareedna|kharidna|lena\s+hai|buy|purchase|implement(?:ation)?|order|subscribe|subscription|setup\s+karna|install\s+karwana|zaroorat\s+hai|requirement|looking\s+for|interested\s+in)\b/i,
+  /(?<!(?:नहीं|ना|मत)\s*)(?:चाहिए|खरीदना|लगवाना|लेना\s*है|ज़रूरत|रिक्वायरमेंट)/u,
+
+  // Specification, features, modules, capabilities, brochure, catalogue, documentation inquiries
+  /\b(features?|specifications?|modules?|capabilities?|brochure|catalogue|catalog|pdf(?:\s+vagaira)?|details\s+provide|details\s+bhejo|details\s+chahiye|information\s+chahiye)\b/i,
+  /(?:फीचर्स|डिटेल्स|जानकारी|मॉड्यूल)/u,
+
+  // Capacity / Scale inquiries across industries (beds, students, users, staff, employees, seats, rooms, units, branches)
+  /\b\d+\s*(?:se|\-|to)\s*\d+\s*(?:bed|beds|student|students|user|users|staff|staffs|employee|employees|seat|seats|room|rooms|unit|units|branch|branches|license|licenses)\b/i,
+  /\b\d+\s*(?:bed|beds|student|students|user|users|staff|staffs|employee|employees|seat|seats|room|rooms|unit|units|branch|branches|license|licenses)\b/i,
+  /\d+\s*से\s*\d+\s*(?:बेड|छात्र|यूजर|स्टाफ|कर्मचारी|सीट|कमरे|यूनिट)/u,
+  /\d+\s*(?:बेड|छात्र|यूजर|स्टाफ|कर्मचारी|सीट|कमरे|यूनिट)/u,
 ]
 
 // Follow-up request patterns
 const FOLLOW_UP_REQUEST_PATTERNS = [
   /\b(call\s+back\s+later|call\s+me\s+tomorrow|kal\s+call\s+karna|shaam\s+ko\s+call|free\s+hoke\s+call|busy\s+hu|call\s+after|proposal\s+bhej|connect\s+later)\b/i,
-  /(?:कल|परसों|आज|वापस)\s*.*?कॉल/i,
-  /कॉल\s*(?:करता\s*हूं|करूंगा|करूंगी|करना)/i,
-  /बात\s*करते\s*हैं/i,
+  /(?:कल|परसों|आज|वापस)\s*.*?कॉल/u,
+  /कॉल\s*(?:करता\s*हूं|करूंगा|करूंगी|करना)/u,
+  /बात\s*करते\s*हैं/u,
 ]
 
 /**
- * Strips URLs, domain names, protocol prefixes, and generic non-product words.
- */
-function sanitizeTerm(term) {
-  if (!term || typeof term !== "string") return ""
-  return term
-    .replace(/^https?:\/\//i, "")
-    .replace(/^www\./i, "")
-    .replace(/\/.*$/, "")
-    .replace(/[^a-zA-Z0-9\s]/g, " ")
-    .trim()
-}
-
-/**
- * Checks if a term is purely a URL or domain name.
- */
-function isUrlOrDomain(term) {
-  if (!term || typeof term !== "string") return false
-  return (
-    term.startsWith("http://") ||
-    term.startsWith("https://") ||
-    term.startsWith("www.") ||
-    /\.[a-z]{2,}(\/.*)?$/i.test(term)
-  )
-}
-
-/**
- * Compiles tenant approved product catalog and knowledge dictionary.
+ * Loads dynamic tenant approved product catalog and knowledge dictionary.
+ * Delegates to Universal Multi-Tenant Product Knowledge Service.
  */
 async function loadTenantApprovedCatalog(tenantId) {
-  if (!tenantId) {
-    return {
-      companyName: "",
-      industry: "",
-      approvedProducts: [],
-      approvedKeywords: [],
-      approvedModules: [],
-    }
-  }
-
-  const cleanTenantId = String(tenantId).trim()
-
-  const [profile, products, approvedTopics, knowledgeSources] = await Promise.all([
-    TenantBusinessProfile.findOne({ tenantId: cleanTenantId })
-      .setOptions({ skipTenantFilter: true })
-      .lean()
-      .catch(() => null),
-    BusinessProduct.find({ tenantId: cleanTenantId, status: "active", isArchived: false })
-      .setOptions({ skipTenantFilter: true })
-      .lean()
-      .catch(() => []),
-    AIKeywordTopic.find({ tenantId: cleanTenantId, status: "APPROVED" })
-      .setOptions({ skipTenantFilter: true })
-      .lean()
-      .catch(() => []),
-    AIKnowledgeSource.find({ tenantId: cleanTenantId, status: "COMPLETED" })
-      .setOptions({ skipTenantFilter: true })
-      .lean()
-      .catch(() => []),
-  ])
-
-  const approvedProducts = []
-  const approvedKeywords = new Set()
-  const approvedModules = new Set()
-
-  // Helper to add keyword and natural language system/software variants
-  const addKeywordWithVariants = (kw) => {
-    if (!kw || isUrlOrDomain(kw)) return
-    const clean = kw.toLowerCase().trim()
-    if (clean.length < 2) return
-    approvedKeywords.add(clean)
-
-    // Expand natural language equivalents: software <-> system <-> solution <-> erp
-    if (clean.includes("software")) {
-      approvedKeywords.add(clean.replace(/\bsoftware\b/g, "system").trim())
-      approvedKeywords.add(clean.replace(/\bsoftware\b/g, "erp").trim())
-      approvedKeywords.add(clean.replace(/\bsoftware\b/g, "solution").trim())
-    }
-    if (clean.includes("system")) {
-      approvedKeywords.add(clean.replace(/\bsystem\b/g, "software").trim())
-      approvedKeywords.add(clean.replace(/\bsystem\b/g, "erp").trim())
-      approvedKeywords.add(clean.replace(/\bsystem\b/g, "solution").trim())
-    }
-    const baseWithoutType = clean.replace(/\b(software|system|solution|erp)\b/g, "").replace(/\s+/g, " ").trim()
-    if (baseWithoutType.length >= 3 && !["hospital", "clinic", "medical", "health", "doctor", "business", "company", "enterprise"].includes(baseWithoutType)) {
-      approvedKeywords.add(baseWithoutType)
-    }
-  }
-
-  // 0. From TenantBusinessProfile (Business name and company aliases)
-  if (profile?.businessName && !isUrlOrDomain(profile.businessName)) {
-    const rawBn = profile.businessName.toLowerCase().trim()
-    addKeywordWithVariants(rawBn)
-    approvedKeywords.add(rawBn.replace(/\s+/g, ""))
-    approvedKeywords.add(rawBn.replace(/\s+/g, "-"))
-  }
-  if (profile?.companyName && !isUrlOrDomain(profile.companyName)) {
-    const rawCn = profile.companyName.toLowerCase().trim()
-    addKeywordWithVariants(rawCn)
-    approvedKeywords.add(rawCn.replace(/\s+/g, ""))
-    approvedKeywords.add(rawCn.replace(/\s+/g, "-"))
-  }
-
-  // 1. From BusinessProduct
-  for (const p of products) {
-    if (p.name && !isUrlOrDomain(p.name)) {
-      approvedProducts.push({
-        id: p._id,
-        name: p.name,
-        category: p.category || "",
-        description: p.description || "",
-      })
-      addKeywordWithVariants(p.name)
-      approvedKeywords.add(p.name.toLowerCase().trim().replace(/\s+/g, ""))
-    }
-    if (Array.isArray(p.features)) {
-      for (const feat of p.features) {
-        if (feat && !isUrlOrDomain(feat)) {
-          addKeywordWithVariants(feat)
-        }
-      }
-    }
-  }
-
-  // 2. From Approved AIKeywordTopics
-  for (const t of approvedTopics) {
-    if (t.name && !isUrlOrDomain(t.name)) {
-      addKeywordWithVariants(t.name)
-    }
-
-    // primaryKeywords
-    if (Array.isArray(t.primaryKeywords)) {
-      for (const kw of t.primaryKeywords) {
-        addKeywordWithVariants(kw)
-      }
-    }
-
-    // synonyms
-    if (Array.isArray(t.synonyms)) {
-      for (const syn of t.synonyms) {
-        addKeywordWithVariants(syn)
-      }
-    }
-
-    // productTerminology
-    if (Array.isArray(t.productTerminology)) {
-      for (const pt of t.productTerminology) {
-        addKeywordWithVariants(pt)
-      }
-    }
-  }
-
-  // 3. Healthcare / Hospital ERP Standard modules if tenant is Healthcare / HMS
-  const industry = (profile?.industry || profile?.customIndustry || "").toLowerCase()
-  const businessName = (profile?.businessName || profile?.companyName || "").toLowerCase()
-  const profileDesc = (profile?.description || "").toLowerCase()
-  const isHealthcare =
-    industry.includes("health") ||
-    industry.includes("hospital") ||
-    industry.includes("medical") ||
-    businessName.includes("medical") ||
-    businessName.includes("health") ||
-    businessName.includes("hospital") ||
-    profileDesc.includes("hospital") ||
-    profileDesc.includes("medical") ||
-    profileDesc.includes("clinic")
-
-  if (isHealthcare) {
-    const healthcareModules = [
-      "medical365",
-      "medical 365",
-      "hms",
-      "hms software",
-      "hms system",
-      "hospital management system",
-      "hospital management software",
-      "hospital management",
-      "hospital software",
-      "hospital software for a hospital",
-      "hospital erp",
-      "hospital erp software",
-      "hospital automation",
-      "clinic management",
-      "clinic software",
-      "pharmacy management",
-      "pharmacy module",
-      "pharmacy inventory",
-      "pharmacy stock",
-      "pharmacy",
-      "laboratory management",
-      "lab management",
-      "laboratory module",
-      "lab module",
-      "pathology lab",
-      "pathology",
-      "radiology",
-      "ot management",
-      "ot module",
-      "operation theater management",
-      "operation theatre management",
-      "operation theater",
-      "operation theatre",
-      "ot",
-      "bed management",
-      "bed hospital",
-      "hospital bed",
-      "hospital beds",
-      "15 se 20 bed",
-      "opd",
-      "ipd",
-      "uhid",
-      "emr",
-      "ehr",
-      "lis",
-      "ris",
-      "doctor scheduling",
-      "patient registration",
-      "hospital billing",
-      "discharge summary",
-      "abdm",
-      "ayushman bharat digital mission",
-    ]
-    for (const mod of healthcareModules) {
-      approvedKeywords.add(mod)
-      approvedModules.add(mod)
-    }
-
-    const devanagariHealthcare = [
-      "हॉस्पिटल मैनेजमेंट सिस्टम",
-      "हॉस्पिटल मैनेजमेंट सॉफ्टवेयर",
-      "हॉस्पिटल मैनेजमेंट",
-      "15 से 20 बेड",
-      "बेड का हॉस्पिटल",
-      "फार्मेसी मैनेजमेंट",
-      "फार्मेसी",
-      "लैब मैनेजमेंट",
-      "लैब",
-      "ओटी मैनेजमेंट",
-      "ओटी",
-      "मेडिकल 365",
-      "मेडिकल",
-      "एचएमएस",
-    ]
-    for (const d of devanagariHealthcare) {
-      approvedKeywords.add(d)
-      approvedModules.add(d)
-    }
-  }
-
-  // Fallback baseline for generic CRM / unconfigured tenants so legitimate customer inquiries are recognized
-  if (approvedKeywords.size === 0) {
-    const defaultBaseline = [
-      "software",
-      "crm",
-      "solution",
-      "services",
-      "pricing",
-      "quotation",
-      "demo",
-      "system",
-    ]
-    for (const b of defaultBaseline) approvedKeywords.add(b)
-  }
-
+  const knowledge = await getTenantProductKnowledge(tenantId)
   return {
-    companyName: profile?.businessName || profile?.companyName || "",
-    industry: profile?.industry || profile?.customIndustry || "",
-    description: profile?.description || "",
-    approvedProducts,
-    approvedKeywords: Array.from(approvedKeywords),
-    approvedModules: Array.from(approvedModules),
+    companyName: knowledge.companyName,
+    industry: knowledge.industry,
+    description: knowledge.description,
+    approvedProducts: knowledge.products,
+    approvedKeywords: knowledge.approvedKeywords,
+    approvedModules: knowledge.moduleCatalog.map((m) => m.canonicalName),
+    knowledge,
   }
 }
 
@@ -363,7 +125,7 @@ async function evaluateProductRelevanceAndGate({
   // Check Rule E: Insufficient or Unclear Recording
   const nonGreetingWords = transcriptText
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter((w) => w.length > 1 && !["hello", "hi", "haan", "ji", "yes", "okay", "ok", "sir", "namaste", "pranam"].includes(w))
 
@@ -390,8 +152,9 @@ async function evaluateProductRelevanceAndGate({
     }
   }
 
-  // Load tenant approved catalog
+  // Load tenant approved catalog & knowledge dynamically
   const catalog = catalogOverride || (await loadTenantApprovedCatalog(effectiveTenantId))
+  const knowledge = catalog.knowledge || (await getTenantProductKnowledge(effectiveTenantId))
 
   const lowerText = transcriptText.toLowerCase()
 
@@ -405,39 +168,20 @@ async function evaluateProductRelevanceAndGate({
   }
 
   // 2. Strict Speaker Attribution: Identify who pitched and who needed what
-  // Examine customer statements vs agent statements
   const customerSegments = segments.filter((s) => s.speaker === "Customer")
   const agentSegments = segments.filter((s) => s.speaker === "Agent")
 
   const customerText = customerSegments.map((s) => s.text || "").join(" ").toLowerCase()
   const agentText = agentSegments.map((s) => s.text || "").join(" ").toLowerCase()
 
-  // If inbound call, caller is the Customer segment in standard telephony, or Agent if labeled as such
-  // Let's check both sides for who introduced recruitment / vendor pitches
   let callerIsPitchingOutOfScope = false
   if (detectedOutOfScope) {
-    // If the pitch is coming from the caller (e.g. "Bado AI se baat kar raha hu... placement agency... hiring")
     callerIsPitchingOutOfScope = true
   }
 
-  // 3. Check for genuine customer interest in Tenant Approved Products
-  const genuineApprovedMatches = []
-  for (const kw of catalog.approvedKeywords) {
-    if (!kw || kw.length < 2) continue
-    const lowerKw = kw.toLowerCase()
-    let matched = false
-    if (/^[a-z0-9\s_-]+$/i.test(kw)) {
-      const escaped = lowerKw.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
-      const kwRegex = new RegExp(`(?:^|[^a-z0-9])${escaped}(?=[^a-z0-9]|$)`, "i")
-      matched = kwRegex.test(lowerText)
-    } else {
-      matched = lowerText.includes(lowerKw)
-    }
-
-    if (matched && !isUrlOrDomain(kw)) {
-      genuineApprovedMatches.push(kw)
-    }
-  }
+  // 3. Dynamic Semantic Matching against Tenant's Loaded Product Knowledge
+  const matchedKnowledgeResult = matchTranscriptAgainstKnowledge(transcriptText, knowledge)
+  const genuineApprovedMatches = matchedKnowledgeResult.matchedKeywords
 
   // Check if customer statements specifically show buying intent or product inquiry
   const referenceTimestamp = call?.startTime || call?.startedAt || call?.createdAt || new Date()
@@ -461,26 +205,27 @@ async function evaluateProductRelevanceAndGate({
     isProductRelevant = false
     productRelevanceScore = 0.0
   } else if (genuineApprovedMatches.length > 0) {
-    // Verified approved product keyword is present
+    // Verified approved product keyword is present for this tenant
     if (hasExplicitRejection && !hasBuyingIntent) {
       // Product mentioned, but explicitly rejected
       isProductRelevant = true
       productRelevanceScore = 0.40
     } else if (hasBuyingIntent || hasFollowUpRequest) {
       isProductRelevant = true
+      // Relevance score scales with verified match breadth up to 0.95
       productRelevanceScore = Math.min(0.70 + genuineApprovedMatches.length * 0.05, 0.95)
     } else {
-      // Casual mention without buying intent or product inquiry (e.g. general conversation mentioning hospital)
+      // Casual mention without buying intent or product inquiry
       isProductRelevant = false
       productRelevanceScore = 0.05
     }
   } else {
-    // Zero approved product relevance
+    // Zero approved product relevance for this tenant
     isProductRelevant = false
     productRelevanceScore = 0.05 // Below 10%
   }
 
-  // 5. Apply Deterministic Qualification Rules (Phases 4 & 5)
+  // 5. Apply Deterministic Qualification Rules
   let qualificationStatus = "DISQUALIFIED"
   let qualificationReason = "OUT_OF_SCOPE_NON_PRODUCT_CALL"
   let callOutcome = "NOT_INTERESTED"
@@ -499,8 +244,8 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
-  } else if (isProductRelevant && hasExplicitRejection && !hasBuyingIntent) {
-    // RULE D: PRODUCT RELEVANT BUT CUSTOMER NOT INTERESTED
+  } else if (isProductRelevant && hasExplicitRejection) {
+    // RULE D: PRODUCT RELEVANT BUT CUSTOMER NOT INTERESTED (Explicit Rejection)
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = "EXPLICIT_REJECTION"
     callOutcome = "NOT_INTERESTED"
@@ -543,7 +288,7 @@ async function evaluateProductRelevanceAndGate({
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
   } else if (!isProductRelevant) {
-    // Out of scope / non-product call
+    // Out of scope / non-product call for this tenant
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = "OUT_OF_SCOPE_NON_PRODUCT_CALL"
     callOutcome = "NOT_INTERESTED"
@@ -562,12 +307,11 @@ async function evaluateProductRelevanceAndGate({
     crmLeadAction = "DO_NOT_UPDATE"
   }
 
-  // 6. Filter Product Interests to ONLY contain approved products/modules
+  // 6. Dynamic Product Interest Extraction from Tenant Catalogue
   let filteredProductInterests = []
   if (Array.isArray(rawAnalysis.productInterests) && rawAnalysis.productInterests.length > 0) {
     filteredProductInterests = rawAnalysis.productInterests.filter((pi) => {
       const clean = (pi || "").toLowerCase().trim()
-      // Exclude recruitment, placement, vendor services, URLs
       if (
         clean.includes("placement") ||
         clean.includes("hiring") ||
@@ -577,54 +321,27 @@ async function evaluateProductRelevanceAndGate({
       ) {
         return false
       }
-      // Must match an approved catalog term
       return catalog.approvedKeywords.some((ak) => clean.includes(ak) || ak.includes(clean))
     })
   }
 
-  // If filteredProductInterests is still empty, populate from matched genuine approved terms
-  if (filteredProductInterests.length === 0 && genuineApprovedMatches.length > 0) {
-    const candidateInterests = new Set()
-    for (const m of genuineApprovedMatches) {
-      if (["hms", "hospital management system", "hospital management software", "hospital software", "हॉस्पिटल मैनेजमेंट सिस्टम", "हॉस्पिटल"].includes(m)) {
-        candidateInterests.add("Hospital Management System (HMS)")
-      } else if (m.includes("pharmacy") || m.includes("फार्मेसी")) {
-        candidateInterests.add("Pharmacy Management Module")
-      } else if (m.includes("lab") || m.includes("pathology") || m.includes("lis") || m.includes("लैब")) {
-        candidateInterests.add("Laboratory Management Module")
-      } else if (m.includes("ot") || m.includes("theater") || m.includes("theatre") || m.includes("ओटी")) {
-        candidateInterests.add("Operation Theater (OT) Module")
-      } else if (m.includes("bed") || m.includes("बेड")) {
-        candidateInterests.add("Bed Management Module")
-      } else if (m.includes("medical365") || m.includes("medical 365") || m.includes("मेडिकल")) {
-        candidateInterests.add("Medical365 HMS")
+  // Enrich dynamically from matched canonical products and modules
+  const candidateInterests = new Set(filteredProductInterests)
+  if (isProductRelevant && !callerIsPitchingOutOfScope) {
+    for (const p of matchedKnowledgeResult.matchedProducts) {
+      candidateInterests.add(p)
+    }
+    for (const m of matchedKnowledgeResult.matchedModules) {
+      candidateInterests.add(m)
+    }
+    // If still empty but approved keywords matched, add clean title-cased matched keywords
+    if (candidateInterests.size === 0 && genuineApprovedMatches.length > 0) {
+      for (const kw of genuineApprovedMatches.slice(0, 4)) {
+        candidateInterests.add(formatCanonicalInterestTitle(kw))
       }
     }
-    filteredProductInterests = Array.from(candidateInterests)
   }
-
-  // Enrich healthcare modules if relevant
-  if (isProductRelevant && !callerIsPitchingOutOfScope) {
-    const candidateInterests = new Set(filteredProductInterests)
-    if (lowerText.includes("हॉस्पिटल") || lowerText.includes("hospital") || lowerText.includes("hms")) {
-      candidateInterests.add("Hospital Management System (HMS)")
-    }
-    if (lowerText.includes("फार्मेसी") || lowerText.includes("pharmacy")) {
-      candidateInterests.add("Pharmacy Management Module")
-    }
-    if (lowerText.includes("लैब") || lowerText.includes("lab") || lowerText.includes("laboratory") || lowerText.includes("lis")) {
-      candidateInterests.add("Laboratory Management Module")
-    }
-    if (lowerText.includes("ओटी") || lowerText.includes("ot") || lowerText.includes("theater") || lowerText.includes("theatre")) {
-      candidateInterests.add("Operation Theater (OT) Module")
-    }
-    if (lowerText.includes("बेड") || lowerText.includes("bed")) {
-      candidateInterests.add("Bed Management Module")
-    }
-    if (candidateInterests.size > 0) {
-      filteredProductInterests = Array.from(candidateInterests)
-    }
-  }
+  filteredProductInterests = Array.from(candidateInterests)
 
   // Filter matchedTopics to remove any URL/domain topics
   const filteredTopicMatches = (matchedTopics || []).filter((tm) => {
@@ -632,7 +349,7 @@ async function evaluateProductRelevanceAndGate({
     return !isUrlOrDomain(name)
   })
 
-  // 7. Grounded Summary Construction for Out-of-Scope Calls
+  // 7. Dynamic Grounded Summary & Intent Construction
   let summary = rawAnalysis.summary || ""
   let customerIntent = rawAnalysis.customerIntent || ""
 
@@ -648,11 +365,40 @@ async function evaluateProductRelevanceAndGate({
       customerIntent = "Wrong number / spam."
     }
   } else if (isProductRelevant && !hasExplicitRejection) {
+    const company = catalog.companyName || "the organization"
+    const primaryInterests = filteredProductInterests.slice(0, 3).join(", ") || "product solutions"
+
+    // Extract scale/capacity mentions from transcript (e.g. "15 se 20 bed", "22-25 staff", "500 students")
+    const scaleMatch = lowerText.match(/\b(\d+(?:\s*(?:se|\-|to)\s*\d+)?\s*(?:bed|beds|student|students|user|users|staff|staffs|employee|employees|seat|seats|room|rooms|unit|units|branch|branches))\b/i)
+    const scaleText = scaleMatch ? scaleMatch[1] : ""
+
+    const staffMatch = lowerText.match(/\b(\d+(?:\s*(?:se|\-|to)\s*\d+)?\s*(?:staff|employees?|members?|agents?))\b/i)
+    const staffText = staffMatch && staffMatch[1] !== scaleText ? staffMatch[1] : ""
+
+    const modulesDiscussed = filteredProductInterests.filter(
+      (pi) => !pi.toLowerCase().includes("software") && !pi.toLowerCase().includes("erp") && !pi.toLowerCase().includes("crm")
+    )
+    const modulesText = modulesDiscussed.length > 0 ? modulesDiscussed.slice(0, 3).join(", ") : ""
+
     if (!customerIntent || customerIntent.includes("General inquiry") || customerIntent.includes("Offering recruitment")) {
-      customerIntent = "Looking for HMS for a 15–20 bed hospital."
+      customerIntent = `Inquiring about ${primaryInterests}${scaleText ? ` for a ${scaleText}` : ""}.`
     }
+
     if (!summary || summary.includes("no demonstrable product interest") || summary.includes("Call recording insufficient")) {
-      summary = "The caller contacted Medical 365 to inquire about a hospital management system for their 15-20 bed hospital with 22-25 staff members. The caller specified the need for complete management software including pharmacy, lab, and OT (operation theater) modules. The company representative agreed to send product details and PDFs, and both parties agreed to reconnect tomorrow at 11:00 AM."
+      let builtSummary = `The caller contacted ${company} to inquire about ${primaryInterests}`
+      if (scaleText) builtSummary += ` for their ${scaleText}`
+      if (staffText) builtSummary += ` with ${staffText}`
+      builtSummary += "."
+      if (modulesText) {
+        builtSummary += ` The caller discussed requirements including ${modulesText}.`
+      }
+      if (lowerText.includes("quotation") || lowerText.includes("pdf") || lowerText.includes("pricing") || lowerText.includes("details")) {
+        builtSummary += ` The company representative agreed to share product details and documentation.`
+      }
+      if (callbackIntent.callbackRequested && callbackIntent.requestedCallbackDateTime) {
+        builtSummary += ` Both parties agreed to reconnect on follow-up.`
+      }
+      summary = builtSummary
     }
   }
 
