@@ -32,6 +32,74 @@ const VALID_OUTCOMES = new Set([
 ])
 
 /**
+ * Extracts document-related requests (quotations and brochures) with strict speaker attribution.
+ */
+function extractDocumentIntents(segments = [], fullText = "") {
+  const quotationIntent = {
+    requestedByCustomer: false,
+    promisedByAgent: false,
+    channel: "unspecified",
+    customerEmail: null,
+    supportingEvidence: "",
+  }
+
+  const brochureIntent = {
+    requestedByCustomer: false,
+    promisedByAgent: false,
+    channel: "unspecified",
+    customerEmail: null,
+    supportingEvidence: "",
+  }
+
+  const quotationRegex = /\b(quotation|quote|rate\s+card|pricing\s+pdf|कोटेशन|प्राइसिंग)\b/i
+  const brochureRegex = /\b(brochure|catalogue|catalog|product\s+pdf|details\s+pdf|pdf\s+vagaira|ब्रोशर|कैटलॉग)\b/i
+  const emailRegex = /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/i
+  const whatsappRegex = /\b(whatsapp|wa|whats\s*app|वॉट्सएप|व्हाट्सएप)\b/i
+  const emailChannelRegex = /\b(email|mail|ईमेल|मेल)\b/i
+
+  for (const seg of segments) {
+    const speaker = seg.speaker || "Customer"
+    const text = seg.text || ""
+
+    const emailMatch = text.match(emailRegex)
+    if (emailMatch && !quotationIntent.customerEmail) {
+      quotationIntent.customerEmail = emailMatch[1].toLowerCase()
+      brochureIntent.customerEmail = emailMatch[1].toLowerCase()
+    }
+
+    let segChannel = "unspecified"
+    if (whatsappRegex.test(text)) segChannel = "whatsapp"
+    else if (emailChannelRegex.test(text)) segChannel = "email"
+
+    if (quotationRegex.test(text)) {
+      if (speaker === "Customer") {
+        quotationIntent.requestedByCustomer = true
+        if (segChannel !== "unspecified") quotationIntent.channel = segChannel
+        if (!quotationIntent.supportingEvidence) quotationIntent.supportingEvidence = text
+      } else if (speaker === "Agent") {
+        quotationIntent.promisedByAgent = true
+        if (segChannel !== "unspecified") quotationIntent.channel = segChannel
+        if (!quotationIntent.supportingEvidence) quotationIntent.supportingEvidence = text
+      }
+    }
+
+    if (brochureRegex.test(text)) {
+      if (speaker === "Customer") {
+        brochureIntent.requestedByCustomer = true
+        if (segChannel !== "unspecified") brochureIntent.channel = segChannel
+        if (!brochureIntent.supportingEvidence) brochureIntent.supportingEvidence = text
+      } else if (speaker === "Agent") {
+        brochureIntent.promisedByAgent = true
+        if (segChannel !== "unspecified") brochureIntent.channel = segChannel
+        if (!brochureIntent.supportingEvidence) brochureIntent.supportingEvidence = text
+      }
+    }
+  }
+
+  return { quotationIntent, brochureIntent }
+}
+
+/**
  * Deterministic NLP Fallback Analysis Generator.
  * Used for offline environments, unconfigured keys, or test verification.
  */
@@ -236,6 +304,8 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
   if (text.includes("expensive") || text.includes("cost")) objections.push("Budget considerations")
   if (text.includes("time") || text.includes("delay")) objections.push("Timeline constraints")
 
+  const { quotationIntent, brochureIntent } = extractDocumentIntents(segments, text)
+
   return {
     summary,
     customerIntent,
@@ -249,6 +319,8 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     keyMoments,
     nextSteps,
     followUpRecommendations,
+    quotationIntent,
+    brochureIntent,
     topicMatches: topicMatches.filter((t) => !t.topicName?.startsWith("http")),
     provider: "deterministic-nlp",
     model: "offline-rule-engine",
@@ -512,6 +584,8 @@ async function processCallAnalysis({
 
     rawResult.callOutcome = gateResult.callOutcome
     rawResult.productRelevanceScore = gateResult.productRelevanceScore
+    rawResult.productFit = gateResult.productFit
+    rawResult.customerRequestedProduct = gateResult.customerRequestedProduct
     rawResult.leadQualificationScore = gateResult.leadQualificationScore
     rawResult.qualificationStatus = gateResult.qualificationStatus
     rawResult.qualificationReason = gateResult.qualificationReason
@@ -531,6 +605,28 @@ async function processCallAnalysis({
     rawResult.taskAction = gateResult.taskAction || null
     rawResult.directionDescription = gateResult.directionDescription || null
 
+    // Suppress quotation and brochure requests for unsupported products
+    if (gateResult.productFit !== "SUPPORTED") {
+      rawResult.quotationIntent = {
+        requestedByCustomer: false,
+        promisedByAgent: false,
+        channel: "unspecified",
+        customerEmail: null,
+        supportingEvidence: "",
+      }
+      rawResult.brochureIntent = {
+        requestedByCustomer: false,
+        promisedByAgent: false,
+        channel: "unspecified",
+        customerEmail: null,
+        supportingEvidence: "",
+      }
+    } else {
+      const docIntents = extractDocumentIntents(transcript?.segments || [], transcript?.transcriptText || "")
+      rawResult.quotationIntent = docIntents.quotationIntent
+      rawResult.brochureIntent = docIntents.brochureIntent
+    }
+
     if (gateResult.summary && (gateResult.qualificationStatus === "DISQUALIFIED" || !rawResult.summary || rawResult.summary.includes("General inquiry") || rawResult.summary.includes("no demonstrable product interest"))) {
       rawResult.summary = gateResult.summary
     }
@@ -548,6 +644,7 @@ module.exports = {
   generateDeterministicCallAnalysis,
   analyzeCallWithGemini,
   processCallAnalysis,
+  extractDocumentIntents,
   VALID_SENTIMENTS,
   VALID_OUTCOMES,
 }

@@ -31,6 +31,14 @@ export default function SuperAdminLoginPage() {
   const passwordInputRef = useRef(null)
   const isSubmittingRef = useRef(false)
 
+  // Safety fallback: prevent getting stuck on 'Checking active session...' if auth resolution takes long
+  useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      setCheckingExistingSession(false)
+    }, 1500)
+    return () => clearTimeout(safetyTimer)
+  }, [])
+
   // Prefetch dashboard destinations in production where prefetching is lightweight
   useEffect(() => {
     if (process.env.NODE_ENV === "production") {

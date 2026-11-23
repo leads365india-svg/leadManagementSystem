@@ -19,6 +19,7 @@ const leadService = require("../services/leadService")
 const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
 const assignmentService = require("../services/assignmentService")
 const audit = require("../services/auditService")
+const { Activity } = require("../models/Activity")
 
 const getLeads = async (req, res) => {
   try {
@@ -318,6 +319,19 @@ const getLeads = async (req, res) => {
         assignedTo: lead.assignedTo || "Unassigned",
         assignedStaffId: lead.assignedStaffId || "unassigned",
         status: lead.status || "New",
+        expectedDealAmount: typeof lead.expectedDealAmount === "number" ? lead.expectedDealAmount : 0,
+        closedWonAmount: typeof lead.closedWonAmount === "number" ? lead.closedWonAmount : null,
+        currency: lead.currency || "INR",
+        dealStatus: lead.dealStatus || (lead.status === "Closed-Won" ? "Won" : (lead.status === "Closed-Lost" ? "Lost" : "Open")),
+        closedBy: lead.closedBy ? lead.closedBy.toString() : null,
+        closedByName: lead.closedByName || "",
+        closedAt: lead.closedAt || null,
+        closingNotes: lead.closingNotes || "",
+        amountHistory: Array.isArray(lead.amountHistory) ? lead.amountHistory : [],
+        quotationRequested: Boolean(lead.quotationRequested),
+        quotationRequestedAt: lead.quotationRequestedAt || null,
+        quotationRequestedEvidence: lead.quotationRequestedEvidence || "",
+        quotationStatus: lead.quotationStatus || "None",
         message: lead.message || "",
         formId: lead.formId || "",
         landingPage: lead.landingPage || "",
@@ -731,6 +745,118 @@ const updateLead = async (req, res) => {
         newMetadata = { ...(lead.metadata || {}) }
       }
       return newMetadata
+    }
+
+    // Deal & Closing Amount Handling - Phase 5
+    // Rule 9: Prevent unauthorized users from changing another agent's closure data
+    if (lead.status === "Closed-Won" && req.user?.role !== "admin" && req.user?.role !== "superadmin") {
+      const isClosedByOther = lead.closedBy && req.user?._id && String(lead.closedBy) !== String(req.user._id)
+      if (isClosedByOther && (req.body.closedWonAmount !== undefined || req.body.closingNotes !== undefined)) {
+        res.status(403).json({
+          success: false,
+          error: "Unauthorized: You cannot modify closure data closed by another agent.",
+        })
+        return
+      }
+    }
+
+    // Expected Deal Amount update while lead is open
+    if (req.body.expectedDealAmount !== undefined) {
+      const expectedAmt = Number(req.body.expectedDealAmount)
+      if (isNaN(expectedAmt) || expectedAmt < 0) {
+        res.status(400).json({
+          success: false,
+          error: "Expected deal amount must be a valid non-negative number",
+        })
+        return
+      }
+      if (expectedAmt !== lead.expectedDealAmount) {
+        updates.expectedDealAmount = expectedAmt
+        const historyEntry = {
+          type: "expected",
+          amount: expectedAmt,
+          currency: req.body.currency || lead.currency || "INR",
+          changedBy: req.user?._id || null,
+          changedByName: req.user?.name || req.user?.email || "Agent",
+          changedAt: new Date(),
+          notes: req.body.closingNotes || "Expected deal amount updated",
+        }
+        const existingHistory = Array.isArray(lead.amountHistory) ? lead.amountHistory : []
+        updates.amountHistory = [...existingHistory, historyEntry]
+      }
+    }
+
+    if (req.body.currency !== undefined && typeof req.body.currency === "string") {
+      updates.currency = req.body.currency.trim().toUpperCase()
+    }
+
+    // Rule 2: When a lead moves to Won, require the actual final closedWonAmount
+    if (targetStatus === "Closed-Won") {
+      let finalWonAmount = req.body.closedWonAmount !== undefined
+        ? Number(req.body.closedWonAmount)
+        : lead.closedWonAmount
+
+      if (finalWonAmount === null || finalWonAmount === undefined || isNaN(finalWonAmount) || finalWonAmount <= 0) {
+        res.status(400).json({
+          success: false,
+          error: "A valid final closed won amount (greater than 0) is required when marking a lead as Closed-Won.",
+        })
+        return
+      }
+
+      updates.closedWonAmount = finalWonAmount
+      updates.dealStatus = "Won"
+      updates.closedBy = req.user?._id || null
+      updates.closedByName = req.user?.name || req.user?.email || "Agent"
+      updates.closedAt = new Date()
+      if (req.body.closingNotes !== undefined) {
+        updates.closingNotes = String(req.body.closingNotes).trim()
+      }
+
+      // Record won closure in amountHistory
+      const wonHistoryEntry = {
+        type: "closed_won",
+        amount: finalWonAmount,
+        currency: updates.currency || lead.currency || "INR",
+        changedBy: req.user?._id || null,
+        changedByName: req.user?.name || req.user?.email || "Agent",
+        changedAt: new Date(),
+        notes: updates.closingNotes || "Deal closed won",
+      }
+      const existingHistory = Array.isArray(updates.amountHistory) ? updates.amountHistory : (Array.isArray(lead.amountHistory) ? lead.amountHistory : [])
+      updates.amountHistory = [...existingHistory, wonHistoryEntry]
+
+      // Record Activity
+      Activity.create({
+        tenantId: lead.tenantId,
+        leadId: lead._id,
+        type: "deal.closed_won",
+        actor: {
+          id: req.user?._id || null,
+          name: req.user?.name || "Agent",
+          email: req.user?.email || "",
+          role: req.user?.role || "agent",
+        },
+        payload: {
+          amount: finalWonAmount,
+          currency: updates.currency || lead.currency || "INR",
+          closedAt: updates.closedAt,
+          notes: updates.closingNotes,
+        },
+      }).catch(() => {})
+    } else if (targetStatus === "Closed-Lost") {
+      // Rule 7: When a lead is lost, retain expected amount for reporting but do not classify it as Won revenue
+      updates.dealStatus = "Lost"
+    } else if (targetStatus !== undefined && lead.status === "Closed-Won" && targetStatus !== "Closed-Won") {
+      // Rule 6: If a Won lead is reopened, do not silently delete its previous closing information
+      updates.dealStatus = "Open"
+    }
+
+    if (req.body.quotationRequested !== undefined) {
+      updates.quotationRequested = Boolean(req.body.quotationRequested)
+    }
+    if (req.body.quotationStatus !== undefined) {
+      updates.quotationStatus = req.body.quotationStatus
     }
 
     if (targetStatus !== undefined) {

@@ -98,6 +98,10 @@ const followUpSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    overdueNotificationSentAt: {
+      type: Date,
+      default: null,
+    },
     priority: {
       type: String,
       enum: ["low", "medium", "high"],
@@ -180,7 +184,7 @@ followUpSchema.pre("validate", function () {
   }
 })
 
-// Keep callbackAt and scheduledAt synchronized on update queries
+// Keep callbackAt and scheduledAt synchronized on update queries, and reset reminder flags on reschedule
 followUpSchema.pre(["findOneAndUpdate", "updateOne", "updateMany"], function () {
   const update = this.getUpdate()
   if (!update) return
@@ -190,6 +194,13 @@ followUpSchema.pre(["findOneAndUpdate", "updateOne", "updateMany"], function () 
     setObj.callbackAt = setObj.scheduledAt
   } else if (setObj.callbackAt && !setObj.scheduledAt) {
     setObj.scheduledAt = setObj.callbackAt
+  }
+
+  // If task is rescheduled to a new time and reminder fields are not explicitly being set, clear reminder flags
+  if ((setObj.scheduledAt || setObj.callbackAt) && setObj.reminderSentAt === undefined && setObj.dueNotificationSentAt === undefined) {
+    setObj.reminderSentAt = null
+    setObj.dueNotificationSentAt = null
+    setObj.overdueNotificationSentAt = null
   }
 })
 

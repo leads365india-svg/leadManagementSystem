@@ -130,6 +130,34 @@ const AuthContext = createContext({
   hasPermission: () => false,
 })
 
+// Robust base64url JWT payload parser compatible with WebKit / Safari and standard browsers
+function parseJwtPayload(token) {
+  if (!token || typeof token !== "string") return null
+  try {
+    const parts = token.split(".")
+    if (parts.length !== 3) return null
+    let base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+    while (base64.length % 4) {
+      base64 += "="
+    }
+    const jsonStr = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+        .join("")
+    )
+    return JSON.parse(jsonStr)
+  } catch (_) {
+    try {
+      let base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
+      while (base64.length % 4) base64 += "="
+      return JSON.parse(atob(base64))
+    } catch (_e) {
+      return null
+    }
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [status, setStatus] = useState("loading")
@@ -158,27 +186,24 @@ export function AuthProvider({ children }) {
       // skip calling /auth/me to avoid unnecessary 401 console errors.
       if (typeof window !== "undefined") {
         const token = localStorage.getItem("leadflow_token") || localStorage.getItem("token")
-        let isExpired = true
-        if (token && typeof token === "string") {
-          try {
-            const parts = token.split(".")
-            if (parts.length === 3) {
-              const payload = JSON.parse(atob(parts[1]))
-              isExpired = payload.exp ? Date.now() >= payload.exp * 1000 : false
-            }
-          } catch (_) {
-            isExpired = true
-          }
-        }
-        if (isExpired) {
-          try {
-            localStorage.removeItem("token")
-            localStorage.removeItem("leadflow_token")
-          } catch (_) {}
-        }
-
         const isLoginPage = window.location.pathname.includes("/login")
-        if (isExpired && isLoginPage) {
+
+        if (token && typeof token === "string") {
+          const payload = parseJwtPayload(token)
+          if (payload && payload.exp && Date.now() >= payload.exp * 1000) {
+            // Token is definitively expired
+            try {
+              localStorage.removeItem("token")
+              localStorage.removeItem("leadflow_token")
+            } catch (_) {}
+            if (isLoginPage) {
+              setUser(null)
+              setStatus("unauthenticated")
+              return null
+            }
+          }
+        } else if (isLoginPage) {
+          // No token on login page: skip calling /api/auth/me to avoid 401 console errors
           setUser(null)
           setStatus("unauthenticated")
           return null

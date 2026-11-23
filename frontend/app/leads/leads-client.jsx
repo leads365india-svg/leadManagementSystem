@@ -165,6 +165,13 @@ export default function LeadsClient() {
   const [updatingStatusId, setUpdatingStatusId] = useState(null)
   const [staffList, setStaffList] = useState([])
 
+  // Table row quick Closed-Won modal state
+  const [wonClosureLead, setWonClosureLead] = useState(null)
+  const [wonTableAmountInput, setWonTableAmountInput] = useState("")
+  const [wonTableNotesInput, setWonTableNotesInput] = useState("")
+  const [wonTableAmountError, setWonTableAmountError] = useState(null)
+  const [isSavingTableWon, setIsSavingTableWon] = useState(false)
+
   // Fetch staff list for assignment
   useEffect(() => {
     let isMounted = true
@@ -417,6 +424,23 @@ export default function LeadsClient() {
   const handleQuickStatusChange = async (leadId, newStatus, currentStatus) => {
     if (newStatus === currentStatus) return
 
+    // Intercept Closed-Won to require confirmation and valid final amount
+    if (newStatus === "Closed-Won") {
+      const leadsList = leadsData?.leads || []
+      const targetLead = leadsList.find((l) => (l._id || l.id) === leadId)
+      if (targetLead) {
+        setWonClosureLead(targetLead)
+        setWonTableAmountInput(
+          targetLead.closedWonAmount !== undefined && targetLead.closedWonAmount !== null && Number(targetLead.closedWonAmount) > 0
+            ? String(targetLead.closedWonAmount)
+            : ""
+        )
+        setWonTableNotesInput(targetLead.closingNotes || "")
+        setWonTableAmountError(null)
+      }
+      return
+    }
+
     // Optimistic local state update (0ms UI latency)
     setLeadsData((prev) => {
       if (!prev || !Array.isArray(prev.leads)) return prev
@@ -449,6 +473,51 @@ export default function LeadsClient() {
     }
   }
 
+  // Handle Confirmed Closed-Won Submission from Table row
+  const handleConfirmTableWonClosure = async (e) => {
+    if (e) e.preventDefault()
+    if (!wonClosureLead) return
+    setWonTableAmountError(null)
+    const amountNum = Number(wonTableAmountInput)
+    if (!wonTableAmountInput || isNaN(amountNum) || amountNum <= 0) {
+      setWonTableAmountError("A valid final closed won amount (greater than 0) is required when marking a lead as Closed-Won.")
+      return
+    }
+    try {
+      setIsSavingTableWon(true)
+      const targetLeadId = wonClosureLead._id || wonClosureLead.id
+      const res = await apiClient.updateLead(targetLeadId, {
+        status: "Closed-Won",
+        closedWonAmount: amountNum,
+        closingNotes: wonTableNotesInput ? wonTableNotesInput.trim() : undefined,
+      })
+      if (res && res.success && res.data) {
+        toast.success(`Deal Closed-Won for ${res.data.currency || wonClosureLead.currency || "INR"} ${amountNum.toLocaleString()}!`)
+        setWonClosureLead(null)
+        fetchLeads()
+        fetchLeadStats()
+        if (activeLeadDetails && (activeLeadDetails._id === targetLeadId || activeLeadDetails.id === targetLeadId)) {
+          setActiveLeadDetails(res.data)
+        }
+      } else {
+        const errMsg = res?.error || "Failed to mark deal as Closed-Won"
+        setWonTableAmountError(errMsg)
+        toast.error(errMsg)
+      }
+    } catch (err) {
+      const errMsg = err.message || "Failed to mark deal as Closed-Won"
+      setWonTableAmountError(errMsg)
+      toast.error(errMsg)
+    } finally {
+      setIsSavingTableWon(false)
+    }
+  }
+
+  const handleCancelTableWonClosure = () => {
+    setWonClosureLead(null)
+    setWonTableAmountError(null)
+  }
+
   // Open Edit modal
   const handleOpenEditModal = (lead) => {
     setEditingLead({
@@ -461,6 +530,10 @@ export default function LeadsClient() {
       source: lead.source || "Website Form",
       assignedTo: lead.assignedTo || "Unassigned",
       message: lead.message || "",
+      closedWonAmount: lead.closedWonAmount !== undefined && lead.closedWonAmount !== null && Number(lead.closedWonAmount) > 0 ? String(lead.closedWonAmount) : "",
+      closingNotes: lead.closingNotes || "",
+      expectedDealAmount: lead.expectedDealAmount,
+      currency: lead.currency || "INR",
     })
     setEditFormErrors({})
   }
@@ -481,6 +554,13 @@ export default function LeadsClient() {
       }
     }
 
+    if (editingLead.status === "Closed-Won") {
+      const wonAmt = Number(editingLead.closedWonAmount)
+      if (!editingLead.closedWonAmount || isNaN(wonAmt) || wonAmt <= 0) {
+        errors.closedWonAmount = "A valid final closed won amount (greater than 0) is required when marking a lead as Closed-Won."
+      }
+    }
+
     if (Object.keys(errors).length > 0) {
       setEditFormErrors(errors)
       toast.error("Please resolve the validation errors")
@@ -498,6 +578,13 @@ export default function LeadsClient() {
         source: editingLead.source.trim(),
         assignedTo: editingLead.assignedTo.trim(),
         message: editingLead.message.trim(),
+      }
+
+      if (editingLead.status === "Closed-Won") {
+        payload.closedWonAmount = Number(editingLead.closedWonAmount)
+        if (editingLead.closingNotes) {
+          payload.closingNotes = editingLead.closingNotes.trim()
+        }
       }
 
       const res = await apiClient.updateLead(editingLead._id, payload)
@@ -1358,10 +1445,16 @@ export default function LeadsClient() {
         initialLead={activeLeadDetails}
         onClose={() => setActiveLeadDetails(null)}
         onLeadUpdated={(updatedLead) => {
-          setActiveLeadDetails(updatedLead)
+          if (!updatedLead || typeof updatedLead !== "object" || (!updatedLead._id && !updatedLead.id)) {
+            fetchLeads()
+            fetchLeadStats()
+            return
+          }
+          setActiveLeadDetails((prev) => (prev ? { ...prev, ...updatedLead } : updatedLead))
           setLeadsData((prev) => {
             if (!prev?.leads) return prev
             const targetId = updatedLead._id || updatedLead.id
+            if (!targetId) return prev
             return {
               ...prev,
               leads: prev.leads.map((l) => {
@@ -1370,6 +1463,7 @@ export default function LeadsClient() {
               }),
             }
           })
+          fetchLeadStats()
         }}
         onEditLead={(leadToEdit) => {
           handleOpenEditModal(leadToEdit)
@@ -1508,6 +1602,72 @@ export default function LeadsClient() {
                   </select>
                 </div>
 
+                {/* Closed-Won Amount & Closing Notes when status is Closed-Won */}
+                {editingLead.status === "Closed-Won" && (
+                  <div className="sm:col-span-2 p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-emerald-800 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Closed-Won Deal Finalization</span>
+                      </span>
+                      {editingLead.expectedDealAmount !== undefined && editingLead.expectedDealAmount !== null && Number(editingLead.expectedDealAmount) > 0 && (
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          Expected: {editingLead.currency || "INR"} {Number(editingLead.expectedDealAmount).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700">
+                        Final Closed Won Amount ({editingLead.currency || "INR"}) <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-xs font-bold text-slate-400">
+                          {editingLead.currency || "INR"}
+                        </span>
+                        <input
+                          type="number"
+                          min="1"
+                          step="any"
+                          required
+                          value={editingLead.closedWonAmount || ""}
+                          onChange={(e) => {
+                            setEditingLead({ ...editingLead, closedWonAmount: e.target.value })
+                            if (editFormErrors.closedWonAmount) {
+                              setEditFormErrors({ ...editFormErrors, closedWonAmount: null })
+                            }
+                          }}
+                          placeholder="e.g. 150000"
+                          className={`w-full pl-12 pr-3 py-2 text-xs font-semibold bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                            editFormErrors.closedWonAmount ? "border-rose-400 ring-1 ring-rose-400" : "border-slate-300"
+                          }`}
+                        />
+                      </div>
+                      {editFormErrors.closedWonAmount ? (
+                        <p className="text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{editFormErrors.closedWonAmount}</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-slate-400">Mandatory final closing deal amount (greater than 0)</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Closing Notes / Deal Reference (Optional)
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={editingLead.closingNotes || ""}
+                        onChange={(e) => setEditingLead({ ...editingLead, closingNotes: e.target.value })}
+                        placeholder="e.g. Signed annual contract, hospital license confirmed..."
+                        className="w-full p-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {/* Assigned Representative */}
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Assigned Representative</label>
@@ -1622,6 +1782,124 @@ export default function LeadsClient() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          CONFIRM CLOSED-WON DEAL MODAL (Table Row Dropdown Trigger)
+      ========================================================================= */}
+      {wonClosureLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={handleCancelTableWonClosure} />
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start space-x-3">
+              <div className="p-2.5 bg-emerald-100 text-emerald-700 rounded-xl shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Confirm Deal Closed-Won</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Record agreed deal amount and close <strong className="text-slate-800">{wonClosureLead.name}</strong>.
+                </p>
+              </div>
+            </div>
+
+            {/* Reference Card */}
+            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Expected Deal Value (Reference):</span>
+                <span className="font-bold text-slate-800 font-mono">
+                  {wonClosureLead.expectedDealAmount !== undefined && wonClosureLead.expectedDealAmount !== null && Number(wonClosureLead.expectedDealAmount) > 0
+                    ? `${wonClosureLead.currency || "INR"} ${Number(wonClosureLead.expectedDealAmount).toLocaleString()}`
+                    : "Not Set"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px]">
+                <span className="text-slate-500 font-medium">Closing Representative:</span>
+                <span className="font-semibold text-slate-700 flex items-center gap-1">
+                  <User className="w-3 h-3 text-slate-400" />
+                  {authUser?.name || authUser?.email || "Current User"}
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmTableWonClosure} className="space-y-4 pt-1">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-700 block">
+                  Final Closed Amount ({wonClosureLead.currency || "INR"}) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-xs font-bold text-slate-400">
+                    {wonClosureLead.currency || "INR"}
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    required
+                    value={wonTableAmountInput}
+                    onChange={(e) => {
+                      setWonTableAmountInput(e.target.value)
+                      if (wonTableAmountError) setWonTableAmountError(null)
+                    }}
+                    placeholder="e.g. 150000"
+                    className={`w-full pl-12 pr-3 py-2 text-sm font-semibold bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                      wonTableAmountError ? "border-rose-400 ring-1 ring-rose-400" : "border-slate-300"
+                    }`}
+                  />
+                </div>
+                {wonTableAmountError ? (
+                  <p className="text-xs text-rose-600 font-medium flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{wonTableAmountError}</span>
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-slate-400">Must be greater than 0 to record won revenue</p>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-700 block">
+                  Closing Notes / Contract Reference (Optional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={wonTableNotesInput}
+                  onChange={(e) => setWonTableNotesInput(e.target.value)}
+                  placeholder="e.g. 20-bed HMS license with 1-year AMC and OT module included..."
+                  className="w-full p-2.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleCancelTableWonClosure}
+                  disabled={isSavingTableWon}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingTableWon || !wonTableAmountInput || Number(wonTableAmountInput) <= 0}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm disabled:opacity-50 transition cursor-pointer"
+                >
+                  {isSavingTableWon ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Saving Won Deal...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Confirm Closed-Won</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -476,6 +476,8 @@ async function syncLeadPipelineStatusFromAiCall({
 
   lead.metadata.lastCallOutcome = rawOutcome
   lead.metadata.productRelevanceScore = analysis.productRelevanceScore ?? 0.0
+  lead.metadata.productFit = analysis.productFit || null
+  lead.metadata.customerRequestedProduct = analysis.customerRequestedProduct || null
   lead.metadata.leadQualificationScore = analysis.leadQualificationScore ?? 0.0
   lead.metadata.qualificationStatus = analysis.qualificationStatus || null
   lead.metadata.qualificationReason = analysis.qualificationReason || null

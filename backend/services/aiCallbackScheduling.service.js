@@ -423,7 +423,34 @@ async function completeCallbackTask({
 }
 
 /**
- * Scans the database and dispatches upcoming (5-minute) and due-now reminders.
+ * Resolves the agent's User ID (ObjectId string) for mobile FCM notification dispatch.
+ */
+async function resolveFollowUpAgentId(task) {
+  if (task.assignedStaffId && task.assignedStaffId !== "unassigned" && mongoose.Types.ObjectId.isValid(task.assignedStaffId)) {
+    return task.assignedStaffId.toString()
+  }
+  const nameOrEmail = task.assignedTo || task.leadId?.assignedTo
+  if (!nameOrEmail || nameOrEmail === "Unassigned" || nameOrEmail === "unassigned") {
+    return null
+  }
+  if (mongoose.Types.ObjectId.isValid(nameOrEmail)) {
+    return nameOrEmail.toString()
+  }
+  try {
+    const User = mongoose.models.User || require("../models/User")
+    const query = {
+      $or: [{ name: nameOrEmail }, { email: nameOrEmail }],
+    }
+    if (task.tenantId) query.tenantId = task.tenantId
+    const user = await User.findOne(query).select("_id").lean()
+    return user ? user._id.toString() : null
+  } catch (_) {
+    return null
+  }
+}
+
+/**
+ * Scans the database and dispatches upcoming (5-minute), due-now, and overdue reminders.
  * Runs periodically in background queue / scheduler.
  * Database-backed: immune to server restarts, never fires duplicate alerts.
  */
@@ -431,9 +458,11 @@ async function checkAndDispatchDueReminders() {
   const now = new Date()
   const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000)
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+  const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000)
 
   let reminder5MinCount = 0
   let dueNowCount = 0
+  let overdueCount = 0
 
   try {
     // 1. Scan for 5-minute pre-reminders
@@ -452,8 +481,8 @@ async function checkAndDispatchDueReminders() {
       task.reminderSentAt = new Date()
       await task.save()
 
-      const agentId = task.assignedTo || task.leadId?.assignedTo
-      if (agentId && agentId !== "unassigned") {
+      const agentId = await resolveFollowUpAgentId(task)
+      if (agentId) {
         await pushNotificationService.sendCallbackReminderNotification({
           followUp: task,
           lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
@@ -487,8 +516,8 @@ async function checkAndDispatchDueReminders() {
         await Lead.findByIdAndUpdate(task.leadId._id, { followUpStatus: "due" }).catch(() => {})
       }
 
-      const agentId = task.assignedTo || task.leadId?.assignedTo
-      if (agentId && agentId !== "unassigned") {
+      const agentId = await resolveFollowUpAgentId(task)
+      if (agentId) {
         await pushNotificationService.sendCallbackReminderNotification({
           followUp: task,
           lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
@@ -499,6 +528,35 @@ async function checkAndDispatchDueReminders() {
       }
       dueNowCount++
     }
+
+    // 3. Scan for Overdue reminders
+    // Status pending or due, scheduledAt/callbackAt <= tenMinutesAgo, >= oneDayAgo, overdueNotificationSentAt is null
+    const overdueTasks = await FollowUp.find({
+      status: { $in: ["pending", "due"] },
+      deletedAt: null,
+      $or: [
+        { scheduledAt: { $lte: tenMinutesAgo, $gte: oneDayAgo } },
+        { callbackAt: { $lte: tenMinutesAgo, $gte: oneDayAgo } },
+      ],
+      overdueNotificationSentAt: null,
+    }).populate("leadId").setOptions({ skipTenantFilter: true })
+
+    for (const task of overdueTasks) {
+      task.overdueNotificationSentAt = new Date()
+      await task.save()
+
+      const agentId = await resolveFollowUpAgentId(task)
+      if (agentId) {
+        await pushNotificationService.sendCallbackReminderNotification({
+          followUp: task,
+          lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
+          agentId: String(agentId),
+          tenantId: task.tenantId,
+          reminderType: "OVERDUE",
+        }).catch(() => {})
+      }
+      overdueCount++
+    }
   } catch (err) {
     console.error("[AICallbackScheduling] Error in checkAndDispatchDueReminders:", err.message)
   }
@@ -506,6 +564,7 @@ async function checkAndDispatchDueReminders() {
   return {
     reminder5MinCount,
     dueNowCount,
+    overdueCount,
   }
 }
 

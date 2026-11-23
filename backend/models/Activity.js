@@ -57,6 +57,16 @@ const ALLOWED_ACTIVITY_TYPES = [
   "call.associated",
   "whatsapp.message_received",
   "whatsapp.message_sent",
+  "quotation.requested",
+  "quotation.uploaded",
+  "quotation.sent",
+  "quotation.deleted",
+  "quotation.voided",
+  "brochure.requested",
+  "brochure.sent",
+  "email.failed",
+  "deal.amount_updated",
+  "deal.closed_won",
   // Short aliases for convenience
   "created",
   "status_changed",
@@ -71,6 +81,14 @@ const ALLOWED_ACTIVITY_TYPES = [
   "whatsapp_received",
   "whatsapp_sent",
   "whatsapp_message",
+  "quotation_requested",
+  "quotation_uploaded",
+  "quotation_sent",
+  "brochure_requested",
+  "brochure_sent",
+  "email_failed",
+  "deal_amount_updated",
+  "deal_closed_won",
 ]
 
 const activitySchema = new mongoose.Schema(

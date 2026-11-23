@@ -34,6 +34,10 @@ const aiKeywordRoutes = require("./routes/aiKeywordRoutes")
 const aiCallRoutes = require("./routes/aiCallRoutes")
 const aiSalesIntelligenceRoutes = require("./routes/aiSalesIntelligenceRoutes")
 const telephonyRoutes = require("./routes/telephonyRoutes")
+const quotationRoutes = require("./routes/quotationRoutes")
+const brochureRoutes = require("./routes/brochureRoutes")
+const emailConfigRoutes = require("./routes/emailConfigRoutes")
+const dealAnalyticsRoutes = require("./routes/dealAnalyticsRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
@@ -142,6 +146,8 @@ const defaultAllowedHeaders = [
   "Authorization",
   "x-tenant-domain",
   "X-Tenant-Domain",
+  "x-auth-portal",
+  "X-Auth-Portal",
   "x-tenant-id",
   "X-Tenant-Id",
   "x-csrf-token",
@@ -311,6 +317,10 @@ app.use("/api/ai-keywords", aiKeywordRoutes)
 app.use("/api/ai-calls", aiCallRoutes)
 app.use("/api/ai-sales-intelligence", aiSalesIntelligenceRoutes)
 app.use("/api/telephony", telephonyRoutes)
+app.use("/api/quotations", quotationRoutes)
+app.use("/api/brochures", brochureRoutes)
+app.use("/api/email-config", emailConfigRoutes)
+app.use("/api/deal-analytics", dealAnalyticsRoutes)
 
 // Secure Call Recording Streaming & Playback endpoints (Phase 8 + Final Integration)
 const {

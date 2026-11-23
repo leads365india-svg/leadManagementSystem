@@ -310,6 +310,10 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     analysis.sentiment = analysisResult.sentiment
     analysis.sentimentScore = analysisResult.sentimentScore
     analysis.productRelevanceScore = analysisResult.productRelevanceScore ?? 0.0
+    analysis.productFit = analysisResult.productFit || "UNRESOLVED"
+    analysis.customerRequestedProduct = analysisResult.customerRequestedProduct || ""
+    analysis.quotationIntent = analysisResult.quotationIntent || null
+    analysis.brochureIntent = analysisResult.brochureIntent || null
     analysis.leadQualificationScore = analysisResult.leadQualificationScore ?? 0.0
     analysis.qualificationStatus = analysisResult.qualificationStatus || "UNRESOLVED"
     analysis.qualificationReason = analysisResult.qualificationReason || null
@@ -360,6 +364,8 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     call.metadata.aiCallOutcome = analysis.callOutcome
     call.metadata.aiSentiment = analysis.sentiment
     call.metadata.aiProductRelevanceScore = analysis.productRelevanceScore
+    call.metadata.aiProductFit = analysis.productFit
+    call.metadata.aiCustomerRequestedProduct = analysis.customerRequestedProduct
     call.metadata.aiLeadQualificationScore = analysis.leadQualificationScore
     call.metadata.aiQualificationStatus = analysis.qualificationStatus
     call.metadata.aiQualificationReason = analysis.qualificationReason
@@ -388,6 +394,61 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       }
     } catch (syncErr) {
       console.warn(`[AIPipeline] Lead pipeline status sync notice for call ${callId}:`, sanitizeErrorMessage(syncErr.message))
+    }
+
+    // Phase 1 & 2: Quotation & Brochure Document Intent Processing
+    try {
+      const { autoSendBrochureEmail } = require("./quotationBrochure.service")
+      const Lead = require("../models/Lead")
+      const { Activity } = require("../models/Activity")
+
+      const targetLeadId = call.leadId?._id || call.leadId || syncResult?.linkedLeadId
+      if (targetLeadId && analysis.productFit === "SUPPORTED") {
+        const linkedLead = await Lead.findById(targetLeadId).setOptions({ skipTenantFilter: true })
+        if (linkedLead) {
+          // Quotation requested or promised
+          if (analysis.quotationIntent?.requestedByCustomer || analysis.quotationIntent?.promisedByAgent) {
+            linkedLead.quotationRequested = true
+            linkedLead.quotationRequestedAt = new Date()
+            linkedLead.quotationRequestedEvidence = analysis.quotationIntent.supportingEvidence || ""
+            if (linkedLead.quotationStatus === "None") {
+              linkedLead.quotationStatus = "Requested"
+            }
+            await linkedLead.save().catch(() => {})
+
+            await Activity.create({
+              tenantId,
+              leadId: linkedLead._id,
+              type: "quotation.requested",
+              actor: { name: "AI Call Intelligence", role: "system" },
+              payload: {
+                callId: call._id,
+                requestedByCustomer: analysis.quotationIntent.requestedByCustomer,
+                promisedByAgent: analysis.quotationIntent.promisedByAgent,
+                evidence: analysis.quotationIntent.supportingEvidence,
+                notice: "Quotation Required - Agent follow-up needed to upload and send quotation",
+              },
+            }).catch(() => {})
+          }
+
+          // Brochure requested by customer -> Attempt automatic qualifying dispatch
+          if (analysis.brochureIntent?.requestedByCustomer) {
+            await autoSendBrochureEmail({
+              lead: linkedLead,
+              call,
+              productInterest: analysis.customerRequestedProduct || (analysis.productInterests?.[0]) || "",
+              customerEmail: analysis.brochureIntent.customerEmail,
+              transcriptEvidence: analysis.brochureIntent.supportingEvidence,
+              channel: analysis.brochureIntent.channel,
+              tenantId,
+            }).catch((autoErr) => {
+              console.warn(`[AIPipeline] Auto brochure send notice for call ${callId}:`, autoErr.message)
+            })
+          }
+        }
+      }
+    } catch (docErr) {
+      console.warn(`[AIPipeline] Document intent handling notice for call ${callId}:`, sanitizeErrorMessage(docErr.message))
     }
 
     // 5. Audit Logging

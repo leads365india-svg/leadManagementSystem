@@ -55,6 +55,9 @@ function LeadFormContent() {
     source: "Manual Entry",
     assignedTo: "Unassigned",
     message: "",
+    closedWonAmount: "",
+    closingNotes: "",
+    currency: "INR",
   })
 
   const [errors, setErrors] = useState({})
@@ -83,6 +86,9 @@ function LeadFormContent() {
             source: lead.source || "Manual Entry",
             assignedTo: lead.assignedTo || "Unassigned",
             message: lead.message || "",
+            closedWonAmount: lead.closedWonAmount !== undefined && lead.closedWonAmount !== null && Number(lead.closedWonAmount) > 0 ? String(lead.closedWonAmount) : "",
+            closingNotes: lead.closingNotes || "",
+            currency: lead.currency || "INR",
           })
         } else {
           setServerError(response.error || "Lead not found")
@@ -119,6 +125,11 @@ function LeadFormContent() {
     // Status validation
     if (!formData.status) {
       newErrors.status = "Status is required"
+    } else if (formData.status === "Closed-Won") {
+      const wonAmt = Number(formData.closedWonAmount)
+      if (!formData.closedWonAmount || isNaN(wonAmt) || wonAmt <= 0) {
+        newErrors.closedWonAmount = "A valid final closed won amount (greater than 0) is required when marking a lead as Closed-Won."
+      }
     }
 
     setErrors(newErrors)
@@ -147,6 +158,13 @@ function LeadFormContent() {
         source: formData.source.trim(),
         assignedTo: formData.assignedTo.trim(),
         message: formData.message.trim(),
+      }
+
+      if (formData.status === "Closed-Won") {
+        payload.closedWonAmount = Number(formData.closedWonAmount)
+        if (formData.closingNotes) {
+          payload.closingNotes = formData.closingNotes.trim()
+        }
       }
 
       let response
@@ -378,6 +396,67 @@ function LeadFormContent() {
                     ))}
                   </select>
                 </div>
+
+                {/* Closed-Won Deal Amount & Notes when status is Closed-Won */}
+                {formData.status === "Closed-Won" && (
+                  <div className="md:col-span-2 p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3">
+                    <div className="flex items-center space-x-2 text-xs font-bold text-emerald-800">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Closed-Won Deal Finalization</span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label htmlFor="closedWonAmount" className="block text-xs font-bold text-slate-700">
+                        Final Closed Won Amount ({formData.currency || "INR"}) <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-xs font-bold text-slate-400">
+                          {formData.currency || "INR"}
+                        </span>
+                        <input
+                          type="number"
+                          id="closedWonAmount"
+                          min="1"
+                          step="any"
+                          required
+                          value={formData.closedWonAmount}
+                          onChange={(e) => {
+                            handleInputChange("closedWonAmount", e.target.value)
+                            if (errors.closedWonAmount) {
+                              setErrors((prev) => ({ ...prev, closedWonAmount: null }))
+                            }
+                          }}
+                          placeholder="e.g. 150000"
+                          className={`w-full pl-12 pr-3 py-2 text-xs font-semibold bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                            errors.closedWonAmount ? "border-rose-400 ring-1 ring-rose-400" : "border-slate-300"
+                          }`}
+                        />
+                      </div>
+                      {errors.closedWonAmount ? (
+                        <p className="text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{errors.closedWonAmount}</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-slate-400">Mandatory final closing deal amount (greater than 0)</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <label htmlFor="closingNotes" className="block text-xs font-semibold text-slate-700">
+                        Closing Notes / Deal Reference (Optional)
+                      </label>
+                      <textarea
+                        id="closingNotes"
+                        rows={2}
+                        value={formData.closingNotes}
+                        onChange={(e) => handleInputChange("closingNotes", e.target.value)}
+                        placeholder="e.g. Contract signed, onboarding scheduled..."
+                        className="w-full p-2.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* 5. Lead Source */}
                 <div>

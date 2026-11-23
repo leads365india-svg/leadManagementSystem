@@ -116,7 +116,9 @@ const getJwtSecret = () => {
 const extractCandidateTokens = (req) => {
   const isSuperAdminRoute =
     Boolean(req.originalUrl && req.originalUrl.includes("/super-admin")) ||
-    Boolean(req.headers?.referer && req.headers.referer.includes("/super-admin"))
+    Boolean(req.headers?.referer && req.headers.referer.includes("/super-admin")) ||
+    req.headers?.["x-auth-portal"] === "super_admin" ||
+    req.headers?.["x-auth-portal"] === "super-admin"
 
   const tokens = []
   if (req.cookies) {

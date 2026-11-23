@@ -2,6 +2,10 @@ const mongoose = require("mongoose")
 const {
   getTenantProductKnowledge,
   matchTranscriptAgainstKnowledge,
+  isSubstantiveKeyword,
+  extractCustomerRequestedProduct,
+  isProductSupportedByTenant,
+  GENERIC_INDUSTRY_WORDS,
   isUrlOrDomain,
   sanitizeTerm,
   formatCanonicalInterestTitle,
@@ -11,14 +15,18 @@ const { extractCallbackIntent } = require("../utils/callbackTimeExtractor")
 /**
  * Strict Product-Relevance Gate for AI Call Intelligence and Automatic CRM Lead Qualification
  * 
- * Enforces universal multi-tenant qualification boundaries:
+ * Enforces mandatory multi-tenant business rules:
  * 1. Checks customer conversation dynamically against the authenticated tenant's approved products and topics.
- * 2. Distinguishes Agent pitch vs Customer intent with strict speaker attribution.
- * 3. Identifies out-of-scope calls (recruitment agencies, job seekers, generic marketing, vendor pitches, spam).
- * 4. Treats polite deflections (e.g., 'WhatsApp daal do' when rejecting) as non-qualifying.
- * 5. URL and domain matches (e.g., https://example.com/) are strictly excluded from product evidence.
- * 6. Domain-agnostic buying-intent and callback commitment recognition.
- * 7. Enforces Deterministic Rules A, B, C, D, E after AI analysis.
+ * 2. Strict Product-Only Lead Rule: A lead is qualified ONLY when the customer's actual product requirement
+ *    matches a product or supported capability that the tenant sells.
+ * 3. Unsupported Product Request: If customer requests a product the tenant does not offer, product relevance is 0%,
+ *    productFit is UNSUPPORTED, qualification is DISQUALIFIED, CRM action is CLOSE_LOST, and outcome is NOT_INTERESTED.
+ * 4. Customer buying intent and tenant lead status remain separate: Customer buying desire is preserved.
+ * 5. Strict Speaker Attribution: Agent mentioning the tenant's product when customer wanted another product
+ *    does NOT create product relevance.
+ * 6. Generic words ('software', 'crm', 'erp', 'system', 'management') alone NEVER qualify a lead.
+ * 7. Missing Knowledge Safety: Insufficient transcript or unconfigured domain defaults to UNRESOLVED (not CLOSE_LOST).
+ * 8. Zero false callbacks or demo tasks for unsupported products.
  */
 
 // Out-of-scope intent patterns (Regexes for English, Hindi, Hinglish)
@@ -55,7 +63,6 @@ const POLITE_DEFLECTION_PATTERNS = [
 ]
 
 // Universal Domain-Agnostic Buying Intent & Customer Commercial Inquiry Patterns
-// (Entity matching is handled dynamically via tenant product catalog; these regexes evaluate commercial intent)
 const BUYING_INTENT_PATTERNS = [
   // Pricing, quote, rate, cost inquiries
   /\b(pricing|price|quotation|quote|cost|rate|commercials?|charges?|how\s+much|kitna\s+lagega|kitne\s+ka\s+hai|kya\s+charge\s+hai|kya\s+rate\s+hai|rate\s+batao|quotation\s+bhej(?:o|na)?|proposal\s+bhej(?:o|na)?|rate\s+vagaira|quotation\s+vagaira|estimate)\b/i,
@@ -66,7 +73,7 @@ const BUYING_INTENT_PATTERNS = [
   /(?:डेमो|ट्रायल|सैम्पल)/u,
 
   // Commercial desire / need / purchase / implementation / installation / setup (excluding negative "nahi chahiye")
-  /(?<!(?:nahi|na|mat|bilkul\s+nahi)\s+)\b(chahiye|chahiye\s+tha|chahiye\s+thi|lagwana\s+hai|khareedna|kharidna|lena\s+hai|buy|purchase|implement(?:ation)?|order|subscribe|subscription|setup\s+karna|install\s+karwana|zaroorat\s+hai|requirement|looking\s+for|interested\s+in)\b/i,
+  /(?<!(?:nahi|na|mat|bilkul\s+nahi)\s+)\b(need|needs|needed|want|wants|wanted|require|requires|required|chahiye|chahiye\s+tha|chahiye\s+thi|lagwana\s+hai|khareedna|kharidna|lena\s+hai|buy|buys|buying|purchase|purchasing|implement(?:ation)?|order|subscribe|subscription|setup\s+karna|install\s+karwana|zaroorat\s+hai|requirement|requirements|looking\s+for|interested\s+in)\b/i,
   /(?<!(?:नहीं|ना|मत)\s*)(?:चाहिए|खरीदना|लगवाना|लेना\s*है|ज़रूरत|रिक्वायरमेंट)/u,
 
   // Specification, features, modules, capabilities, brochure, catalogue, documentation inquiries
@@ -107,7 +114,7 @@ async function loadTenantApprovedCatalog(tenantId) {
 
 /**
  * Strict Product Relevance Gate Evaluation
- * Evaluates transcript and analysis to enforce qualification rules.
+ * Evaluates transcript and analysis to enforce strict tenant product-only qualification rules.
  */
 async function evaluateProductRelevanceAndGate({
   transcript,
@@ -138,6 +145,8 @@ async function evaluateProductRelevanceAndGate({
     return {
       isProductRelevant: false,
       productRelevanceScore: 0.0,
+      productFit: "UNRESOLVED",
+      customerRequestedProduct: "",
       leadQualificationScore: 0.0,
       customerPurchaseIntent: false,
       qualificationStatus: "UNRESOLVED",
@@ -149,6 +158,16 @@ async function evaluateProductRelevanceAndGate({
       summary: rawAnalysis.summary || "Call recording insufficient or unclear.",
       customerIntent: "Unclear / insufficient audio data",
       crmLeadAction: "DO_NOT_UPDATE",
+      callbackRequested: false,
+      requestedCallbackDateTime: null,
+      callbackTimezone: "Asia/Kolkata",
+      callbackTimePrecision: null,
+      callbackReason: null,
+      callbackLanguage: null,
+      voiceConfirmation: null,
+      callbackDirection: null,
+      taskAction: null,
+      directionDescription: null,
     }
   }
 
@@ -158,7 +177,7 @@ async function evaluateProductRelevanceAndGate({
 
   const lowerText = transcriptText.toLowerCase()
 
-  // 1. Check for Out-of-Scope triggers
+  // 1. Check for Out-of-Scope triggers (recruitment, loans, wrong number, spam)
   let detectedOutOfScope = null
   for (const pattern of OUT_OF_SCOPE_PATTERNS) {
     if (pattern.regex.test(lowerText)) {
@@ -171,7 +190,9 @@ async function evaluateProductRelevanceAndGate({
   const customerSegments = segments.filter((s) => s.speaker === "Customer")
   const agentSegments = segments.filter((s) => s.speaker === "Agent")
 
-  const customerText = customerSegments.map((s) => s.text || "").join(" ").toLowerCase()
+  const customerText = customerSegments.length > 0
+    ? customerSegments.map((s) => s.text || "").join(" ").toLowerCase()
+    : lowerText
   const agentText = agentSegments.map((s) => s.text || "").join(" ").toLowerCase()
 
   let callerIsPitchingOutOfScope = false
@@ -180,8 +201,33 @@ async function evaluateProductRelevanceAndGate({
   }
 
   // 3. Dynamic Semantic Matching against Tenant's Loaded Product Knowledge
-  const matchedKnowledgeResult = matchTranscriptAgainstKnowledge(transcriptText, knowledge)
-  const genuineApprovedMatches = matchedKnowledgeResult.matchedKeywords
+  // Match CUSTOMER utterances specifically for product interest (Speaker Attribution)
+  const customerKnowledgeResult = matchTranscriptAgainstKnowledge(customerText, knowledge)
+  const customerSubstantiveMatches = customerKnowledgeResult.substantiveMatches || []
+
+  // Check if agent mentioned any tenant products
+  const agentKnowledgeResult = agentText
+    ? matchTranscriptAgainstKnowledge(agentText, knowledge)
+    : { substantiveMatches: [] }
+  const agentSubstantiveMatches = agentKnowledgeResult.substantiveMatches || []
+
+  // Extract what product or service domain the customer requested
+  const customerProductInquiry = extractCustomerRequestedProduct(customerText)
+  const isSupportedProduct = customerProductInquiry
+    ? isProductSupportedByTenant(customerProductInquiry, knowledge)
+    : false
+
+  // If customer had no direct substantive matches, check if customer later explicitly accepted an agent pitch
+  let genuineApprovedMatches = [...customerSubstantiveMatches]
+  if (genuineApprovedMatches.length === 0 && agentSubstantiveMatches.length > 0) {
+    // Check if customer explicitly accepted or requested the agent's pitched product
+    const agentPitchKeywords = agentSubstantiveMatches.map((k) => k.toLowerCase())
+    const customerAcceptedAgentPitch = agentPitchKeywords.some((apk) => customerText.includes(apk)) &&
+      BUYING_INTENT_PATTERNS.some((p) => p.test(customerText))
+    if (customerAcceptedAgentPitch) {
+      genuineApprovedMatches = [...agentSubstantiveMatches]
+    }
+  }
 
   // Check if customer statements specifically show buying intent or product inquiry
   const referenceTimestamp = call?.startTime || call?.startedAt || call?.createdAt || new Date()
@@ -196,16 +242,35 @@ async function evaluateProductRelevanceAndGate({
   const hasExplicitRejection = EXPLICIT_REJECTION_PATTERNS.some((p) => p.test(customerText || lowerText))
   const hasPoliteDeflectionOnly = POLITE_DEFLECTION_PATTERNS.some((p) => p.test(customerText || lowerText))
 
+  // Determine Product Fit according to Strict Tenant Product-Only Policy
+  let productFit = "UNRESOLVED"
+  if (callerIsPitchingOutOfScope) {
+    productFit = "UNSUPPORTED"
+  } else if (genuineApprovedMatches.length > 0 || (customerProductInquiry && isSupportedProduct)) {
+    productFit = "SUPPORTED"
+  } else if (customerProductInquiry && !isSupportedProduct) {
+    // Customer clearly requested a product domain that this tenant does not sell
+    productFit = "UNSUPPORTED"
+  } else if (agentSubstantiveMatches.length > 0 && hasExplicitRejection) {
+    // Agent pitched tenant product, but prospect explicitly rejected
+    productFit = "SUPPORTED"
+  } else if (hasBuyingIntent && genuineApprovedMatches.length === 0) {
+    // Customer had buying intent or generic software inquiry without specific product/domain context
+    // As mandated: generic words alone cannot qualify or disqualify -> UNRESOLVED
+    productFit = "UNRESOLVED"
+  } else {
+    productFit = "UNRESOLVED"
+  }
+
   // 4. Calculate Product Relevance Score
   let isProductRelevant = false
   let productRelevanceScore = 0.0
 
-  if (callerIsPitchingOutOfScope) {
-    // Strictly disqualified if caller is pitching recruitment, vendor sales, etc.
+  if (callerIsPitchingOutOfScope || productFit === "UNSUPPORTED") {
+    // Confirmed unsupported product or out-of-scope pitch -> exactly 0.0 (0%) relevance
     isProductRelevant = false
     productRelevanceScore = 0.0
-  } else if (genuineApprovedMatches.length > 0) {
-    // Verified approved product keyword is present for this tenant
+  } else if (productFit === "SUPPORTED" && (genuineApprovedMatches.length > 0 || agentSubstantiveMatches.length > 0)) {
     if (hasExplicitRejection && !hasBuyingIntent) {
       // Product mentioned, but explicitly rejected
       isProductRelevant = true
@@ -215,14 +280,14 @@ async function evaluateProductRelevanceAndGate({
       // Relevance score scales with verified match breadth up to 0.95
       productRelevanceScore = Math.min(0.70 + genuineApprovedMatches.length * 0.05, 0.95)
     } else {
-      // Casual mention without buying intent or product inquiry
+      // Casual mention without buying intent
       isProductRelevant = false
       productRelevanceScore = 0.05
     }
   } else {
-    // Zero approved product relevance for this tenant
+    // Unestablished or generic-only
     isProductRelevant = false
-    productRelevanceScore = 0.05 // Below 10%
+    productRelevanceScore = 0.05
   }
 
   // 5. Apply Deterministic Qualification Rules
@@ -232,9 +297,10 @@ async function evaluateProductRelevanceAndGate({
   let leadQualificationScore = 0.0
   let customerPurchaseIntent = false
   let crmLeadAction = "CLOSE_LOST"
+  let customerRequestedProductName = customerProductInquiry ? customerProductInquiry.productName : ""
 
   if (callerIsPitchingOutOfScope) {
-    // RULE C: CALLER PITCHING OUT OF SCOPE (Recruitment, Vendor Pitch, Spam, Wrong Number)
+    // RULE C: OUT-OF-SCOPE PITCH (Recruitment, Vendor Pitch, Spam, Wrong Number)
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = detectedOutOfScope?.description
       ? `OUT_OF_SCOPE_${detectedOutOfScope.type}`
@@ -244,8 +310,19 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
-  } else if (isProductRelevant && hasExplicitRejection) {
-    // RULE D: PRODUCT RELEVANT BUT CUSTOMER NOT INTERESTED (Explicit Rejection)
+  } else if (productFit === "UNSUPPORTED") {
+    // RULE U: UNSUPPORTED PRODUCT REQUEST (Mandatory Business Rule)
+    // Customer wants a product that this tenant does NOT sell (e.g. Furniture CRM on Medical 365)
+    qualificationStatus = "DISQUALIFIED"
+    qualificationReason = "UNSUPPORTED_PRODUCT_REQUEST"
+    callOutcome = "NOT_INTERESTED"
+    productRelevanceScore = 0.0
+    leadQualificationScore = 0.0
+    // Separate customer intent: Customer DOES have buying intent for their requested product!
+    customerPurchaseIntent = Boolean(hasBuyingIntent || customerProductInquiry)
+    crmLeadAction = "CLOSE_LOST"
+  } else if (hasExplicitRejection) {
+    // RULE D: EXPLICIT REJECTION (Customer said "not interested", "already have software", "nahi chahiye")
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = "EXPLICIT_REJECTION"
     callOutcome = "NOT_INTERESTED"
@@ -287,8 +364,17 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
-  } else if (!isProductRelevant) {
-    // Out of scope / non-product call for this tenant
+  } else if (productFit === "UNRESOLVED") {
+    // RULE MISSING KNOWLEDGE / AMBIGUOUS: Generic words or unclear domain
+    qualificationStatus = "UNRESOLVED"
+    qualificationReason = "UNCERTAIN_PRODUCT_CONTEXT"
+    callOutcome = "UNRESOLVED"
+    productRelevanceScore = 0.10
+    leadQualificationScore = 0.0
+    customerPurchaseIntent = hasBuyingIntent
+    crmLeadAction = "DO_NOT_UPDATE"
+  } else {
+    // Non-product call
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = "OUT_OF_SCOPE_NON_PRODUCT_CALL"
     callOutcome = "NOT_INTERESTED"
@@ -296,20 +382,14 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
-  } else {
-    // Ambiguous / unestablished
-    qualificationStatus = "UNRESOLVED"
-    qualificationReason = "UNCERTAIN_PRODUCT_CONTEXT"
-    callOutcome = "UNRESOLVED"
-    productRelevanceScore = 0.20
-    leadQualificationScore = 0.0
-    customerPurchaseIntent = false
-    crmLeadAction = "DO_NOT_UPDATE"
   }
 
   // 6. Dynamic Product Interest Extraction from Tenant Catalogue
   let filteredProductInterests = []
-  if (Array.isArray(rawAnalysis.productInterests) && rawAnalysis.productInterests.length > 0) {
+  if (productFit === "UNSUPPORTED") {
+    // Never emit product interests for unsupported products on tenant's catalogue
+    filteredProductInterests = []
+  } else if (Array.isArray(rawAnalysis.productInterests) && rawAnalysis.productInterests.length > 0) {
     filteredProductInterests = rawAnalysis.productInterests.filter((pi) => {
       const clean = (pi || "").toLowerCase().trim()
       if (
@@ -327,21 +407,20 @@ async function evaluateProductRelevanceAndGate({
 
   // Enrich dynamically from matched canonical products and modules
   const candidateInterests = new Set(filteredProductInterests)
-  if (isProductRelevant && !callerIsPitchingOutOfScope) {
-    for (const p of matchedKnowledgeResult.matchedProducts) {
+  if (isProductRelevant && productFit === "SUPPORTED" && !callerIsPitchingOutOfScope) {
+    for (const p of customerKnowledgeResult.matchedProducts) {
       candidateInterests.add(p)
     }
-    for (const m of matchedKnowledgeResult.matchedModules) {
+    for (const m of customerKnowledgeResult.matchedModules) {
       candidateInterests.add(m)
     }
-    // If still empty but approved keywords matched, add clean title-cased matched keywords
     if (candidateInterests.size === 0 && genuineApprovedMatches.length > 0) {
       for (const kw of genuineApprovedMatches.slice(0, 4)) {
         candidateInterests.add(formatCanonicalInterestTitle(kw))
       }
     }
+    filteredProductInterests = Array.from(candidateInterests)
   }
-  filteredProductInterests = Array.from(candidateInterests)
 
   // Filter matchedTopics to remove any URL/domain topics
   const filteredTopicMatches = (matchedTopics || []).filter((tm) => {
@@ -352,6 +431,7 @@ async function evaluateProductRelevanceAndGate({
   // 7. Dynamic Grounded Summary & Intent Construction
   let summary = rawAnalysis.summary || ""
   let customerIntent = rawAnalysis.customerIntent || ""
+  const company = catalog.companyName || "the organization"
 
   if (callerIsPitchingOutOfScope) {
     if (detectedOutOfScope?.type === "RECRUITMENT_PLACEMENT") {
@@ -364,8 +444,14 @@ async function evaluateProductRelevanceAndGate({
       summary = `Call was identified as a wrong number or spam.`
       customerIntent = "Wrong number / spam."
     }
+  } else if (productFit === "UNSUPPORTED" && qualificationReason === "UNSUPPORTED_PRODUCT_REQUEST") {
+    const requested = customerRequestedProductName || "an unsupported product"
+    summary = `The caller contacted ${company} inquiring about ${requested}. However, ${company} does not offer or support ${requested}. As the requested product is not part of the company's offerings, the lead is disqualified.`
+    customerIntent = `Inquiring about ${requested} (unsupported product request for ${company}).`
+  } else if (productFit === "UNRESOLVED") {
+    summary = `The caller contacted ${company} with a general inquiry, but insufficient specific product details were discussed to establish fit.`
+    customerIntent = `General inquiry without specific product details.`
   } else if (isProductRelevant && !hasExplicitRejection) {
-    const company = catalog.companyName || "the organization"
     const primaryInterests = filteredProductInterests.slice(0, 3).join(", ") || "product solutions"
 
     // Extract scale/capacity mentions from transcript (e.g. "15 se 20 bed", "22-25 staff", "500 students")
@@ -402,11 +488,18 @@ async function evaluateProductRelevanceAndGate({
     }
   }
 
-  const isQualifyingCallback = isProductRelevant && !callerIsPitchingOutOfScope && !hasExplicitRejection && callbackIntent.callbackRequested
+  // Follow-up is created ONLY when product is supported, relevant, and not rejected
+  const isQualifyingCallback = isProductRelevant &&
+    productFit === "SUPPORTED" &&
+    !callerIsPitchingOutOfScope &&
+    !hasExplicitRejection &&
+    callbackIntent.callbackRequested
 
   return {
     isProductRelevant,
     productRelevanceScore: Number(productRelevanceScore.toFixed(2)),
+    productFit,
+    customerRequestedProduct: customerRequestedProductName,
     leadQualificationScore: Number(leadQualificationScore.toFixed(2)),
     customerPurchaseIntent,
     qualificationStatus,

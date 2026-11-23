@@ -44,6 +44,11 @@ class ApiClient {
       headers["x-tenant-domain"] = window.location.hostname
     }
 
+    // Attach portal identifier header to prevent Safari Referer truncation from misidentifying Super Admin routes
+    if (!headers["x-auth-portal"] && typeof window !== "undefined" && window.location?.pathname?.startsWith("/super-admin")) {
+      headers["x-auth-portal"] = "super_admin"
+    }
+
     const config = {
       method: options.method || "GET",
       credentials: "include",
@@ -1428,6 +1433,107 @@ class ApiClient {
       method: "PUT",
       body: JSON.stringify(payload),
     })
+  }
+
+  // --- Quotations & Document Communication Endpoints (Phase 1 & 4) ---
+  async uploadQuotation(leadId, formData) {
+    return this.request(`/quotations/upload/${leadId}`, {
+      method: "POST",
+      body: formData,
+    })
+  }
+
+  async sendQuotation(quotationId, payload = {}) {
+    return this.request(`/quotations/${quotationId}/send`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async getLeadQuotations(leadId) {
+    return this.request(`/quotations/lead/${leadId}`)
+  }
+
+  async getLeadCommunicationHistory(leadId) {
+    return this.request(`/quotations/lead/${leadId}/timeline`)
+  }
+
+  async deleteQuotation(quotationId) {
+    return this.request(`/quotations/${quotationId}`, {
+      method: "DELETE",
+    })
+  }
+
+  getQuotationDownloadUrl(quotationId) {
+    let token = ""
+    if (typeof window !== "undefined") {
+      try {
+        token = localStorage.getItem("leadflow_token") || localStorage.getItem("token") || ""
+      } catch (_) {}
+    }
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
+    return `${API_BASE_URL}/quotations/${quotationId}/download${tokenParam}`
+  }
+
+  // --- Tenant Global Brochure Endpoints (Phase 2) ---
+  async uploadBrochure(formData) {
+    return this.request("/brochures/upload", {
+      method: "POST",
+      body: formData,
+    })
+  }
+
+  async getBrochures(params = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const qs = searchParams.toString()
+    return this.request(`/brochures${qs ? `?${qs}` : ""}`)
+  }
+
+  async toggleBrochureStatus(id, payload = {}) {
+    return this.request(`/brochures/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  getBrochureDownloadUrl(brochureId) {
+    return `${API_BASE_URL}/brochures/${brochureId}/download`
+  }
+
+  // --- Tenant Email Configuration Endpoints (Phase 3) ---
+  async getEmailConfig() {
+    return this.request("/email-config")
+  }
+
+  async updateEmailConfig(payload = {}) {
+    return this.request("/email-config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async testEmailConnection(payload = {}) {
+    return this.request("/email-config/test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  // --- Deal Revenue Analytics Endpoints (Phase 5) ---
+  async getDealAnalytics(params = {}) {
+    const searchParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        searchParams.append(key, value.toString())
+      }
+    })
+    const qs = searchParams.toString()
+    return this.request(`/deal-analytics${qs ? `?${qs}` : ""}`)
   }
 
 }

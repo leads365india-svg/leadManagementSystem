@@ -22,6 +22,15 @@ export default function SuperAdminLayout({ children }) {
 
   const isLoginPage = pathname === "/super-admin/login"
 
+  // Safety fallback timer to prevent infinite spinner on session loading hang
+  const [sessionTimedOut, setSessionTimedOut] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSessionTimedOut(true)
+    }, 3500)
+    return () => clearTimeout(timer)
+  }, [])
+
   // Handle outside click to close profile dropdown
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -44,7 +53,7 @@ export default function SuperAdminLayout({ children }) {
 
     if (isLoginPage) return
 
-    if (status === "unauthenticated") {
+    if (status === "unauthenticated" || (sessionTimedOut && !user)) {
       router.replace("/super-admin/login")
       return
     }
@@ -53,7 +62,7 @@ export default function SuperAdminLayout({ children }) {
       router.replace("/super-admin/login?error=unauthorized")
       return
     }
-  }, [isLoginPage, status, user, router])
+  }, [isLoginPage, status, user, router, sessionTimedOut])
 
   const handleLogout = async () => {
     try {
@@ -73,7 +82,7 @@ export default function SuperAdminLayout({ children }) {
   }
 
   // Loading state while checking authentication
-  if (loading || status === "idle") {
+  if ((loading || status === "idle") && !sessionTimedOut) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center space-y-4">

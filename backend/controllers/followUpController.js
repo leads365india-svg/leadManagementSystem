@@ -11,18 +11,54 @@ const ALLOWED_SORT_FIELDS = ["scheduledAt", "createdAt", "updatedAt", "priority"
 const { getEffectiveTenant } = require("../middleware/tenantContext")
 const { scopeFilter, checkDirectObjectAccess } = require("../utils/rbacScope")
 
-// Consistent transformation helper for follow-up responses
-const formatFollowUp = (f) => {
-  if (!f) return null
+// Timezone-aware calendar day helper for accurate follow-up metrics and status
+function getTenantDayBounds(timeZone = "Asia/Kolkata") {
   const now = new Date()
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+  let dateStr, offsetStr = "+05:30"
+  try {
+    dateStr = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now)
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "shortOffset" }).formatToParts(now)
+    const tzPart = parts.find((p) => p.type === "timeZoneName")?.value || "+05:30"
+    const match = tzPart.match(/GMT([+-]\d{1,2}(?::\d{2})?)/)
+    if (match) {
+      let raw = match[1]
+      if (!raw.includes(":")) raw += ":00"
+      if (raw.length === 5) raw = raw[0] + "0" + raw.slice(1)
+      offsetStr = raw
+    }
+  } catch (_) {
+    dateStr = now.toISOString().slice(0, 10)
+    offsetStr = "+05:30"
+  }
+  const start = new Date(`${dateStr}T00:00:00.000${offsetStr}`)
+  const end = new Date(`${dateStr}T23:59:59.999${offsetStr}`)
+  return { start, end, now }
+}
 
-  const isOverdue = f.status === "pending" && new Date(f.scheduledAt) < now
+// Consistent transformation helper for follow-up responses
+const ACTIVE_INCOMPLETE_STATUSES = ["pending", "due", "rescheduled", "missed"]
+
+// Canonical time query helper: checks scheduledAt or fallback callbackAt
+const buildTimeQuery = (condObj) => ({
+  $or: [
+    { scheduledAt: condObj },
+    { scheduledAt: null, callbackAt: condObj },
+  ],
+})
+
+const formatFollowUp = (f, tenantTimezone = "Asia/Kolkata") => {
+  if (!f) return null
+  const { start: startOfToday, end: endOfToday, now } = getTenantDayBounds(tenantTimezone)
+  const scheduledDate = f.scheduledAt || f.callbackAt
+  const scheduledTime = scheduledDate ? new Date(scheduledDate).getTime() : 0
+
+  const isActive = ACTIVE_INCOMPLETE_STATUSES.includes(f.status)
+
+  const isOverdue = isActive && scheduledTime > 0 && scheduledTime < now.getTime()
   const isToday =
-    f.status === "pending" &&
-    new Date(f.scheduledAt) >= now &&
-    new Date(f.scheduledAt) <= endOfToday
+    isActive &&
+    scheduledTime >= startOfToday.getTime() &&
+    scheduledTime <= endOfToday.getTime()
 
   const leadObj = f.leadId && typeof f.leadId === "object" ? f.leadId : null
   const leadIdStr = leadObj
@@ -54,11 +90,19 @@ const formatFollowUp = (f) => {
     title: f.title,
     type: f.type,
     scheduledAt: f.scheduledAt,
+    callbackAt: f.callbackAt || f.scheduledAt,
     status: f.status,
     priority: f.priority,
     notes: f.notes || "",
     assignedTo: f.assignedTo || "Unassigned",
     assignedStaffId: f.assignedStaffId || "unassigned",
+    callbackDirection: f.callbackDirection || null,
+    direction: f.direction || null,
+    taskAction: f.taskAction || null,
+    directionDescription: f.directionDescription || null,
+    productContext: f.productContext || "",
+    customerName: f.customerName || (leadObj ? leadObj.name : ""),
+    customerPhone: f.customerPhone || (leadObj ? leadObj.phone : ""),
     completedAt: f.completedAt,
     completedBy: f.completedBy,
     completionNotes: f.completionNotes || "",
@@ -81,7 +125,9 @@ const getFollowUps = async (req, res) => {
       page = 1,
       limit = 10,
       search = "",
-      status = "all",
+      status,
+      tab,
+      filter,
       type = "all",
       priority = "all",
       leadId,
@@ -102,11 +148,17 @@ const getFollowUps = async (req, res) => {
       return
     }
 
-    // Super Admin must have an authorized tenant context selected to access CRM follow-ups
+    // Super Admin without tenant context: return empty data gracefully (HTTP 200) instead of throwing 400
     if (isSuperAdmin && !effectiveTenantId) {
-      res.status(400).json({
-        success: false,
-        error: "Tenant context required. Please select an authorized tenant to view follow-ups.",
+      res.status(200).json({
+        success: true,
+        data: {
+          followUps: [],
+          total: 0,
+          page: Math.max(1, Number(page) || 1),
+          limit: Math.max(1, Math.min(100, Number(limit) || 10)),
+          totalPages: 0,
+        },
       })
       return
     }
@@ -124,75 +176,83 @@ const getFollowUps = async (req, res) => {
     const limitNum = Math.max(1, Math.min(100, Number(limit) || 10))
     const skip = (pageNum - 1) * limitNum
 
-    // Base query with tenant isolation
-    const query = {}
+    // Use andConditions array to ensure tenant isolation, RBAC, timeline queries, and search never conflict
+    const andConditions = []
     if (effectiveTenantId) {
-      query.tenantId = effectiveTenantId
+      andConditions.push({ tenantId: effectiveTenantId })
     }
 
     // Apply RBAC scope filter (own / team / all)
     const rbacQuery = await scopeFilter(req.user, "followups", "view")
     if (rbacQuery._id !== undefined) {
-      query._id = rbacQuery._id // Fails closed if unauthorized
+      andConditions.push({ _id: rbacQuery._id }) // Fails closed if unauthorized
     } else if (rbacQuery.$or) {
-      query.$or = rbacQuery.$or
+      andConditions.push({ $or: rbacQuery.$or })
     }
 
     // Specific lead filter
     if (leadId && mongoose.Types.ObjectId.isValid(leadId)) {
-      query.leadId = leadId
+      andConditions.push({ leadId: new mongoose.Types.ObjectId(leadId) })
     }
 
-    // Status filtering with timeline definitions
-    const now = new Date()
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    // Status filtering with timezone-aware timeline definitions
+    const { start: startOfToday, end: endOfToday, now } = getTenantDayBounds("Asia/Kolkata")
+    const activeStatusQuery = { $in: ACTIVE_INCOMPLETE_STATUSES }
 
-    const normalizedStatus = (status || "all").toLowerCase().trim()
+    let normalizedStatus = (status || tab || filter || "all").toLowerCase().trim()
+    if (normalizedStatus === "due_today" || normalizedStatus === "due-today") {
+      normalizedStatus = "today"
+    } else if (normalizedStatus === "total_pending" || normalizedStatus === "total-pending") {
+      normalizedStatus = "pending"
+    }
+
     if (normalizedStatus === "upcoming") {
-      query.status = "pending"
-      query.scheduledAt = { $gte: now }
+      andConditions.push({ status: activeStatusQuery })
+      andConditions.push(buildTimeQuery({ $gt: endOfToday }))
     } else if (normalizedStatus === "overdue") {
-      query.status = "pending"
-      query.scheduledAt = { $lt: now }
+      andConditions.push({ status: activeStatusQuery })
+      andConditions.push(buildTimeQuery({ $lt: now }))
     } else if (normalizedStatus === "today") {
-      query.status = "pending"
-      query.scheduledAt = { $gte: startOfToday, $lte: endOfToday }
+      andConditions.push({ status: activeStatusQuery })
+      andConditions.push(buildTimeQuery({ $gte: startOfToday, $lte: endOfToday }))
     } else if (normalizedStatus === "completed") {
-      query.status = "completed"
+      andConditions.push({ status: "completed" })
     } else if (normalizedStatus === "pending") {
-      query.status = "pending"
+      andConditions.push({ status: activeStatusQuery })
     } else if (normalizedStatus === "cancelled") {
-      query.status = "cancelled"
+      andConditions.push({ status: "cancelled" })
     }
 
     // Type filter
     if (type && type !== "all") {
-      query.type = type.toLowerCase().trim()
+      andConditions.push({ type: type.toLowerCase().trim() })
     }
 
     // Priority filter
     if (priority && priority !== "all") {
-      query.priority = priority.toLowerCase().trim()
+      andConditions.push({ priority: priority.toLowerCase().trim() })
     }
 
     // Date range filter
     if (fromDate || toDate) {
-      query.scheduledAt = query.scheduledAt || {}
+      const dateCond = {}
       if (fromDate) {
         const fromD = new Date(fromDate)
-        if (!isNaN(fromD.getTime())) query.scheduledAt.$gte = fromD
+        if (!isNaN(fromD.getTime())) dateCond.$gte = fromD
       }
       if (toDate) {
         const toD = new Date(toDate)
         if (!isNaN(toD.getTime())) {
           toD.setHours(23, 59, 59, 999)
-          query.scheduledAt.$lte = toD
+          dateCond.$lte = toD
         }
+      }
+      if (Object.keys(dateCond).length > 0) {
+        andConditions.push(buildTimeQuery(dateCond))
       }
     }
 
-    // Search filter across title, notes, and populated lead properties
+    // Search filter across title, notes, assignedTo, customerName, customerPhone, and populated lead properties
     if (typeof search === "string" && search.trim()) {
       const sanitized = escapeRegex(search.trim())
       const leadSearchQuery = {
@@ -214,16 +274,16 @@ const getFollowUps = async (req, res) => {
         { title: { $regex: sanitized, $options: "i" } },
         { notes: { $regex: sanitized, $options: "i" } },
         { assignedTo: { $regex: sanitized, $options: "i" } },
-        { leadId: { $in: matchingLeadIds } },
+        { customerName: { $regex: sanitized, $options: "i" } },
+        { customerPhone: { $regex: sanitized, $options: "i" } },
       ]
-
-      if (query.$or) {
-        query.$and = [{ $or: query.$or }, { $or: searchConditions }]
-        delete query.$or
-      } else {
-        query.$or = searchConditions
+      if (matchingLeadIds.length > 0) {
+        searchConditions.push({ leadId: { $in: matchingLeadIds } })
       }
+      andConditions.push({ $or: searchConditions })
     }
+
+    const query = andConditions.length === 0 ? {} : andConditions.length === 1 ? andConditions[0] : { $and: andConditions }
 
     // Sorting
     const sortField = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "scheduledAt"
@@ -280,43 +340,56 @@ const getFollowUpStats = async (req, res) => {
       return
     }
 
+    // Super Admin without tenant context: return empty statistics gracefully (HTTP 200) instead of throwing 400
     if (isSuperAdmin && !effectiveTenantId) {
-      res.status(400).json({
-        success: false,
-        error: "Tenant context required. Please select an authorized tenant to view follow-up statistics.",
+      res.status(200).json({
+        success: true,
+        data: {
+          total: 0,
+          upcoming: 0,
+          overdue: 0,
+          today: 0,
+          completed: 0,
+          pending: 0,
+          completionRate: 0,
+        },
       })
       return
     }
 
-    const baseQuery = {}
+    const andConditions = []
     if (effectiveTenantId) {
-      baseQuery.tenantId = effectiveTenantId
+      andConditions.push({ tenantId: effectiveTenantId })
     }
 
     const rbacQuery = await scopeFilter(req.user, "followups", "view")
     if (rbacQuery._id !== undefined) {
-      baseQuery._id = rbacQuery._id
+      andConditions.push({ _id: rbacQuery._id })
     } else if (rbacQuery.$or) {
-      baseQuery.$or = rbacQuery.$or
+      andConditions.push({ $or: rbacQuery.$or })
     }
 
-    const now = new Date()
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    const combine = (extra) => {
+      const merged = [...andConditions]
+      if (Array.isArray(extra)) {
+        merged.push(...extra)
+      } else if (extra) {
+        merged.push(extra)
+      }
+      return merged.length === 0 ? {} : merged.length === 1 ? merged[0] : { $and: merged }
+    }
 
-    const activeStatusQuery = { $in: ["pending", "due"] }
+    // Timezone-aware day boundaries for today/upcoming/overdue
+    const { start: startOfToday, end: endOfToday, now } = getTenantDayBounds("Asia/Kolkata")
+    const activeStatusQuery = { $in: ACTIVE_INCOMPLETE_STATUSES }
 
     const [total, upcoming, overdue, today, completed, pending] = await Promise.all([
-      FollowUp.countDocuments(baseQuery),
-      FollowUp.countDocuments({ ...baseQuery, status: activeStatusQuery, scheduledAt: { $gt: endOfToday } }),
-      FollowUp.countDocuments({ ...baseQuery, status: activeStatusQuery, scheduledAt: { $lt: now } }),
-      FollowUp.countDocuments({
-        ...baseQuery,
-        status: activeStatusQuery,
-        scheduledAt: { $gte: now, $lte: endOfToday },
-      }),
-      FollowUp.countDocuments({ ...baseQuery, status: "completed" }),
-      FollowUp.countDocuments({ ...baseQuery, status: activeStatusQuery }),
+      FollowUp.countDocuments(combine()),
+      FollowUp.countDocuments(combine([{ status: activeStatusQuery }, buildTimeQuery({ $gt: endOfToday })])),
+      FollowUp.countDocuments(combine([{ status: activeStatusQuery }, buildTimeQuery({ $lt: now })])),
+      FollowUp.countDocuments(combine([{ status: activeStatusQuery }, buildTimeQuery({ $gte: startOfToday, $lte: endOfToday })])),
+      FollowUp.countDocuments(combine({ status: "completed" })),
+      FollowUp.countDocuments(combine({ status: activeStatusQuery })),
     ])
 
     const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0
@@ -988,4 +1061,8 @@ module.exports = {
   updateFollowUp,
   completeFollowUp,
   deleteFollowUp,
+  getTenantDayBounds,
+  formatFollowUp,
+  ACTIVE_INCOMPLETE_STATUSES,
+  buildTimeQuery,
 }

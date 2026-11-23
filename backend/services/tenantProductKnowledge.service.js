@@ -434,6 +434,7 @@ function matchTranscriptAgainstKnowledge(transcriptText, knowledge) {
   }
 
   const uniqueMatchedKeywords = Array.from(new Set(matchedKeywords))
+  const substantiveMatches = uniqueMatchedKeywords.filter(isSubstantiveKeyword)
 
   // Resolve matching canonical products and modules from moduleCatalog
   const candidateProducts = new Set()
@@ -462,15 +463,271 @@ function matchTranscriptAgainstKnowledge(transcriptText, knowledge) {
 
   return {
     matchedKeywords: uniqueMatchedKeywords,
+    substantiveMatches,
     matchedProducts: Array.from(candidateProducts),
     matchedModules: Array.from(candidateModules),
   }
+}
+
+/**
+ * Generic industry / software words that cannot independently qualify a lead.
+ * As required by Strict Tenant Product-Only Lead Qualification Policy.
+ */
+const GENERIC_INDUSTRY_WORDS = new Set([
+  "software",
+  "crm",
+  "erp",
+  "system",
+  "solution",
+  "solutions",
+  "application",
+  "app",
+  "portal",
+  "platform",
+  "management",
+  "services",
+  "service",
+  "tool",
+  "tools",
+  "program",
+  "tech",
+  "technology",
+  "technologies",
+  "automation",
+  "digital",
+  "online",
+  "cloud",
+  "database",
+  "ka software",
+  "ke liye software",
+  "chalane ka software",
+  "ka system",
+  "ka crm",
+  "ka erp",
+  "सॉफ्टवेयर",
+  "सिस्टम",
+  "समाधान",
+  "प्रबंधन",
+])
+
+/**
+ * Validates whether a keyword or match is substantive (has specific domain/feature meaning)
+ * vs purely generic words like 'software', 'crm', 'system'.
+ */
+function isSubstantiveKeyword(keyword) {
+  if (!keyword || typeof keyword !== "string") return false
+  const clean = keyword.toLowerCase().trim()
+  if (clean.length < 3) return false
+  if (GENERIC_INDUSTRY_WORDS.has(clean)) return false
+
+  // Strip generic words and check what remains
+  const nonGenericTokens = clean
+    .split(/\s+/)
+    .filter((w) => !GENERIC_INDUSTRY_WORDS.has(w) && w.length > 2)
+  return nonGenericTokens.length > 0
+}
+
+/**
+ * Industry & product domain dictionary across SaaS verticals.
+ */
+const KNOWN_PRODUCT_DOMAINS = [
+  {
+    domain: "furniture",
+    canonicalName: "Furniture CRM",
+    regex: /\b(furniture|interior\s+design|furnishing|modular\s+kitchen|sofas?|woodwork|furniture\s+store)\b|(?:फर्नीचर|सोफा|इंटीरियर)/ui,
+  },
+  {
+    domain: "school",
+    canonicalName: "School Management ERP",
+    regex: /\b(schools?|colleges?|coaching|institutes?|student\s+admission|fees?\s+collection|lms|tuitions?|attendance\s+system)\b|(?:स्कूल|कॉलेज|कोचिंग|संस्थान|फीस|अटेंडेंस|छात्र|विद्यार्थी)/ui,
+  },
+  {
+    domain: "real estate",
+    canonicalName: "Real Estate Property CRM",
+    regex: /\b(real\s+estate|property|builders?|brokers?|flats?|plots?|apartments?|housing|site\s+visit)\b|(?:प्रॉपर्टी|रियल\s*एस्टेट|फ्लैट|प्लॉट|बिल्डर)/ui,
+  },
+  {
+    domain: "accounting",
+    canonicalName: "GST Billing & Accounting Software",
+    regex: /\b(accounting|gst\s+billing|e-invoicing|invoicing\s+software|tally|taxation|ledgers?|balance\s+sheet)\b|(?:अकाउंटिंग|जीएसटी|बिलिंग|टैली|इन्वॉइस)/ui,
+  },
+  {
+    domain: "hospital",
+    canonicalName: "Hospital Management Software",
+    regex: /\b(hospitals?|clinics?|hms|opd|ipd|doctors?|patients?|beds?|pharmacy|pathology|labs?|operation\s+theat(?:er|re)|ot|uhid|emr|ehr)\b|(?:अस्पताल|हॉस्पिटल|क्लीनिक|डॉक्टर|मरीज|मरीज़|ओपीडी|आईपीडी|फार्मेसी|लैब|पैथोलॉजी|बेड)/ui,
+  },
+  {
+    domain: "retail",
+    canonicalName: "Retail POS & Billing System",
+    regex: /\b(retail|pos|grocery|supermarkets?|kirana|garments?|clothing\s+store|apparel)\b|(?:किराना|रिटेल|दुकान|सुपरमार्केट|गारमेंट्स)/ui,
+  },
+  {
+    domain: "hardware",
+    canonicalName: "Hardware & Barcode Equipment",
+    regex: /\b(barcode\s+printers?|thermal\s+printers?|cctv|biometrics?|rfid|scanners?|servers?)\b/i,
+  },
+  {
+    domain: "digital marketing",
+    canonicalName: "Digital Marketing & SEO Services",
+    regex: /\b(digital\s+marketing|seo\s+services?|social\s+media\s+marketing|facebook\s+ads|google\s+ads)\b/i,
+  },
+  {
+    domain: "automobile",
+    canonicalName: "Automobile Dealership CRM",
+    regex: /\b(automobile|car\s+dealership|garages?|auto\s+repairs?|auto\s+showroom)\b/i,
+  },
+  {
+    domain: "restaurant",
+    canonicalName: "Hotel & Restaurant POS",
+    regex: /\b(restaurants?|cafes?|hotels?|food\s+courts?|dining|table\s+booking)\b/i,
+  },
+  {
+    domain: "gym",
+    canonicalName: "Gym & Salon Management Software",
+    regex: /\b(gyms?|salons?|spas?|beauty\s+parlou?r|fitness\s+center)\b/i,
+  },
+]
+
+/**
+ * Non-domain filler words that must not be mistaken for product domain terms.
+ */
+const NON_DOMAIN_WORDS = new Set([
+  // Pronouns & Possessives
+  "i", "me", "my", "myself", "we", "us", "our", "ours", "you", "your", "yours",
+  "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them", "their",
+  "mujhe", "hume", "humko", "humara", "hamara", "humari", "hamari", "humare", "hamare",
+  "mera", "meri", "mere", "aap", "aapko", "aapka", "aapki", "aapke", "tum", "tumhe",
+  "apna", "apni", "apne", "kisi", "kuch", "koi", "sab", "sara", "saare", "kisko",
+  // Common fillers & conversational words
+  "sir", "madam", "maam", "bhai", "ji", "namaste", "hello", "hi", "bas", "sirf",
+  "please", "kindly", "also", "too", "hi", "bhi", "to", "toh", "ka", "ki", "ke",
+  "ko", "se", "me", "mein", "par", "pe", "liye", "vaala", "wala", "wali", "wale",
+  // Generic business / scale / quality words
+  "business", "company", "office", "firm", "work", "kaam", "client", "clients",
+  "dukaan", "shop", "general", "normal", "basic", "standard", "good", "best", "some",
+  "ek", "two", "do", "personal", "daily", "simple", "full", "complete", "all",
+  // Common action verbs
+  "chahiye", "tha", "thi", "the", "hai", "hain", "karna", "dekhna", "batao", "bataiye",
+  "lena", "dena", "bol", "bolo", "hoga", "sake",
+  // Tech/Generic terms
+  "software", "crm", "erp", "system", "app", "application", "solution", "solutions",
+  "portal", "management", "service", "services", "tool", "tools",
+  "pricing", "price", "rate", "cost", "demo", "details", "quotation", "quote"
+])
+
+/**
+ * Extracts what product or service the customer requested from customer speech.
+ */
+function extractCustomerRequestedProduct(customerText) {
+  if (!customerText || typeof customerText !== "string") return null
+  const clean = customerText.toLowerCase()
+
+  // 1. Check known specific product domains in customer speech first
+  for (const item of KNOWN_PRODUCT_DOMAINS) {
+    if (item.regex.test(clean)) {
+      return {
+        productName: item.canonicalName,
+        domain: item.domain,
+        rawMatched: item.domain,
+      }
+    }
+  }
+
+  // 2. Direct linguistic extraction: e.g. "I need Furniture CRM", "School ERP chahiye"
+  // Strictly prevent crossing clause/sentence boundaries and avoid generic business/stop words
+  const phrasePatterns = [
+    /(?:need|want|looking\s+for|require|chahiye|chahiye\s+tha|chahiye\s+thi|kharidna|lagwana\s+hai|lena\s+hai)\s+(?:a|an|the|for)?\s*([a-zA-Z\u0900-\u097F0-9/_-]+(?:\s+[a-zA-Z\u0900-\u097F0-9/_-]+){0,3})\s+(?:software|crm|erp|system|solution|module|management|application|app|service|services|portal|tool|tools)\b/i,
+    /([a-zA-Z\u0900-\u097F0-9/_-]+(?:\s+[a-zA-Z\u0900-\u097F0-9/_-]+){0,3})\s+(?:software|crm|erp|system|solution|module|management|application|app|portal)\s+(?:chahiye|chahiye\s+tha|chahiye\s+thi|need|want|lagwana|kharidna)\b/i,
+    /(?:for|ke\s+liye)\s+(?:our|my|hamare|apne)?\s*([a-zA-Z\u0900-\u097F0-9/_-]+(?:\s+[a-zA-Z\u0900-\u097F0-9/_-]+){0,2})\s+(?:software|crm|erp|system|solution)\b/i,
+  ]
+
+  for (const regex of phrasePatterns) {
+    const match = clean.match(regex)
+    if (match && match[1]) {
+      const extractedTerm = match[1].trim()
+      const words = extractedTerm.split(/\s+/).filter((w) => !NON_DOMAIN_WORDS.has(w) && w.length > 2)
+      if (words.length > 0) {
+        const substantiveTerm = words.join(" ")
+        const domainMatch = KNOWN_PRODUCT_DOMAINS.find((d) => d.regex.test(substantiveTerm) || d.domain.includes(substantiveTerm))
+        if (domainMatch) {
+          return {
+            productName: domainMatch.canonicalName,
+            domain: domainMatch.domain,
+            rawMatched: substantiveTerm,
+          }
+        }
+        return {
+          productName: formatCanonicalInterestTitle(substantiveTerm + " System"),
+          domain: substantiveTerm,
+          rawMatched: substantiveTerm,
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+/**
+ * Checks whether a requested product inquiry is supported by the tenant's loaded catalogue.
+ */
+function isProductSupportedByTenant(productInquiry, knowledge) {
+  if (!productInquiry || !knowledge) return false
+  const targetTerms = [
+    productInquiry.domain,
+    productInquiry.rawMatched,
+    productInquiry.productName ? productInquiry.productName.toLowerCase() : "",
+  ].filter(Boolean)
+
+  // 1. Check knowledge.products
+  if (Array.isArray(knowledge.products)) {
+    for (const p of knowledge.products) {
+      const pText = (p.name + " " + (p.category || "") + " " + (p.description || "") + " " + (p.features || []).join(" ")).toLowerCase()
+      for (const term of targetTerms) {
+        if (pText.includes(term)) return true
+      }
+    }
+  }
+
+  // 2. Check knowledge.approvedTopics
+  if (Array.isArray(knowledge.approvedTopics)) {
+    for (const t of knowledge.approvedTopics) {
+      const tText = (t.name + " " + (t.category || "") + " " + (t.primaryKeywords || []).join(" ") + " " + (t.synonyms || []).join(" ")).toLowerCase()
+      for (const term of targetTerms) {
+        if (tText.includes(term)) return true
+      }
+    }
+  }
+
+  // 3. Check knowledge.industry, companyName, description
+  const tenantProfileText = ((knowledge.industry || "") + " " + (knowledge.companyName || "") + " " + (knowledge.description || "")).toLowerCase()
+  for (const term of targetTerms) {
+    if (tenantProfileText.includes(term)) return true
+  }
+
+  // 4. Check substantive approvedKeywords
+  if (Array.isArray(knowledge.approvedKeywords)) {
+    for (const kw of knowledge.approvedKeywords) {
+      if (!isSubstantiveKeyword(kw)) continue
+      const lkw = kw.toLowerCase()
+      for (const term of targetTerms) {
+        if (lkw.includes(term) || term.includes(lkw)) return true
+      }
+    }
+  }
+
+  return false
 }
 
 module.exports = {
   getTenantProductKnowledge,
   clearTenantKnowledgeCache,
   matchTranscriptAgainstKnowledge,
+  isSubstantiveKeyword,
+  extractCustomerRequestedProduct,
+  isProductSupportedByTenant,
+  GENERIC_INDUSTRY_WORDS,
+  KNOWN_PRODUCT_DOMAINS,
   isUrlOrDomain,
   sanitizeTerm,
   tokenizeWords,

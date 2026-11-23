@@ -48,7 +48,10 @@ import {
   Plus,
   Building2,
   Bell,
+  FileText,
+  Mail,
 } from "lucide-react"
+import FollowUpAlertManager from "@/components/follow-up-alert-manager"
 
 // Complete Six-Category CRM Navigation Structure (Granular RBAC permission keys assigned)
 const NAV_CATEGORIES = [
@@ -317,6 +320,22 @@ const NAV_CATEGORIES = [
         icon: PhoneCall,
         permission: "integrations.manage",
       },
+      {
+        id: "settings-brochures",
+        label: "Product Brochures",
+        href: "/settings/brochures",
+        description: "Global product PDF brochures for autonomous AI email dispatch",
+        icon: FileText,
+        permission: "settings.manage",
+      },
+      {
+        id: "settings-email-integration",
+        label: "Email & SMTP Integration",
+        href: "/settings/email-integration",
+        description: "Configure SMTP provider credentials, sender identity & templates",
+        icon: Mail,
+        permission: "settings.manage",
+      },
     ],
   },
 ]
@@ -352,6 +371,9 @@ export default function Header() {
     const loadCallbacks = async () => {
       try {
         if (!user) return
+        if (user.role === "super_admin" && !user.tenantId && typeof window !== "undefined" && !localStorage.getItem("leadflow_active_tenant")) {
+          return
+        }
         const [statsRes, listRes] = await Promise.all([
           apiClient.getFollowUpStats().catch(() => null),
           apiClient.getFollowUps({ status: "pending", limit: 5, sortBy: "scheduledAt", sortOrder: "asc" }).catch(() => null),
@@ -893,7 +915,7 @@ export default function Header() {
                       <div className="py-6 text-center text-slate-400">
                         <Clock className="w-6 h-6 mx-auto mb-1 text-slate-300" />
                         <p className="text-xs text-slate-500 font-medium">No pending callbacks</p>
-                        <p className="text-[10px] text-slate-400">You're all caught up!</p>
+                        <p className="text-[10px] text-slate-400">You&apos;re all caught up!</p>
                       </div>
                     ) : (
                       callbacksList.map((cb) => (
@@ -1205,6 +1227,9 @@ export default function Header() {
           </div>
         </div>
       )}
+
+      {/* Persistent In-App Follow-up & Callback Alarms */}
+      <FollowUpAlertManager />
     </header>
   )
 }

@@ -1,5 +1,6 @@
 const mongoose = require("mongoose")
-require("dotenv").config({ path: "backend/.env" })
+const path = require("path")
+require("dotenv").config({ path: path.join(__dirname, "../.env") })
 
 const { evaluateProductRelevanceAndGate } = require("../services/aiProductRelevanceGate.service")
 const { getTenantProductKnowledge, clearTenantKnowledgeCache } = require("../services/tenantProductKnowledge.service")
@@ -139,7 +140,7 @@ Okay sir, okay.`,
   assert(gateResultSchoolOnA.productRelevanceScore <= 0.10, `Relevance score <= 10% (got ${gateResultSchoolOnA.productRelevanceScore})`)
   assert(gateResultSchoolOnA.callOutcome === "NOT_INTERESTED", `Outcome is NOT_INTERESTED (got ${gateResultSchoolOnA.callOutcome})`)
   assert(gateResultSchoolOnA.qualificationStatus === "DISQUALIFIED", `Qualification is DISQUALIFIED (got ${gateResultSchoolOnA.qualificationStatus})`)
-  assert(gateResultSchoolOnA.qualificationReason === "OUT_OF_SCOPE_NON_PRODUCT_CALL", `Reason is OUT_OF_SCOPE (got ${gateResultSchoolOnA.qualificationReason})`)
+  assert(gateResultSchoolOnA.qualificationReason === "UNSUPPORTED_PRODUCT_REQUEST", `Reason is UNSUPPORTED_PRODUCT_REQUEST (got ${gateResultSchoolOnA.qualificationReason})`)
 
   // ---------------------------------------------------------------------------
   // [PART 3] Tenant B: School ERP Software
@@ -394,6 +395,135 @@ Okay sir, okay.`,
   })
   assert(hindiSchoolOnA.isProductRelevant === false, "Devanagari School inquiry on Medical 365 is DISQUALIFIED")
   assert(hindiSchoolOnA.callOutcome === "NOT_INTERESTED", "Outcome is NOT_INTERESTED")
+
+  // ---------------------------------------------------------------------------
+  // [PART 8] Policy Example 1: Medical 365 vs Furniture CRM + Agent Mentions HMS
+  // ---------------------------------------------------------------------------
+  console.log("\n[Test 8] Policy Example 1: Customer requests Furniture CRM on Medical 365 (Agent mentions HMS)")
+  const furnitureOnMedTranscript = {
+    transcriptText: "Customer: I need Furniture CRM. Agent: We only provide Hospital Management Software. Customer: Okay.",
+    segments: [
+      { speaker: "Customer", text: "I need Furniture CRM." },
+      { speaker: "Agent", text: "We only provide Hospital Management Software." },
+      { speaker: "Customer", text: "Okay." },
+    ],
+  }
+
+  const gateResultFurnitureOnMed = await evaluateProductRelevanceAndGate({
+    transcript: furnitureOnMedTranscript,
+    tenantId: tenantIdA, // Medical 365 (HMS)
+  })
+
+  assert(gateResultFurnitureOnMed.productFit === "UNSUPPORTED", `Product Fit is UNSUPPORTED (got ${gateResultFurnitureOnMed.productFit})`)
+  assert(gateResultFurnitureOnMed.isProductRelevant === false, "isProductRelevant is false")
+  assert(gateResultFurnitureOnMed.productRelevanceScore === 0.0, `Medical 365 relevance score is 0.0 (got ${gateResultFurnitureOnMed.productRelevanceScore})`)
+  assert(gateResultFurnitureOnMed.qualificationStatus === "DISQUALIFIED", `Qualification is DISQUALIFIED (got ${gateResultFurnitureOnMed.qualificationStatus})`)
+  assert(gateResultFurnitureOnMed.qualificationReason === "UNSUPPORTED_PRODUCT_REQUEST", `Reason is UNSUPPORTED_PRODUCT_REQUEST (got ${gateResultFurnitureOnMed.qualificationReason})`)
+  assert(gateResultFurnitureOnMed.crmLeadAction === "CLOSE_LOST", `CRM Lead action is CLOSE_LOST (got ${gateResultFurnitureOnMed.crmLeadAction})`)
+  assert(gateResultFurnitureOnMed.callOutcome === "NOT_INTERESTED", `Outcome is NOT_INTERESTED for Medical 365 (got ${gateResultFurnitureOnMed.callOutcome})`)
+  assert(gateResultFurnitureOnMed.customerPurchaseIntent === true, "Customer buying intent is PRESERVED as true")
+  assert(gateResultFurnitureOnMed.callbackRequested === false, "Follow-up callback is NOT created")
+  assert(gateResultFurnitureOnMed.filteredProductInterests.length === 0, "No product interests created for unsupported product")
+
+  // ---------------------------------------------------------------------------
+  // [PART 9] Policy Example 2: School ERP vs HMS Request
+  // ---------------------------------------------------------------------------
+  console.log("\n[Test 9] Policy Example 2: Customer requests HMS on School ERP tenant")
+  const hmsOnSchoolTranscript = {
+    transcriptText: "Hello, hume hospital management software chahiye, OPD aur IPD ke liye. Demo arrange kar dijiye.",
+    segments: [
+      { speaker: "Customer", text: "Hello, hume hospital management software chahiye, OPD aur IPD ke liye. Demo arrange kar dijiye." },
+    ],
+  }
+
+  const gateResultHmsOnSchool = await evaluateProductRelevanceAndGate({
+    transcript: hmsOnSchoolTranscript,
+    tenantId: "TENANT-EDUTECH",
+    catalogOverride: catalogOverrideTenantB,
+  })
+
+  assert(gateResultHmsOnSchool.productFit === "UNSUPPORTED", `Product Fit on School ERP is UNSUPPORTED (got ${gateResultHmsOnSchool.productFit})`)
+  assert(gateResultHmsOnSchool.productRelevanceScore === 0.0, `School ERP relevance score is 0.0 (got ${gateResultHmsOnSchool.productRelevanceScore})`)
+  assert(gateResultHmsOnSchool.qualificationStatus === "DISQUALIFIED", `Qualification is DISQUALIFIED (got ${gateResultHmsOnSchool.qualificationStatus})`)
+  assert(gateResultHmsOnSchool.qualificationReason === "UNSUPPORTED_PRODUCT_REQUEST", `Reason is UNSUPPORTED_PRODUCT_REQUEST (got ${gateResultHmsOnSchool.qualificationReason})`)
+  assert(gateResultHmsOnSchool.crmLeadAction === "CLOSE_LOST", `CRM Lead action is CLOSE_LOST (got ${gateResultHmsOnSchool.crmLeadAction})`)
+  assert(gateResultHmsOnSchool.callOutcome === "NOT_INTERESTED", `Outcome is NOT_INTERESTED (got ${gateResultHmsOnSchool.callOutcome})`)
+  assert(gateResultHmsOnSchool.customerPurchaseIntent === true, "Customer buying intent is true")
+  assert(gateResultHmsOnSchool.callbackRequested === false, "Callback task is false")
+
+  // ---------------------------------------------------------------------------
+  // [PART 10] Policy Example 3: Real Estate CRM vs Pharmacy Software Request
+  // ---------------------------------------------------------------------------
+  console.log("\n[Test 10] Policy Example 3: Customer requests Pharmacy Software on Real Estate CRM tenant")
+  const pharmacyOnReTranscript = {
+    transcriptText: "Hello, pharmacy management software chahiye stock and billing ke liye. Pricing kya hai?",
+    segments: [
+      { speaker: "Customer", text: "Hello, pharmacy management software chahiye stock and billing ke liye. Pricing kya hai?" },
+    ],
+  }
+
+  const gateResultPharmOnRe = await evaluateProductRelevanceAndGate({
+    transcript: pharmacyOnReTranscript,
+    tenantId: "TENANT-PROPTECH",
+    catalogOverride: catalogOverrideTenantC,
+  })
+
+  assert(gateResultPharmOnRe.productFit === "UNSUPPORTED", `Product Fit on Real Estate is UNSUPPORTED (got ${gateResultPharmOnRe.productFit})`)
+  assert(gateResultPharmOnRe.productRelevanceScore === 0.0, `Real Estate relevance score is 0.0 (got ${gateResultPharmOnRe.productRelevanceScore})`)
+  assert(gateResultPharmOnRe.qualificationStatus === "DISQUALIFIED", `Qualification is DISQUALIFIED (got ${gateResultPharmOnRe.qualificationStatus})`)
+  assert(gateResultPharmOnRe.qualificationReason === "UNSUPPORTED_PRODUCT_REQUEST", `Reason is UNSUPPORTED_PRODUCT_REQUEST (got ${gateResultPharmOnRe.qualificationReason})`)
+  assert(gateResultPharmOnRe.crmLeadAction === "CLOSE_LOST", `CRM action is CLOSE_LOST (got ${gateResultPharmOnRe.crmLeadAction})`)
+  assert(gateResultPharmOnRe.callOutcome === "NOT_INTERESTED", `Outcome is NOT_INTERESTED (got ${gateResultPharmOnRe.callOutcome})`)
+  assert(gateResultPharmOnRe.customerPurchaseIntent === true, "Customer purchase intent is true")
+
+  // ---------------------------------------------------------------------------
+  // [PART 11] Policy Section 2 & 8: Generic Words Alone Cannot Qualify Lead
+  // ---------------------------------------------------------------------------
+  console.log("\n[Test 11] Policy Section 2 & 8: Generic Words Alone ('software', 'crm') Cannot Qualify")
+  const genericWordsTranscript = {
+    transcriptText: "Hello, mujhe ek software chahiye apne business ke liye. Software kya rate me dete ho? Agent: Kis cheez ka software chahiye sir? Customer: Bas software dekhna tha, pricing bataiye.",
+    segments: [
+      { speaker: "Customer", text: "Hello, mujhe ek software chahiye apne business ke liye. Software kya rate me dete ho?" },
+      { speaker: "Agent", text: "Kis cheez ka software chahiye sir?" },
+      { speaker: "Customer", text: "Bas software dekhna tha, pricing bataiye." },
+    ],
+  }
+
+  const gateResultGenericWords = await evaluateProductRelevanceAndGate({
+    transcript: genericWordsTranscript,
+    tenantId: tenantIdA, // Medical 365
+  })
+
+  assert(gateResultGenericWords.productFit === "UNRESOLVED", `Product Fit is UNRESOLVED (got ${gateResultGenericWords.productFit})`)
+  assert(gateResultGenericWords.isProductRelevant === false, "isProductRelevant is false for generic words alone")
+  assert(gateResultGenericWords.qualificationStatus === "UNRESOLVED", `Status is UNRESOLVED (got ${gateResultGenericWords.qualificationStatus})`)
+  assert(gateResultGenericWords.qualificationReason === "UNCERTAIN_PRODUCT_CONTEXT", `Reason is UNCERTAIN_PRODUCT_CONTEXT (got ${gateResultGenericWords.qualificationReason})`)
+  assert(gateResultGenericWords.crmLeadAction === "DO_NOT_UPDATE", `CRM Lead action is DO_NOT_UPDATE (got ${gateResultGenericWords.crmLeadAction})`)
+  assert(gateResultGenericWords.callOutcome === "UNRESOLVED", `Outcome is UNRESOLVED (got ${gateResultGenericWords.callOutcome})`)
+  assert(gateResultGenericWords.callbackRequested === false, "Callback is not created for generic inquiry")
+
+  // ---------------------------------------------------------------------------
+  // [PART 12] Policy Section 7: Unsupported Product with WhatsApp Request Suppressed
+  // ---------------------------------------------------------------------------
+  console.log("\n[Test 12] Policy Section 7: Customer asking for WhatsApp details on Unsupported Product")
+  const whatsappOnUnsupportedTranscript = {
+    transcriptText: "Customer: I need Furniture CRM. Send quotation and details on WhatsApp, tomorrow 2 PM. Agent: We don't offer furniture CRM.",
+    segments: [
+      { speaker: "Customer", text: "I need Furniture CRM. Send quotation and details on WhatsApp, tomorrow 2 PM." },
+      { speaker: "Agent", text: "We don't offer furniture CRM." },
+    ],
+  }
+
+  const gateResultWhatsappUnsupported = await evaluateProductRelevanceAndGate({
+    transcript: whatsappOnUnsupportedTranscript,
+    tenantId: tenantIdA, // Medical 365
+  })
+
+  assert(gateResultWhatsappUnsupported.productFit === "UNSUPPORTED", "Product Fit is UNSUPPORTED")
+  assert(gateResultWhatsappUnsupported.qualificationReason === "UNSUPPORTED_PRODUCT_REQUEST", "Reason is UNSUPPORTED_PRODUCT_REQUEST")
+  assert(gateResultWhatsappUnsupported.callbackRequested === false, "Callback is strictly SUPPRESSED for unsupported product")
+  assert(gateResultWhatsappUnsupported.crmLeadAction === "CLOSE_LOST", "CRM action is CLOSE_LOST")
+  assert(gateResultWhatsappUnsupported.callOutcome === "NOT_INTERESTED", "Call outcome is NOT_INTERESTED")
 
   console.log("\n================================================================================")
   console.log(`TOTAL TESTS: ${passed + failed} | PASSED: ${passed} | FAILED: ${failed}`)

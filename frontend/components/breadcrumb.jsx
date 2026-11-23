@@ -34,6 +34,14 @@ export default function Breadcrumb({ items }) {
         label = "Lead Management"
       }
 
+      if (segment === "brochures") {
+        label = "Product Brochures"
+      }
+
+      if (segment === "email-integration") {
+        label = "Email & SMTP Integration"
+      }
+
       // If it's the last segment, don't include href (current page)
       if (index === pathSegments.length - 1) {
         breadcrumbs.push({ label })

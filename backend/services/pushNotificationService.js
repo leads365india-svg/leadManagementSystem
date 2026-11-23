@@ -1,3 +1,4 @@
+const mongoose = require("mongoose")
 const Device = require("../models/Device")
 
 /**
@@ -38,15 +39,18 @@ const sendLeadAssignedNotification = async ({ lead, agentId, tenantId }) => {
   try {
     if (!lead || !agentId || agentId === "unassigned") return null
 
-    const query = {
-      userId: agentId,
-      status: "ACTIVE",
-      fcmToken: { $ne: null, $exists: true },
-    }
-    if (tenantId) query.tenantId = tenantId
+    let tokens = []
+    if (mongoose.Types.ObjectId.isValid(agentId)) {
+      const query = {
+        userId: agentId,
+        status: "ACTIVE",
+        fcmToken: { $ne: null, $exists: true },
+      }
+      if (tenantId) query.tenantId = tenantId
 
-    const devices = await Device.find(query).lean()
-    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+      const devices = await Device.find(query).lean()
+      tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+    }
 
     const payload = {
       notification: {
@@ -168,15 +172,18 @@ const sendCallbackScheduledNotification = async ({ followUp, lead, agentId, tena
   try {
     if (!followUp || !agentId || agentId === "unassigned") return null
 
-    const query = {
-      userId: agentId,
-      status: "ACTIVE",
-      fcmToken: { $ne: null, $exists: true },
-    }
-    if (tenantId) query.tenantId = tenantId
+    let tokens = []
+    if (mongoose.Types.ObjectId.isValid(agentId)) {
+      const query = {
+        userId: agentId,
+        status: "ACTIVE",
+        fcmToken: { $ne: null, $exists: true },
+      }
+      if (tenantId) query.tenantId = tenantId
 
-    const devices = await Device.find(query).lean()
-    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+      const devices = await Device.find(query).lean()
+      tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+    }
 
     const customerName = (lead && lead.name) || followUp.customerName || "Customer"
     const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""
@@ -257,25 +264,36 @@ const sendCallbackReminderNotification = async ({ followUp, lead, agentId, tenan
   try {
     if (!followUp || !agentId || agentId === "unassigned") return null
 
-    const query = {
-      userId: agentId,
-      status: "ACTIVE",
-      fcmToken: { $ne: null, $exists: true },
-    }
-    if (tenantId) query.tenantId = tenantId
+    let tokens = []
+    if (mongoose.Types.ObjectId.isValid(agentId)) {
+      const query = {
+        userId: agentId,
+        status: "ACTIVE",
+        fcmToken: { $ne: null, $exists: true },
+      }
+      if (tenantId) query.tenantId = tenantId
 
-    const devices = await Device.find(query).lean()
-    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+      const devices = await Device.find(query).lean()
+      tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+    }
 
     const customerName = (lead && lead.name) || followUp.customerName || "Customer"
     const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""
     const isDueNow = reminderType === "DUE_NOW"
-    const eventType = isDueNow ? "EVENT_CALLBACK_DUE" : "EVENT_CALLBACK_REMINDER"
+    const isOverdue = reminderType === "OVERDUE"
+    let eventType = "EVENT_CALLBACK_REMINDER"
+    let notificationTitle = `Upcoming Callback in 5 mins: ${customerName}`
 
-    const notificationTitle = isDueNow
-      ? `Callback Due Now: ${customerName}`
-      : `Upcoming Callback in 5 mins: ${customerName}`
+    if (isDueNow) {
+      eventType = "EVENT_CALLBACK_DUE"
+      notificationTitle = `Callback Due Now: ${customerName}`
+    } else if (isOverdue) {
+      eventType = "EVENT_CALLBACK_OVERDUE"
+      notificationTitle = `Overdue Follow-up: ${customerName}`
+    }
 
+    const isAgentCall = followUp.callbackDirection === "AGENT_CALLBACK" || followUp.direction === "OUTBOUND"
+    const taskAction = followUp.taskAction || (isAgentCall ? "Call customer" : "Follow up with customer")
     const notificationBody = `${customerPhone ? customerPhone + " • " : ""}${followUp.callbackReason || followUp.title || "Scheduled Follow-up"}`
 
     const payload = {
@@ -295,6 +313,10 @@ const sendCallbackReminderNotification = async ({ followUp, lead, agentId, tenan
         leadPhone: customerPhone,
         title: followUp.title || `Callback: ${customerName}`,
         notes: followUp.notes || followUp.callbackReason || "",
+        callbackDirection: followUp.callbackDirection || (isAgentCall ? "AGENT_CALLBACK" : "EXPECTED_CUSTOMER_CALLBACK"),
+        direction: followUp.direction || (isAgentCall ? "OUTBOUND" : "INBOUND"),
+        taskAction,
+        directionDescription: followUp.directionDescription || "",
         scheduledAt: followUp.scheduledAt ? new Date(followUp.scheduledAt).toISOString() : "",
         callbackAt: followUp.callbackAt ? new Date(followUp.callbackAt).toISOString() : "",
         callbackTimezone: followUp.callbackTimezone || "Asia/Kolkata",
@@ -345,15 +367,18 @@ const sendCallbackRescheduledNotification = async ({ followUp, lead, agentId, te
   try {
     if (!followUp || !agentId || agentId === "unassigned") return null
 
-    const query = {
-      userId: agentId,
-      status: "ACTIVE",
-      fcmToken: { $ne: null, $exists: true },
-    }
-    if (tenantId) query.tenantId = tenantId
+    let tokens = []
+    if (mongoose.Types.ObjectId.isValid(agentId)) {
+      const query = {
+        userId: agentId,
+        status: "ACTIVE",
+        fcmToken: { $ne: null, $exists: true },
+      }
+      if (tenantId) query.tenantId = tenantId
 
-    const devices = await Device.find(query).lean()
-    const tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+      const devices = await Device.find(query).lean()
+      tokens = devices.map((d) => d.fcmToken).filter(Boolean)
+    }
 
     const customerName = (lead && lead.name) || followUp.customerName || "Customer"
     const customerPhone = (lead && lead.phone) || followUp.customerPhone || ""

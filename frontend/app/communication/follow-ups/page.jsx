@@ -108,7 +108,7 @@ function FollowUpsContent() {
   const searchParams = useSearchParams()
 
   // URL state synchronization
-  const currentStatusTab = searchParams.get("status") || "all"
+  const currentStatusTab = searchParams.get("status") || searchParams.get("tab") || searchParams.get("filter") || "all"
   const currentTypeFilter = searchParams.get("type") || "all"
   const currentPriorityFilter = searchParams.get("priority") || "all"
   const currentSearch = searchParams.get("search") || ""
@@ -249,6 +249,10 @@ function FollowUpsContent() {
   // Helper to push query updates
   const updateUrlParams = (updates = {}) => {
     const params = new URLSearchParams(searchParams.toString())
+    if (updates.status !== undefined) {
+      params.delete("tab")
+      params.delete("filter")
+    }
     Object.entries(updates).forEach(([key, value]) => {
       if (value === undefined || value === null || value === "" || value === "all") {
         params.delete(key)
@@ -745,9 +749,10 @@ function FollowUpsContent() {
               <div className="flex items-center space-x-1.5 overflow-x-auto">
                 {[
                   { key: "all", label: "All Follow-ups", count: stats.total },
-                  { key: "upcoming", label: "Upcoming", count: stats.upcoming },
                   { key: "today", label: "Due Today", count: stats.today },
+                  { key: "upcoming", label: "Upcoming", count: stats.upcoming },
                   { key: "overdue", label: "Overdue", count: stats.overdue, isAlert: stats.overdue > 0 },
+                  { key: "pending", label: "Pending", count: stats.pending || ((stats.today || 0) + (stats.upcoming || 0) + (stats.overdue || 0)) },
                   { key: "completed", label: "Completed", count: stats.completed },
                 ].map((tab) => (
                   <button

@@ -161,6 +161,31 @@ const aiCallAnalysisSchema = new mongoose.Schema(
       min: 0.0,
       max: 1.0,
     },
+    productFit: {
+      type: String,
+      enum: ["SUPPORTED", "UNSUPPORTED", "PARTIAL", "UNRESOLVED"],
+      default: "UNRESOLVED",
+      index: true,
+    },
+    customerRequestedProduct: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    quotationIntent: {
+      requestedByCustomer: { type: Boolean, default: false },
+      promisedByAgent: { type: Boolean, default: false },
+      channel: { type: String, default: "unspecified" },
+      customerEmail: { type: String, default: null },
+      supportingEvidence: { type: String, default: "" },
+    },
+    brochureIntent: {
+      requestedByCustomer: { type: Boolean, default: false },
+      promisedByAgent: { type: Boolean, default: false },
+      channel: { type: String, default: "unspecified" },
+      customerEmail: { type: String, default: null },
+      supportingEvidence: { type: String, default: "" },
+    },
     leadQualificationScore: {
       type: Number,
       default: null,

@@ -45,6 +45,7 @@ export default function ClientPortalDashboard() {
     pending: 0,
     total: 0,
   })
+  const [fuError, setFuError] = useState(false)
   const [recentLeads, setRecentLeads] = useState([])
   const [user, setUser] = useState(authUser || null)
   const [loading, setLoading] = useState(true)
@@ -89,7 +90,7 @@ export default function ClientPortalDashboard() {
       const [statsRes, leadsRes, fuStatsRes] = await Promise.all([
         apiClient.getLeadStats(),
         apiClient.getLeads({ limit: 5, sortBy: "createdAt", sortOrder: "desc" }),
-        apiClient.getFollowUpStats().catch(() => null),
+        apiClient.getFollowUpStats().catch(() => ({ success: false })),
       ])
 
       if (statsRes.success && statsRes.data) {
@@ -100,8 +101,11 @@ export default function ClientPortalDashboard() {
         setRecentLeads(leadsRes.data.leads)
       }
 
-      if (fuStatsRes?.success && fuStatsRes.data) {
+      if (fuStatsRes && fuStatsRes.success && fuStatsRes.data) {
         setFollowUpStats(fuStatsRes.data)
+        setFuError(false)
+      } else {
+        setFuError(true)
       }
     } catch (error) {
       console.error("Failed to load portal data:", error)
@@ -190,23 +194,29 @@ export default function ClientPortalDashboard() {
       {/* 4 Summary Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         {/* Card 1: Total Leads */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        <Link
+          href="/leads"
+          className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer group"
+        >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 group-hover:text-indigo-600 transition-colors">
               Total Leads
             </p>
             <h3 className="text-2xl font-bold text-slate-900 mt-1">{stats.total}</h3>
             <p className="text-[11px] text-slate-400 mt-1">Active in pipeline</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:scale-105 transition-transform">
             <Users className="w-6 h-6" />
           </div>
-        </div>
+        </Link>
 
         {/* Card 2: New Leads */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        <Link
+          href="/leads?status=New"
+          className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between hover:border-blue-300 hover:shadow-md transition-all cursor-pointer group"
+        >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 group-hover:text-blue-600 transition-colors">
               New Leads
             </p>
             <h3 className="text-2xl font-bold text-blue-600 mt-1">
@@ -214,15 +224,18 @@ export default function ClientPortalDashboard() {
             </h3>
             <p className="text-[11px] text-slate-400 mt-1">Awaiting contact</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform">
             <Clock className="w-6 h-6" />
           </div>
-        </div>
+        </Link>
 
         {/* Card 3: Closed Won */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        <Link
+          href="/leads?status=Closed-Won"
+          className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between hover:border-emerald-300 hover:shadow-md transition-all cursor-pointer group"
+        >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 group-hover:text-emerald-600 transition-colors">
               Closed Won
             </p>
             <h3 className="text-2xl font-bold text-emerald-600 mt-1">
@@ -230,24 +243,27 @@ export default function ClientPortalDashboard() {
             </h3>
             <p className="text-[11px] text-slate-400 mt-1">Converted deals</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
             <CheckCircle2 className="w-6 h-6" />
           </div>
-        </div>
+        </Link>
 
         {/* Card 4: Conversion Rate */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between">
+        <Link
+          href="/reports/leads"
+          className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs flex items-center justify-between hover:border-purple-300 hover:shadow-md transition-all cursor-pointer group"
+        >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 group-hover:text-purple-600 transition-colors">
               Conversion Rate
             </p>
             <h3 className="text-2xl font-bold text-purple-600 mt-1">{stats.conversionRate}%</h3>
             <p className="text-[11px] text-slate-400 mt-1">Win percentage</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform">
             <TrendingUp className="w-6 h-6" />
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* Pipeline Status Breakdown */}
@@ -258,7 +274,7 @@ export default function ClientPortalDashboard() {
             <p className="text-xs text-slate-500">Stage distribution of active tenant prospects</p>
           </div>
           <Link
-            href="/portal/leads"
+            href="/leads"
             className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
           >
             <span>View Full Pipeline</span>
@@ -286,16 +302,17 @@ export default function ClientPortalDashboard() {
               color: "bg-red-500",
             },
           ].map((stage) => (
-            <div
+            <Link
               key={stage.label}
-              className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-left"
+              href={`/leads?status=${encodeURIComponent(stage.label)}`}
+              className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-left hover:bg-slate-100 hover:border-slate-300 hover:shadow-xs transition-all cursor-pointer block"
             >
               <div className="flex items-center space-x-2">
                 <span className={`w-2.5 h-2.5 rounded-full ${stage.color}`} />
                 <span className="text-xs font-medium text-slate-600 truncate">{stage.label}</span>
               </div>
               <p className="text-xl font-bold text-slate-900 mt-2">{stage.count}</p>
-            </div>
+            </Link>
           ))}
         </div>
       </div>
@@ -321,69 +338,84 @@ export default function ClientPortalDashboard() {
           </Link>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2">
-          <Link
-            href="/communication/follow-ups?tab=today"
-            className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 text-left hover:bg-amber-50 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-amber-800">Today's Due</span>
-              <Clock className="w-3.5 h-3.5 text-amber-600" />
+        {fuError ? (
+          <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-xs text-amber-800">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Could not load follow-up metrics. Verify connection or retry.</span>
             </div>
-            <p className="text-2xl font-bold text-amber-900 mt-2">{followUpStats.today || 0}</p>
-            <p className="text-[10px] text-amber-700/80 mt-0.5">Need attention today</p>
-          </Link>
+            <button
+              onClick={() => loadData()}
+              className="text-xs font-semibold px-2.5 py-1 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2">
+            <Link
+              href="/communication/follow-ups?status=today"
+              className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 text-left hover:bg-amber-50 transition-colors block"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-amber-800">Today&apos;s Due</span>
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+              </div>
+              <p className="text-2xl font-bold text-amber-900 mt-2">{followUpStats.today || 0}</p>
+              <p className="text-[10px] text-amber-700/80 mt-0.5">Need attention today</p>
+            </Link>
 
-          <Link
-            href="/communication/follow-ups?tab=upcoming"
-            className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200/80 text-left hover:bg-blue-50 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-blue-800">Upcoming</span>
-              <Calendar className="w-3.5 h-3.5 text-blue-600" />
-            </div>
-            <p className="text-2xl font-bold text-blue-900 mt-2">{followUpStats.upcoming || 0}</p>
-            <p className="text-[10px] text-blue-700/80 mt-0.5">Scheduled future</p>
-          </Link>
+            <Link
+              href="/communication/follow-ups?status=upcoming"
+              className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200/80 text-left hover:bg-blue-50 transition-colors block"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-blue-800">Upcoming</span>
+                <Calendar className="w-3.5 h-3.5 text-blue-600" />
+              </div>
+              <p className="text-2xl font-bold text-blue-900 mt-2">{followUpStats.upcoming || 0}</p>
+              <p className="text-[10px] text-blue-700/80 mt-0.5">Scheduled future</p>
+            </Link>
 
-          <Link
-            href="/communication/follow-ups?tab=overdue"
-            className="p-3.5 rounded-xl bg-red-50/60 border border-red-200/80 text-left hover:bg-red-50 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-red-800">Overdue</span>
-              <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-            </div>
-            <p className="text-2xl font-bold text-red-900 mt-2">{followUpStats.overdue || 0}</p>
-            <p className="text-[10px] text-red-700/80 mt-0.5">Missed scheduled time</p>
-          </Link>
+            <Link
+              href="/communication/follow-ups?status=overdue"
+              className="p-3.5 rounded-xl bg-red-50/60 border border-red-200/80 text-left hover:bg-red-50 transition-colors block"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-red-800">Overdue</span>
+                <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+              </div>
+              <p className="text-2xl font-bold text-red-900 mt-2">{followUpStats.overdue || 0}</p>
+              <p className="text-[10px] text-red-700/80 mt-0.5">Missed scheduled time</p>
+            </Link>
 
-          <Link
-            href="/communication/follow-ups?status=completed"
-            className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200/80 text-left hover:bg-emerald-50 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-emerald-800">Completed</span>
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            </div>
-            <p className="text-2xl font-bold text-emerald-900 mt-2">{followUpStats.completed || 0}</p>
-            <p className="text-[10px] text-emerald-700/80 mt-0.5">Successfully called</p>
-          </Link>
+            <Link
+              href="/communication/follow-ups?status=completed"
+              className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200/80 text-left hover:bg-emerald-50 transition-colors block"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-emerald-800">Completed</span>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              </div>
+              <p className="text-2xl font-bold text-emerald-900 mt-2">{followUpStats.completed || 0}</p>
+              <p className="text-[10px] text-emerald-700/80 mt-0.5">Successfully called</p>
+            </Link>
 
-          <Link
-            href="/communication/follow-ups?status=pending"
-            className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-200/80 text-left hover:bg-indigo-50 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-indigo-800">Total Pending</span>
-              <Users className="w-3.5 h-3.5 text-indigo-600" />
-            </div>
-            <p className="text-2xl font-bold text-indigo-900 mt-2">
-              {followUpStats.pending || ((followUpStats.today || 0) + (followUpStats.upcoming || 0) + (followUpStats.overdue || 0)) || 0}
-            </p>
-            <p className="text-[10px] text-indigo-700/80 mt-0.5">Active callback queue</p>
-          </Link>
-        </div>
+            <Link
+              href="/communication/follow-ups?status=pending"
+              className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-200/80 text-left hover:bg-indigo-50 transition-colors block"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-indigo-800">Total Pending</span>
+                <Users className="w-3.5 h-3.5 text-indigo-600" />
+              </div>
+              <p className="text-2xl font-bold text-indigo-900 mt-2">
+                {followUpStats.pending || ((followUpStats.today || 0) + (followUpStats.upcoming || 0) + (followUpStats.overdue || 0)) || 0}
+              </p>
+              <p className="text-[10px] text-indigo-700/80 mt-0.5">Active callback queue</p>
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* AI Call Intelligence & Voice Analytics Shortcut */}

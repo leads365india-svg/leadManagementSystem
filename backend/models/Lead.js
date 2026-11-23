@@ -231,6 +231,86 @@ const leadSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Deal & Closing Amount Tracking - Phase 5
+    expectedDealAmount: {
+      type: Number,
+      default: 0,
+      min: [0, "Expected deal amount cannot be negative"],
+    },
+    closedWonAmount: {
+      type: Number,
+      default: null,
+      min: [0, "Closed won amount cannot be negative"],
+    },
+    currency: {
+      type: String,
+      default: "INR",
+      trim: true,
+      uppercase: true,
+    },
+    dealStatus: {
+      type: String,
+      enum: ["Open", "Won", "Lost"],
+      default: "Open",
+      trim: true,
+      index: true,
+    },
+    closedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+    closedByName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    closedAt: {
+      type: Date,
+      default: null,
+    },
+    closingNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    amountHistory: {
+      type: [
+        {
+          _id: false,
+          type: { type: String, enum: ["expected", "closed_won"] },
+          amount: { type: Number, required: true },
+          currency: { type: String, default: "INR" },
+          changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+          changedByName: { type: String, default: "System" },
+          changedAt: { type: Date, default: Date.now },
+          notes: { type: String, default: "" },
+        },
+      ],
+      default: [],
+    },
+    // Quotation Tracking - Phase 1 & 7
+    quotationRequested: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    quotationRequestedAt: {
+      type: Date,
+      default: null,
+    },
+    quotationRequestedEvidence: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    quotationStatus: {
+      type: String,
+      enum: ["None", "Requested", "Uploaded", "Sent"],
+      default: "None",
+      index: true,
+    },
     // Universal Dynamic Custom Fields (structured array preserving submission order, labels, types)
     customFields: {
       type: [
