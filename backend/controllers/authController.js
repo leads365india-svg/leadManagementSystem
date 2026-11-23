@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const { getJwtSecret } = require("../middleware/authMiddleware")
+const { getAccountByCustomDomainCached } = require("../utils/customDomainCache")
 const audit = require("../services/auditService")
 
 const JWT_EXPIRES_IN = "24h"
@@ -454,8 +455,8 @@ const getMe = async (req, res) => {
     const { tenantId: effectiveTenantId } = getEffectiveTenant(req)
 
     if (req.user.role !== "super_admin") {
-      let account = null
-      if (req.user.tenantId) {
+      let account = req.tenantAccount || null
+      if (!account && req.user.tenantId) {
         account = await Account.findOne({ accountId: req.user.tenantId }).lean()
       }
       if (!account && req.user.id) {
@@ -576,6 +577,12 @@ const getTenantInfo = async (req, res) => {
  */
 const getBranding = async (req, res) => {
   try {
+    // Strictly isolate public branding cache between hostnames and origins
+    res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate")
+    res.setHeader("Pragma", "no-cache")
+    res.setHeader("Expires", "0")
+    res.setHeader("Vary", "Host, Origin, X-Tenant-Domain")
+
     const rawDomain =
       req.query.domain ||
       req.headers["x-tenant-domain"] ||
@@ -614,16 +621,14 @@ const getBranding = async (req, res) => {
       })
     }
 
-    const account = await Account.findOne({
-      customDomain: host,
-      status: { $ne: "suspended" },
-    }).lean()
+    const account = await getAccountByCustomDomainCached(host)
 
     if (!account) {
       return res.status(200).json({
         success: true,
         data: {
           isWhiteLabel: false,
+          unconfiguredDomain: true,
         },
       })
     }

@@ -8,6 +8,7 @@ const Account = require("../models/Account")
  */
 
 let cachedDomainsSet = null
+let cachedAccountByDomainMap = new Map()
 let lastFetchedAt = 0
 const CACHE_TTL_MS = 60 * 1000 // 60 seconds
 
@@ -77,7 +78,56 @@ const getCustomDomainsCached = async () => {
  */
 const invalidateCustomDomainCache = () => {
   cachedDomainsSet = null
+  cachedAccountByDomainMap.clear()
   lastFetchedAt = 0
+}
+
+/**
+ * Retrieve an active Account mapped to a custom domain with in-memory caching.
+ * @param {string} hostname e.g. "crm.medical365.in"
+ * @returns {Promise<object|null>}
+ */
+const getAccountByCustomDomainCached = async (hostname) => {
+  if (!hostname || typeof hostname !== "string") return null
+  const cleanHost = sanitizeHostname(hostname)
+  if (!cleanHost) return null
+
+  // Fast rejection of core platform or local hosts
+  if (
+    cleanHost === "localhost" ||
+    cleanHost === "127.0.0.1" ||
+    cleanHost === "::1" ||
+    cleanHost.endsWith(".localhost") ||
+    cleanHost.endsWith(".vercel.app") ||
+    cleanHost === "admin.leads365.in" ||
+    cleanHost === "leads365.in"
+  ) {
+    return null
+  }
+
+  const now = Date.now()
+  const cachedEntry = cachedAccountByDomainMap.get(cleanHost)
+  if (cachedEntry && now - cachedEntry.cachedAt < CACHE_TTL_MS) {
+    return cachedEntry.account
+  }
+
+  try {
+    const escaped = cleanHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const account = await Account.findOne({
+      customDomain: { $regex: new RegExp(`^${escaped}$`, "i") },
+      status: { $ne: "suspended" },
+    }).lean()
+
+    cachedAccountByDomainMap.set(cleanHost, {
+      account: account || null,
+      cachedAt: now,
+    })
+
+    return account || null
+  } catch (error) {
+    console.error("Error in getAccountByCustomDomainCached:", error.message)
+    return null
+  }
 }
 
 /**
@@ -140,6 +190,7 @@ const isCustomDomainAllowed = async (origin) => {
 
 module.exports = {
   getCustomDomainsCached,
+  getAccountByCustomDomainCached,
   invalidateCustomDomainCache,
   isCustomDomainAllowed,
   sanitizeHostname,

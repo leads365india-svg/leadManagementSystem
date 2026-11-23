@@ -15,7 +15,7 @@ const {
   checkDirectObjectAccess,
   isPermissionCoveredByCeiling,
 } = require("../utils/rbacScope")
-const { isCustomDomainAllowed } = require("../utils/customDomainCache")
+const { isCustomDomainAllowed, getAccountByCustomDomainCached, sanitizeHostname } = require("../utils/customDomainCache")
 
 // In-memory cache for tenant roles: Map<tenantId, { roles: Array, timestamp: number }>
 const tenantRoleCache = new Map()
@@ -274,6 +274,49 @@ const authenticate = async (req, res, next) => {
     } else {
       if (user.tenantId) {
         req.tenantId = user.tenantId
+      }
+    }
+
+    // White-Label Custom Domain Hostname Verification & Session Binding (Phase B & C)
+    const rawDomain =
+      req.headers["x-tenant-domain"] ||
+      req.headers["x-forwarded-host"] ||
+      (req.headers.origin ? sanitizeHostname(req.headers.origin) : "") ||
+      (req.headers.host ? sanitizeHostname(req.headers.host) : "")
+
+    const cleanHost = sanitizeHostname(rawDomain)
+    if (
+      cleanHost &&
+      cleanHost !== "localhost" &&
+      cleanHost !== "127.0.0.1" &&
+      cleanHost !== "::1" &&
+      !cleanHost.endsWith(".localhost") &&
+      !cleanHost.endsWith(".vercel.app") &&
+      cleanHost !== "admin.leads365.in" &&
+      cleanHost !== "leads365.in"
+    ) {
+      const domainAccount = await getAccountByCustomDomainCached(cleanHost)
+      if (domainAccount) {
+        if (user.role === "super_admin") {
+          // On a tenant custom domain, Super Admin automatically binds to that domain's tenant unless an explicit valid tenant is already set
+          if (!req.tenantId) {
+            req.tenantId = domainAccount.accountId
+            req.tenantAccount = domainAccount
+          }
+        } else {
+          // For tenant users, session MUST strictly match the domain's tenant
+          if (user.tenantId && user.tenantId !== domainAccount.accountId) {
+            return res.status(403).json({
+              success: false,
+              error: `Cross-tenant access denied: Your session does not belong to ${domainAccount.companyName}.`,
+              code: "CROSS_TENANT_SESSION_MISMATCH",
+              domainTenantId: domainAccount.accountId,
+              sessionTenantId: user.tenantId,
+            })
+          }
+          req.tenantId = domainAccount.accountId
+          req.tenantAccount = domainAccount
+        }
       }
     }
 

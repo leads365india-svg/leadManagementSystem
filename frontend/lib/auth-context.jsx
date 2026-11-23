@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
+import { isWhiteLabelDomain, normalizeHostname } from "@/lib/domain"
 import { toast } from "react-hot-toast"
 
 export const SCOPE_RANKS = {
@@ -214,6 +215,28 @@ export function AuthProvider({ children }) {
       const response = await apiClient.getMe()
       if (response.success && response.data?.user) {
         const userData = response.data.user
+
+        // Validate cross-tenant domain isolation for non-super-admin users
+        if (typeof window !== "undefined") {
+          const currentHost = normalizeHostname(window.location.hostname)
+          const urlParams = new URLSearchParams(window.location.search)
+          const testDomain = urlParams.get("domain") || urlParams.get("test_domain") || ""
+          const effectiveHost = testDomain ? normalizeHostname(testDomain) : currentHost
+
+          if (isWhiteLabelDomain(effectiveHost)) {
+            const userDomain = userData.account?.customDomain ? normalizeHostname(userData.account.customDomain) : ""
+            if (userDomain && userDomain !== effectiveHost && userData.role !== "super_admin") {
+              console.warn("Cross-tenant session rejected on white-label domain:", {
+                sessionDomain: userDomain,
+                currentDomain: effectiveHost,
+                userTenant: userData.tenantId,
+              })
+              setUser(null)
+              setStatus("unauthenticated")
+              return null
+            }
+          }
+        }
 
         // Validate active tenant context for Super Admin sessions
         if (userData.role === "super_admin") {

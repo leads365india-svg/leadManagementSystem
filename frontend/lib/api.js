@@ -1,3 +1,5 @@
+import { isWhiteLabelDomain } from "@/lib/domain"
+
 // Robust API base URL normalization: trims whitespace, strips trailing slashes, ensures /api suffix
 const normalizeApiBase = (url) => {
   const clean = (url || "http://localhost:5000/api").trim().replace(/\/+$/, "")
@@ -29,12 +31,16 @@ class ApiClient {
       } catch (_) {}
     }
 
-    // Attach active tenant ID header if present
+    // Attach active tenant ID header on administrative / non-white-label platforms only
     if (!headers["x-tenant-id"] && !headers["X-Tenant-Id"] && typeof window !== "undefined") {
       try {
-        const activeTenant = localStorage.getItem("leadflow_active_tenant")
-        if (activeTenant && activeTenant.trim()) {
-          headers["x-tenant-id"] = activeTenant.trim()
+        const currentHost = window.location?.hostname || ""
+        // On white-label domains, the hostname is the authoritative tenant boundary; do not leak stale localStorage active tenant
+        if (!isWhiteLabelDomain(currentHost)) {
+          const activeTenant = localStorage.getItem("leadflow_active_tenant")
+          if (activeTenant && activeTenant.trim()) {
+            headers["x-tenant-id"] = activeTenant.trim()
+          }
         }
       } catch (_) {}
     }
@@ -61,7 +67,7 @@ class ApiClient {
       const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
-        if (response.status === 401 && typeof window !== "undefined") {
+        if ((response.status === 401 || data?.code === "CROSS_TENANT_SESSION_MISMATCH") && typeof window !== "undefined") {
           try {
             localStorage.removeItem("token")
             localStorage.removeItem("leadflow_token")
@@ -74,6 +80,8 @@ class ApiClient {
           if (!isAuthEndpoint && !isLoginPage) {
             const redirectUrl = window.location.pathname.startsWith("/super-admin")
               ? "/super-admin/login?session=expired"
+              : data?.code === "CROSS_TENANT_SESSION_MISMATCH"
+              ? "/portal/login?session=mismatch"
               : "/portal/login?session=expired"
             window.location.href = redirectUrl
           }

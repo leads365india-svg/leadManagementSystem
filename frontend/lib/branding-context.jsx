@@ -35,10 +35,14 @@ export function BrandingProvider({ children }) {
     if (typeof window === "undefined" || !brandData) return
 
     // 1. Update document title
-    const title =
+    const isLoginPage = typeof window !== "undefined" && window.location.pathname.startsWith("/portal/login")
+    const brandName = brandData.displayName || brandData.companyName
+    let title =
       brandData.pageTitle ||
-      (brandData.displayName ? `${brandData.displayName} CRM` : null) ||
-      (brandData.companyName ? `${brandData.companyName} CRM` : null)
+      (brandName ? `${brandName} CRM` : null)
+    if (isLoginPage && brandName) {
+      title = `${brandName} - Sign In`
+    }
     if (title) {
       document.title = title
     }
@@ -159,10 +163,25 @@ export function BrandingProvider({ children }) {
   }, [resolveDomainBranding])
 
   // Synchronize branding with authenticated user account metadata
+  // Strictly prohibits cross-tenant contamination: user session from Tenant A cannot override Tenant B domain branding
   useEffect(() => {
     if (user && user.account) {
+      if (isWhiteLabel && branding?.accountId) {
+        if (user.tenantId && user.tenantId !== branding.accountId) {
+          console.warn("Blocked cross-tenant branding contamination from user session:", {
+            sessionTenant: user.tenantId,
+            domainTenant: branding.accountId,
+          })
+          return
+        }
+      }
+
       const acc = user.account
       setBranding((prev) => {
+        // Double-check inside state updater as well
+        if (isWhiteLabel && prev.accountId && acc.accountId && acc.accountId !== prev.accountId) {
+          return prev
+        }
         const merged = {
           ...prev,
           displayName: acc.displayName || acc.companyName || prev.displayName,
@@ -179,7 +198,7 @@ export function BrandingProvider({ children }) {
         return merged
       })
     }
-  }, [user, applyBrandingToDOM])
+  }, [user, isWhiteLabel, branding?.accountId, applyBrandingToDOM])
 
   const value = {
     branding,

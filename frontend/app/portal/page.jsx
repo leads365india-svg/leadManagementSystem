@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { useBranding } from "@/lib/branding-context"
 import {
   Users,
   UserPlus,
@@ -25,6 +26,7 @@ import {
 
 export default function ClientPortalDashboard() {
   const { user: authUser, hasPermission } = useAuth()
+  const { branding, isWhiteLabel } = useBranding()
   const router = useRouter()
   const [stats, setStats] = useState({
     total: 0,
@@ -146,7 +148,11 @@ export default function ClientPortalDashboard() {
   }
 
   const effectiveUser = user || authUser
-  const companyName = effectiveUser?.account?.companyName || effectiveUser?.account?.displayName || "Your Organization"
+  const companyName =
+    (isWhiteLabel && (branding?.displayName || branding?.companyName)) ||
+    effectiveUser?.account?.displayName ||
+    effectiveUser?.account?.companyName ||
+    "Your Organization"
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
