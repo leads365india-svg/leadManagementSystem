@@ -137,6 +137,7 @@ export default function PortalLoginClient({
   const [error, setError] = useState(null)
   const [checkingExistingSession, setCheckingExistingSession] = useState(authStatus === "loading")
 
+  const emailInputRef = useRef(null)
   const passwordInputRef = useRef(null)
   const isSubmittingRef = useRef(false)
 
@@ -354,7 +355,9 @@ export default function PortalLoginClient({
         isSubmittingRef.current = false
         setLoading(false)
         setIsRedirecting(false)
-        if (passwordInputRef.current) {
+        if (response?.code === "USER_NOT_FOUND" && emailInputRef.current) {
+          emailInputRef.current.focus()
+        } else if (passwordInputRef.current) {
           passwordInputRef.current.focus()
         }
       }
@@ -366,7 +369,9 @@ export default function PortalLoginClient({
       isSubmittingRef.current = false
       setLoading(false)
       setIsRedirecting(false)
-      if (passwordInputRef.current) {
+      if (err?.code === "USER_NOT_FOUND" && emailInputRef.current) {
+        emailInputRef.current.focus()
+      } else if (passwordInputRef.current) {
         passwordInputRef.current.focus()
       }
     }
@@ -578,6 +583,7 @@ export default function PortalLoginClient({
                   <Mail className="w-4 h-4" />
                 </div>
                 <input
+                  ref={emailInputRef}
                   id="email"
                   name="email"
                   type="email"

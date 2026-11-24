@@ -127,7 +127,10 @@ class ApiClient {
               }
             }
           }
-          throw new Error(data.error || `HTTP ${response.status}`)
+          const reqErr = new Error(data.error || `HTTP ${response.status}`)
+          if (data?.code) reqErr.code = data.code
+          if (data?.status || response.status) reqErr.status = data?.status || response.status
+          throw reqErr
         }
 
         return data

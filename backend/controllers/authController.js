@@ -34,10 +34,11 @@ const login = async (req, res) => {
       })
     }
 
-    const invalidCredentialsResponse = () => {
+    const invalidCredentialsResponse = (code = "INVALID_CREDENTIALS", customMsg = null) => {
       res.status(401).json({
         success: false,
-        error: "Invalid email or password",
+        error: customMsg || "Invalid email or password",
+        code,
       })
     }
 
@@ -164,14 +165,20 @@ const login = async (req, res) => {
     } else {
       // Tenant / Client User Authentication Path
       if (!user) {
-        return invalidCredentialsResponse()
+        console.warn(`[Auth:TenantLogin] User not found for identifier: ${normalizedIdentifier}`)
+        return res.status(401).json({
+          success: false,
+          error: "No account found with this email address. Please check your email or contact support.",
+          code: "USER_NOT_FOUND",
+        })
       }
 
       // Tenant users must never be super_admin
       if (user.role === "super_admin") {
         return res.status(403).json({
           success: false,
-          error: "Access denied: Super Admin credentials cannot be used for tenant portal login.",
+          error: "Access denied: Platform Super Admin accounts must sign in via the Super Admin portal.",
+          code: "SUPER_ADMIN_PORTAL_MISMATCH",
         })
       }
 
@@ -188,72 +195,83 @@ const login = async (req, res) => {
       if (user.status === "suspended") {
         return res.status(403).json({
           success: false,
-          error: "Account has been suspended. Please contact support.",
+          error: "Your account is currently suspended. Please contact support.",
+          code: "ACCOUNT_SUSPENDED",
         })
+      }
+
+      // Strict Domain-to-Tenant Lock for White-Label Domains
+      const rawDomain =
+        (req.body && req.body.domain) ||
+        req.headers["x-tenant-domain"] ||
+        req.headers["x-forwarded-host"] ||
+        req.headers.origin ||
+        ""
+
+      const cleanReqDomain = sanitizeHostname(rawDomain)
+
+      if (cleanReqDomain && !isPlatformDomain(cleanReqDomain)) {
+        const domainAccount = await getAccountByCustomDomainCached(cleanReqDomain)
+
+        if (domainAccount) {
+          // Enforce: User MUST belong to this domain's tenant
+          // Super admins or users from different tenants are strictly rejected on dedicated white-label domains
+          if (user.role === "super_admin") {
+            console.warn(`[Auth:TenantLogin] Super Admin attempted login on dedicated white-label domain: ${cleanReqDomain}`)
+            return res.status(403).json({
+              success: false,
+              error: "Access denied: Platform Super Admin accounts must sign in via the Super Admin portal.",
+              code: "SUPER_ADMIN_DOMAIN_MISMATCH",
+            })
+          }
+
+          const userTenant =
+            user.tenantId ||
+            (user._id && domainAccount.adminUserId && domainAccount.adminUserId.toString() === user._id.toString()
+              ? domainAccount.accountId
+              : null)
+
+          if (!userTenant || userTenant !== domainAccount.accountId) {
+            console.warn(`[Auth:TenantLogin] Domain mismatch for user ${normalizedIdentifier}. Domain: ${cleanReqDomain}, userTenant: ${userTenant}, domainTenant: ${domainAccount.accountId}`)
+            return res.status(403).json({
+              success: false,
+              error: "Access denied: This account belongs to another organization and cannot sign in on this portal domain.",
+              code: "DOMAIN_TENANT_MISMATCH",
+            })
+          }
+
+          // If domain is dedicated to a child workspace, verify user has active membership
+          if (domainAccount.boundWorkspace && user.role !== "account_admin") {
+            const WorkspaceMembership = require("../models/WorkspaceMembership")
+            const isMember = await WorkspaceMembership.findOne({
+              tenantId: userTenant,
+              workspaceId: domainAccount.boundWorkspace._id,
+              userId: user._id,
+              status: "active",
+            })
+              .setOptions({ skipTenantFilter: true })
+              .lean()
+
+            if (!isMember) {
+              return res.status(403).json({
+                success: false,
+                error: `Cross-workspace access denied: Your session does not belong to workspace '${domainAccount.boundWorkspace.name}'.`,
+                code: "WORKSPACE_MEMBERSHIP_REQUIRED",
+              })
+            }
+          }
+        }
       }
 
       // Verify password strictly against MongoDB hash using bcrypt
       const isMatch = await user.comparePassword(password)
       if (!isMatch) {
-        return invalidCredentialsResponse()
-      }
-    }
-
-    // Strict Domain-to-Tenant Lock for White-Label Domains
-    const rawDomain =
-      (req.body && req.body.domain) ||
-      req.headers["x-tenant-domain"] ||
-      req.headers["x-forwarded-host"] ||
-      req.headers.origin ||
-      ""
-
-    const cleanReqDomain = sanitizeHostname(rawDomain)
-
-    if (cleanReqDomain && !isPlatformDomain(cleanReqDomain)) {
-      const domainAccount = await getAccountByCustomDomainCached(cleanReqDomain)
-
-      if (domainAccount) {
-        // Enforce: User MUST belong to this domain's tenant
-        // Super admins or users from different tenants are strictly rejected on dedicated white-label domains
-        if (user.role === "super_admin") {
-          return res.status(403).json({
-            success: false,
-            error: "Access denied: This account does not belong to this portal domain.",
-          })
-        }
-
-        const userTenant =
-          user.tenantId ||
-          (user._id && domainAccount.adminUserId && domainAccount.adminUserId.toString() === user._id.toString()
-            ? domainAccount.accountId
-            : null)
-
-        if (!userTenant || userTenant !== domainAccount.accountId) {
-          return res.status(403).json({
-            success: false,
-            error: "Access denied: This account does not belong to this portal domain.",
-          })
-        }
-
-        // If domain is dedicated to a child workspace, verify user has active membership
-        if (domainAccount.boundWorkspace && user.role !== "account_admin") {
-          const WorkspaceMembership = require("../models/WorkspaceMembership")
-          const isMember = await WorkspaceMembership.findOne({
-            tenantId: userTenant,
-            workspaceId: domainAccount.boundWorkspace._id,
-            userId: user._id,
-            status: "active",
-          })
-            .setOptions({ skipTenantFilter: true })
-            .lean()
-
-          if (!isMember) {
-            return res.status(403).json({
-              success: false,
-              error: `Cross-workspace access denied: Your session does not belong to workspace '${domainAccount.boundWorkspace.name}'.`,
-            })
-          }
-        }
+        console.warn(`[Auth:TenantLogin] Password comparison failed for user: ${normalizedIdentifier} (tenant: ${user.tenantId || "none"})`)
+        return res.status(401).json({
+          success: false,
+          error: "Incorrect password. Please verify your password and try again.",
+          code: "INVALID_PASSWORD",
+        })
       }
     }
 
