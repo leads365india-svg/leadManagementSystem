@@ -44,6 +44,7 @@ import {
   Award,
   ChevronDown,
   Calendar,
+  Trash2,
 } from "lucide-react"
 
 // Formatting helper for duration seconds
@@ -130,6 +131,13 @@ export default function AICallIntelligenceClient() {
   const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const [audioDuration, setAudioDuration] = useState(0)
   const [reprocessing, setReprocessing] = useState(false)
+
+  // Delete AI Report Modal State
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [reportToDelete, setReportToDelete] = useState(null)
+  const [linkedFollowUpsCount, setLinkedFollowUpsCount] = useState(0)
+  const [loadingLinkedFollowUps, setLoadingLinkedFollowUps] = useState(false)
+  const [isDeletingReport, setIsDeletingReport] = useState(false)
 
   // Transcript Search
   const [transcriptSearch, setTranscriptSearch] = useState("")
@@ -292,6 +300,90 @@ export default function AICallIntelligenceClient() {
       toast.error(err.message || "Failed to trigger reprocess")
     } finally {
       setReprocessing(false)
+    }
+  }
+
+  // Open Delete AI Report Confirmation Modal
+  const handleOpenDeleteModal = async (callOrDetail) => {
+    if (!callOrDetail) return
+    const callId = callOrDetail._id || callOrDetail.id || callOrDetail.callId
+    const customerName = callOrDetail.leadId?.name || callOrDetail.customerName || "Customer"
+    const customerPhone = callOrDetail.customerNumber || callOrDetail.phoneNumber || callOrDetail.leadId?.phone || "—"
+    const callDate = callOrDetail.startedAt || callOrDetail.createdAt || new Date()
+
+    setReportToDelete({
+      callId,
+      customerName,
+      customerPhone,
+      callDate,
+      analysisId: callOrDetail.aiAnalysis?._id || callOrDetail.analysis?._id || null,
+    })
+    setDeleteModalOpen(true)
+    setLinkedFollowUpsCount(0)
+    setLoadingLinkedFollowUps(true)
+
+    try {
+      const res = await apiClient.getAICallLinkedFollowUps(callId)
+      if (res && res.success) {
+        setLinkedFollowUpsCount(res.data?.pendingCount || res.data?.totalLinked || 0)
+      }
+    } catch (err) {
+      console.warn("Could not load linked followups for modal:", err)
+    } finally {
+      setLoadingLinkedFollowUps(false)
+    }
+  }
+
+  // Confirm and Execute AI Report Deletion
+  const handleConfirmDeleteReport = async () => {
+    if (!reportToDelete?.callId || isDeletingReport) return
+
+    try {
+      setIsDeletingReport(true)
+      const res = await apiClient.deleteAICallAnalysis(reportToDelete.callId)
+
+      if (res && res.success) {
+        toast.success(res.message || "AI Call Intelligence report deleted successfully.")
+
+        // If drawer is open for this call, close it
+        if (selectedCallId && String(selectedCallId) === String(reportToDelete.callId)) {
+          handleCloseDrawer()
+        }
+
+        // Optimistically update calls in table
+        setCalls((prev) =>
+          prev.map((c) => {
+            const currentId = c._id || c.id
+            if (String(currentId) === String(reportToDelete.callId)) {
+              return {
+                ...c,
+                aiAnalysis: null,
+                intelligenceStatus: "NOT_ANALYZED",
+              }
+            }
+            return c
+          })
+        )
+
+        // Optimistically decrement metrics
+        setMetrics((prev) => ({
+          ...prev,
+          analyzedCalls: Math.max(0, (prev.analyzedCalls || 1) - 1),
+        }))
+
+        setDeleteModalOpen(false)
+        setReportToDelete(null)
+
+        // Refresh metrics and list in background
+        fetchDashboardMetrics()
+        fetchCallsList()
+      } else {
+        toast.error(res?.error || res?.message || "Failed to delete AI report")
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to delete AI Call Intelligence report")
+    } finally {
+      setIsDeletingReport(false)
     }
   }
 
@@ -979,6 +1071,17 @@ export default function AICallIntelligenceClient() {
                                 <RotateCw className="w-3.5 h-3.5" />
                               </button>
                             )}
+
+                            {isAdmin && (call.aiAnalysis || call.intelligenceStatus === "COMPLETED") && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenDeleteModal(call)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                title="Delete AI Report"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1042,6 +1145,24 @@ export default function AICallIntelligenceClient() {
               </div>
 
               <div className="flex items-center gap-2">
+                {isAdmin && selectedCallId && (detailData.analysis || detailData.status?.overallStatus === "COMPLETED") && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleOpenDeleteModal({
+                        _id: selectedCallId,
+                        ...detailData.call,
+                        analysis: detailData.analysis,
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition shadow-2xs"
+                    title="Delete this AI Call Intelligence report"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Report</span>
+                  </button>
+                )}
+
                 {isAdmin && selectedCallId && (
                   <button
                     type="button"
@@ -1593,6 +1714,104 @@ export default function AICallIntelligenceClient() {
                   )}
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete AI Call Intelligence Report Confirmation Modal */}
+      {deleteModalOpen && reportToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Delete AI Call Intelligence Report
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Are you sure you want to delete this AI Call Intelligence report?
+                </p>
+              </div>
+            </div>
+
+            {/* Call Details Summary */}
+            <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200/80 space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Customer:</span>
+                <span className="font-semibold text-slate-800">{reportToDelete.customerName}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Phone Number:</span>
+                <span className="font-mono text-slate-800">{reportToDelete.customerPhone}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Call Date:</span>
+                <span className="text-slate-700">
+                  {reportToDelete.callDate ? new Date(reportToDelete.callDate).toLocaleString() : "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* Linked Follow-up Tasks Warning */}
+            {loadingLinkedFollowUps ? (
+              <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 flex items-center gap-2">
+                <RotateCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                <span>Checking linked tasks...</span>
+              </div>
+            ) : linkedFollowUpsCount > 0 ? (
+              <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold text-amber-800">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>{linkedFollowUpsCount} Linked Follow-up Task{linkedFollowUpsCount > 1 ? "s" : ""}</span>
+                </div>
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  Notice: Linked follow-up tasks will be <strong>preserved</strong> and remain active in your task queue.
+                </p>
+              </div>
+            ) : null}
+
+            {/* Preservation Guarantee Note */}
+            <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 text-[11px] text-emerald-800 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Data Safe:</strong> Original call recording, audio file, call transcript, and customer records will not be deleted.
+              </span>
+            </div>
+
+            {/* Modal Buttons */}
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingReport}
+                onClick={() => {
+                  setDeleteModalOpen(false)
+                  setReportToDelete(null)
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition disabled:opacity-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingReport}
+                onClick={handleConfirmDeleteReport}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm transition disabled:opacity-50 cursor-pointer"
+              >
+                {isDeletingReport ? (
+                  <>
+                    <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Report</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

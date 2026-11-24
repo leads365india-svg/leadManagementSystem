@@ -27,6 +27,20 @@ const deadLetterJobSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    // Optional workspace scoping
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
+    // Explicit execution scope mode
+    scopeMode: {
+      type: String,
+      enum: ["standalone", "single_workspace", "authorized_all_workspaces", "unassigned_review", "system"],
+      default: "standalone",
+      index: true,
+    },
     idempotencyKey: {
       type: String,
       trim: true,

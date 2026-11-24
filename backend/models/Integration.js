@@ -68,6 +68,13 @@ const integrationSchema = new mongoose.Schema(
       index: true,
       trim: true,
     },
+    // Optional workspace scoping (null = Organization-wide integration)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     name: {
       type: String,
       required: [true, "Integration name is required"],

@@ -4,6 +4,7 @@ const dnsPromises = dns.promises
 const mongoose = require("mongoose")
 const Account = require("../models/Account")
 const User = require("../models/User")
+const DomainMapping = require("../models/DomainMapping")
 const audit = require("../services/auditService")
 const { invalidateCustomDomainCache } = require("../utils/customDomainCache")
 
@@ -456,6 +457,16 @@ const createAccount = async (req, res) => {
       res.status(400).json({
         success: false,
         error: "This custom domain is already registered to another account",
+        code: "DOMAIN_ALREADY_MAPPED",
+      })
+      return
+    }
+    const duplicateWorkspaceDomain = await DomainMapping.findOne({ domain: cleanDomain }).setOptions({ skipTenantFilter: true })
+    if (duplicateWorkspaceDomain) {
+      res.status(400).json({
+        success: false,
+        error: "This custom domain is already registered to a workspace",
+        code: "DOMAIN_ALREADY_MAPPED",
       })
       return
     }
@@ -695,6 +706,16 @@ const updateAccount = async (req, res) => {
           res.status(400).json({
             success: false,
             error: "This custom domain is already registered to another account",
+            code: "DOMAIN_ALREADY_MAPPED",
+          })
+          return
+        }
+        const duplicateWorkspaceDomain = await DomainMapping.findOne({ domain: cleanDomain }).setOptions({ skipTenantFilter: true })
+        if (duplicateWorkspaceDomain) {
+          res.status(400).json({
+            success: false,
+            error: "This custom domain is already registered to a workspace",
+            code: "DOMAIN_ALREADY_MAPPED",
           })
           return
         }

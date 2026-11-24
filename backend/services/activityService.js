@@ -18,6 +18,7 @@ class ActivityService {
    * 
    * @param {Object} params
    * @param {string} [params.tenantId] - Target tenant identifier (falls back to ambient context/req)
+   * @param {string|mongoose.Types.ObjectId} [params.workspaceId] - Target workspace identifier (falls back to lead.workspaceId)
    * @param {string|mongoose.Types.ObjectId} params.leadId - Target lead ObjectId
    * @param {string} params.type - Activity type (e.g. 'lead.created', 'lead.status_changed')
    * @param {Object} [params.actor] - Actor details ({ id, name, email, role })
@@ -25,7 +26,7 @@ class ActivityService {
    * @param {Object} [params.req] - Express request for contextual actor derivation
    * @returns {Promise<Object>} Created Activity document
    */
-  async record({ tenantId, leadId, type, actor, payload = {}, req } = {}) {
+  async record({ tenantId, workspaceId, leadId, type, actor, payload = {}, req } = {}) {
     // 1. Resolve Effective Tenant ID
     let effectiveTenantId = tenantId
     if (!effectiveTenantId && req) {
@@ -99,6 +100,7 @@ class ActivityService {
     // 7. Persist Activity
     const activityDoc = new Activity({
       tenantId: effectiveTenantId,
+      workspaceId: workspaceId || targetLead.workspaceId || null,
       leadId: targetLead._id,
       type: normalizedType,
       actor: resolvedActor,

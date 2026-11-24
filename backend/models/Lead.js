@@ -142,6 +142,13 @@ const leadSchema = new mongoose.Schema(
       required: [true, "Tenant ID is required"],
       index: true,
     },
+    // Optional workspace scoping (null = Standalone mode or unassigned)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     source: {
       type: String,
       default: "Website",

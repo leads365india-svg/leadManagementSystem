@@ -86,6 +86,13 @@ const aiCallAnalysisSchema = new mongoose.Schema(
       index: true,
       trim: true,
     },
+    // Optional workspace scoping (null = Standalone mode or unassigned)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     callId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Call",
@@ -330,6 +337,27 @@ const aiCallAnalysisSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Soft Deletion Audit Properties
+    deletedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    deletedByName: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    deletedReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
   },
   {
     timestamps: true,
@@ -337,8 +365,9 @@ const aiCallAnalysisSchema = new mongoose.Schema(
 )
 
 // Compound Indexes for fast querying, filtering, and dashboard aggregation
-aiCallAnalysisSchema.index({ tenantId: 1, callId: 1, analysisVersion: -1 })
-aiCallAnalysisSchema.index({ tenantId: 1, status: 1, createdAt: -1 })
+aiCallAnalysisSchema.index({ tenantId: 1, callId: 1, deletedAt: 1, analysisVersion: -1 })
+aiCallAnalysisSchema.index({ tenantId: 1, status: 1, deletedAt: 1, createdAt: -1 })
+aiCallAnalysisSchema.index({ tenantId: 1, deletedAt: 1, createdAt: -1 })
 aiCallAnalysisSchema.index({ tenantId: 1, callOutcome: 1 })
 aiCallAnalysisSchema.index({ tenantId: 1, sentiment: 1 })
 aiCallAnalysisSchema.index({ tenantId: 1, createdAt: -1 })

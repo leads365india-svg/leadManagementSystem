@@ -70,6 +70,13 @@ export default function SuperAdminDashboardPage() {
 
   // Success Notification Banner State
   const [successMessage, setSuccessMessage] = useState(null)
+  const [origin, setOrigin] = useState("")
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setOrigin(window.location.origin)
+    }
+  }, [])
 
   // DNS Verification In-Flight State
   const [verifyingDomainId, setVerifyingDomainId] = useState(null)
@@ -197,6 +204,13 @@ export default function SuperAdminDashboardPage() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [actionError, setActionError] = useState(null)
   const [copiedKey, setCopiedKey] = useState(null)
+  const [rateLimitWarning, setRateLimitWarning] = useState(null)
+
+  // In-flight deduplication and throttle refs
+  const isStatsLoadingRef = useRef(false)
+  const lastStatsLoadedAtRef = useRef(0)
+  const isAccountsLoadingRef = useRef(false)
+  const lastAccountsQueryRef = useRef("")
 
   // Debounce search input by 200ms so typing feels instantaneous and avoids unnecessary backend load
   useEffect(() => {
@@ -208,22 +222,58 @@ export default function SuperAdminDashboardPage() {
   }, [searchInput])
 
   // Fetch Global Summary Stats (only on mount, manual refresh, or mutate actions)
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (force = false) => {
+    // Safety: Never request dashboard statistics on login pages
+    if (typeof window !== "undefined" && window.location.pathname.includes("/login")) {
+      return
+    }
+
+    // In-flight deduplication: skip if already in progress
+    if (isStatsLoadingRef.current) return
+
+    // Throttle: avoid requesting stats more than once every 5 seconds unless explicitly forced
+    const now = Date.now()
+    if (!force && now - lastStatsLoadedAtRef.current < 5000) return
+
+    isStatsLoadingRef.current = true
     try {
       const statsRes = await apiClient.getSuperAdminStats()
-      if (statsRes.success && statsRes.data) {
+      if (statsRes && statsRes.success && statsRes.data) {
         setStats(statsRes.data)
+        lastStatsLoadedAtRef.current = Date.now()
+        setRateLimitWarning(null)
+      } else if (statsRes?.status === 429 || statsRes?.isRateLimit) {
+        setRateLimitWarning("Dashboard request limit reached. Displaying latest loaded metrics. Please wait a moment before refreshing.")
       }
     } catch (error) {
-      console.error("Failed to load dashboard stats:", error)
+      if (error?.status === 429 || error?.isRateLimit || error?.message?.includes("Too many")) {
+        setRateLimitWarning("Dashboard request limit reached. Displaying latest loaded metrics. Please wait a moment before refreshing.")
+      } else {
+        console.error("Failed to load dashboard stats:", error?.message || error)
+      }
+    } finally {
+      isStatsLoadingRef.current = false
     }
   }, [])
 
   // Fetch Accounts List with fast cancellation/ignoring of stale network queries
-  const loadAccounts = useCallback(async (queryTerm, statusVal, pageVal) => {
+  const loadAccounts = useCallback(async (queryTerm, statusVal, pageVal, force = false) => {
+    // Safety: Never request dashboard accounts on login pages
+    if (typeof window !== "undefined" && window.location.pathname.includes("/login")) {
+      return
+    }
+
+    const cacheKey = `${(queryTerm || "").trim()}:${statusVal}:${pageVal}`
+    if (!force && isAccountsLoadingRef.current && lastAccountsQueryRef.current === cacheKey) {
+      return
+    }
+
+    lastAccountsQueryRef.current = cacheKey
+    isAccountsLoadingRef.current = true
     const reqId = ++activeReqIdRef.current
     setIsSearching(true)
     setAccountsLoadError(null)
+
     try {
       const accountsRes = await apiClient.getSuperAdminAccounts({
         page: pageVal,
@@ -232,23 +282,33 @@ export default function SuperAdminDashboardPage() {
         status: statusVal !== "all" ? statusVal : undefined,
       })
 
-      if (reqId === activeReqIdRef.current && accountsRes.success && accountsRes.data) {
-        setAccounts(accountsRes.data.accounts || [])
-        setTotalPages(accountsRes.data.totalPages || 1)
-        setTotalAccountsCount(accountsRes.data.total || 0)
-        setAccountsLoadError(null)
+      if (reqId === activeReqIdRef.current) {
+        if (accountsRes && accountsRes.success && accountsRes.data) {
+          setAccounts(accountsRes.data.accounts || [])
+          setTotalPages(accountsRes.data.totalPages || 1)
+          setTotalAccountsCount(accountsRes.data.total || 0)
+          setAccountsLoadError(null)
+          setRateLimitWarning(null)
+        } else if (accountsRes?.status === 429 || accountsRes?.isRateLimit) {
+          setRateLimitWarning("Rate limit reached. Please wait a moment before retrying.")
+        }
       }
     } catch (error) {
       if (reqId === activeReqIdRef.current) {
-        console.error("Failed to load accounts:", error)
-        setAccountsLoadError(error.message || "Failed to load accounts list")
-        toast.error("Failed to load accounts list")
+        if (error?.status === 429 || error?.isRateLimit || error?.message?.includes("Too many")) {
+          setRateLimitWarning("Rate limit reached. Please wait a moment before retrying.")
+        } else {
+          console.error("Failed to load accounts:", error)
+          setAccountsLoadError(error.message || "Failed to load accounts list")
+          toast.error("Failed to load accounts list")
+        }
       }
     } finally {
       if (reqId === activeReqIdRef.current) {
         setLoading(false)
         setIsSearching(false)
         setRefreshing(false)
+        isAccountsLoadingRef.current = false
       }
     }
   }, [])
@@ -267,8 +327,8 @@ export default function SuperAdminDashboardPage() {
   const refreshAllData = useCallback(async () => {
     setRefreshing(true)
     await Promise.all([
-      loadStats(),
-      loadAccounts(debouncedSearch, statusFilter, page),
+      loadStats(true),
+      loadAccounts(debouncedSearch, statusFilter, page, true),
     ])
     setRefreshing(false)
   }, [debouncedSearch, statusFilter, page, loadStats, loadAccounts])
@@ -797,6 +857,23 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Graceful Rate Limit Notification Banner */}
+      {rateLimitWarning && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-center justify-between text-amber-800 text-xs animate-in fade-in">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>{rateLimitWarning}</span>
+          </div>
+          <button
+            onClick={() => setRateLimitWarning(null)}
+            className="text-amber-600 hover:text-amber-800 p-1"
+            title="Dismiss"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -1806,7 +1883,7 @@ Please sign in at the URL above to access your dedicated CRM pipeline.`
                 </span>
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono text-indigo-700 text-xs truncate">
-                    {typeof window !== "undefined" ? window.location.origin : ""}/portal/login?tenant={selectedAccount.accountId}
+                    {origin ? `${origin}/portal/login?tenant=${selectedAccount.accountId}` : `/portal/login?tenant=${selectedAccount.accountId}`}
                   </span>
                   <div className="flex items-center space-x-1 shrink-0">
                     <button

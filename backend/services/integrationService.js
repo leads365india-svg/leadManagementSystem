@@ -798,6 +798,90 @@ async function processIntakePayload({
     const normalizedSource = await normalizeSource(tenantId, rawSource)
     if (event) event.source = normalizedSource
 
+    // 2b. Workspace & Service routing resolution
+    const BusinessProduct = require("../models/BusinessProduct")
+    const ServiceCatalog = require("../models/ServiceCatalog")
+
+    const rawServiceParam =
+      body.service_code ||
+      body.serviceCode ||
+      body.selected_service ||
+      body.selectedService ||
+      body.service ||
+      query.service_code ||
+      query.serviceCode ||
+      query.service ||
+      null
+
+    let serviceCodeStr = null
+    if (typeof rawServiceParam === "string" && rawServiceParam.trim()) {
+      serviceCodeStr = rawServiceParam.trim()
+    } else if (typeof rawServiceParam === "object" && rawServiceParam !== null) {
+      serviceCodeStr = rawServiceParam.code || rawServiceParam.routingCode || rawServiceParam.name || null
+    }
+
+    let targetWorkspaceId = integration.workspaceId || null
+    let capturedService = null
+    let resolvedRoutingCode = null
+
+    if (serviceCodeStr) {
+      const escapedCode = serviceCodeStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      const codeRegex = new RegExp(`^${escapedCode}$`, "i")
+
+      // 1. Query canonical BusinessProduct
+      const product = await BusinessProduct.findOne({
+        tenantId,
+        isArchived: false,
+        status: "active",
+        isPublicService: true,
+        $or: [
+          { routingCode: codeRegex },
+          { code: codeRegex },
+          { name: codeRegex },
+        ],
+      }).lean()
+
+      if (product) {
+        targetWorkspaceId = product.targetWorkspaceId || product.workspaceId || integration.workspaceId || null
+        capturedService = product.name
+        resolvedRoutingCode = product.routingCode || product.code || serviceCodeStr
+      } else {
+        // Fallback: check legacy ServiceCatalog
+        const legacyCat = await ServiceCatalog.findOne({
+          tenantId,
+          isActive: true,
+          $or: [
+            { code: codeRegex },
+            { name: codeRegex },
+          ],
+        }).lean()
+
+        if (legacyCat) {
+          targetWorkspaceId = legacyCat.targetWorkspaceId || legacyCat.workspaceId || integration.workspaceId || null
+          capturedService = legacyCat.name
+          resolvedRoutingCode = legacyCat.code || serviceCodeStr
+        } else {
+          // Explicit service code was provided but no active public service matched in tenant partition
+          if (event) {
+            event.status = "failed"
+            event.httpStatus = 400
+            event.errorMessage = `Invalid service selection: '${serviceCodeStr}'`
+            await event.save().catch(() => {})
+          }
+          return {
+            success: false,
+            status: 400,
+            code: "INVALID_SERVICE_SELECTION",
+            error: `Selected service '${serviceCodeStr}' is invalid or inactive for this organization.`,
+          }
+        }
+      }
+    }
+
+    if (event && targetWorkspaceId) {
+      event.workspaceId = targetWorkspaceId
+    }
+
     // 3. Field validation
     if (rawEmail && rawEmail.length > 255) {
       if (event) {
@@ -1027,6 +1111,8 @@ async function processIntakePayload({
           status: leadStatus,
           assignedTo,
           tenantId,
+          workspaceId: targetWorkspaceId || undefined,
+          service: capturedService || undefined,
           customFields: finalCustomFields,
         },
       }
@@ -1044,6 +1130,9 @@ async function processIntakePayload({
       integrationId: integration._id,
       websiteDomain: settings.websiteDomain || null,
       customFields: finalCustomFields.length > 0 ? finalCustomFields : undefined,
+      capturedService: capturedService || undefined,
+      serviceCode: resolvedRoutingCode || undefined,
+      workspaceId: targetWorkspaceId || undefined,
     }
 
     const duplicateHandling = settings.duplicateHandling || "reject"
@@ -1052,6 +1141,7 @@ async function processIntakePayload({
       tenantId,
       source: normalizedSource,
       payload: {
+        workspaceId: targetWorkspaceId || undefined,
         name,
         email: rawEmail,
         phone: rawPhone,
@@ -1159,6 +1249,7 @@ async function processIntakePayload({
         status: 200,
         message: "Existing lead record updated successfully",
         leadId: serviceResult.lead._id.toString(),
+        workspaceId: serviceResult.lead.workspaceId || targetWorkspaceId || null,
         updated: true,
       }
 
@@ -1184,6 +1275,7 @@ async function processIntakePayload({
         phone: serviceResult.lead.phone,
         status: serviceResult.lead.status,
         assignedTo: serviceResult.lead.assignedTo,
+        workspaceId: serviceResult.lead.workspaceId || targetWorkspaceId || null,
         createdAt: serviceResult.lead.createdAt,
       },
     }

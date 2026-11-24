@@ -201,12 +201,16 @@ async function scheduleAutomaticCallbackFromAiCall({
       directionDescription,
       rescheduledVia: "AI_CALL_INTELLIGENCE",
     }
+    if ((call.workspaceId || targetLead.workspaceId) && !followUp.workspaceId) {
+      followUp.workspaceId = call.workspaceId || targetLead.workspaceId
+    }
     followUp.notes = `Requested via AI Call Intelligence: ${reason}. Action: ${taskAction}${productContext ? " | Product: " + productContext : ""}`
     await followUp.save()
   } else {
     // Create new FollowUp record
     followUp = new FollowUp({
       tenantId: effectiveTenantId,
+      workspaceId: call.workspaceId || targetLead.workspaceId || null,
       leadId: targetLead._id,
       assignedTo: assignedTo && assignedTo !== "unassigned" ? assignedTo : (call.agentName || "Agent"),
       assignedStaffId: assignedStaffId && assignedStaffId !== "unassigned" ? assignedStaffId : (call.agentId ? call.agentId.toString() : "unassigned"),

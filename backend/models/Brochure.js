@@ -16,6 +16,13 @@ const brochureSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    // Optional workspace scoping (null = Organization-wide brochure)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     title: {
       type: String,
       required: [true, "Brochure title is required"],

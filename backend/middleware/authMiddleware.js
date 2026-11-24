@@ -3,7 +3,7 @@ const User = require("../models/User")
 const Account = require("../models/Account")
 const RolePermission = require("../models/RolePermission")
 const Device = require("../models/Device")
-const { getEffectiveTenant, tenantStorage } = require("./tenantContext")
+const { getEffectiveTenant, tenantStorage, tenantContextMiddleware } = require("./tenantContext")
 
 const Role = require("../models/Role")
 const { ensureTenantRoles } = require("../models/Role")
@@ -15,7 +15,7 @@ const {
   checkDirectObjectAccess,
   isPermissionCoveredByCeiling,
 } = require("../utils/rbacScope")
-const { isCustomDomainAllowed, getAccountByCustomDomainCached, sanitizeHostname } = require("../utils/customDomainCache")
+const { isCustomDomainAllowed, getAccountByCustomDomainCached, isPlatformDomain, sanitizeHostname } = require("../utils/customDomainCache")
 
 // In-memory cache for tenant roles: Map<tenantId, { roles: Array, timestamp: number }>
 const tenantRoleCache = new Map()
@@ -285,18 +285,12 @@ const authenticate = async (req, res, next) => {
       (req.headers.host ? sanitizeHostname(req.headers.host) : "")
 
     const cleanHost = sanitizeHostname(rawDomain)
-    if (
-      cleanHost &&
-      cleanHost !== "localhost" &&
-      cleanHost !== "127.0.0.1" &&
-      cleanHost !== "::1" &&
-      !cleanHost.endsWith(".localhost") &&
-      !cleanHost.endsWith(".vercel.app") &&
-      cleanHost !== "admin.leads365.in" &&
-      cleanHost !== "leads365.in"
-    ) {
+    if (cleanHost && !isPlatformDomain(cleanHost)) {
       const domainAccount = await getAccountByCustomDomainCached(cleanHost)
       if (domainAccount) {
+        if (domainAccount.boundWorkspace) {
+          req.domainBoundWorkspace = domainAccount.boundWorkspace
+        }
         if (user.role === "super_admin") {
           // On a tenant custom domain, Super Admin automatically binds to that domain's tenant unless an explicit valid tenant is already set
           if (!req.tenantId) {
@@ -314,6 +308,30 @@ const authenticate = async (req, res, next) => {
               sessionTenantId: user.tenantId,
             })
           }
+
+          // If domain is dedicated to a specific child workspace, staff must belong to that workspace
+          if (domainAccount.boundWorkspace && user.role !== "account_admin") {
+            const WorkspaceMembership = require("../models/WorkspaceMembership")
+            const isMember = await WorkspaceMembership.findOne({
+              tenantId: user.tenantId,
+              workspaceId: domainAccount.boundWorkspace._id,
+              userId: user._id,
+              status: "active",
+            })
+              .setOptions({ skipTenantFilter: true })
+              .lean()
+
+            if (!isMember) {
+              return res.status(403).json({
+                success: false,
+                error: `Cross-workspace access denied: Your session does not belong to workspace '${domainAccount.boundWorkspace.name}'.`,
+                code: "CROSS_TENANT_SESSION_MISMATCH",
+                workspaceId: domainAccount.boundWorkspace._id,
+                workspaceName: domainAccount.boundWorkspace.name,
+              })
+            }
+          }
+
           req.tenantId = domainAccount.accountId
           req.tenantAccount = domainAccount
         }
@@ -339,19 +357,7 @@ const authenticate = async (req, res, next) => {
       }
     }
 
-    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
-    const context = {
-      tenantId: tenantId || null,
-      isSuperAdmin,
-      userId: req.user.id,
-      userRole: req.user.role,
-      userEmail: req.user.email,
-    }
-    req.tenantContext = context
-
-    return tenantStorage.run(context, () => {
-      next()
-    })
+    return tenantContextMiddleware(req, res, next)
   } catch (error) {
     res.status(401).json({
       success: false,
@@ -437,8 +443,22 @@ const requireAccountAdmin = (req, res, next) => {
     return res.status(403).json({
       success: false,
       error: "Access denied. Leads Account Admin privileges required.",
+      code: "PERMISSION_DENIED",
     })
   }
+
+  // Platform Super Admin must remain in audited read-only support mode on tenant accounts
+  if (req.user.role === "super_admin") {
+    const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)
+    if (isMutating) {
+      return res.status(403).json({
+        success: false,
+        error: "Access denied: Platform Super Admin is in audited read-only support mode and cannot modify organization or workspace resources.",
+        code: "SUPERADMIN_READONLY_SUPPORT_MODE",
+      })
+    }
+  }
+
   next()
 }
 

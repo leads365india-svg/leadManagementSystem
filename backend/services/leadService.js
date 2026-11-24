@@ -93,7 +93,8 @@ async function createOrMergeLead({
   })
 
   try {
-    // 1. Check for duplicates within caller's tenant partition
+    // 1. Check for duplicates within caller's tenant partition and workspace scope
+    const incomingWorkspaceId = payload.workspaceId || null
     const duplicateConditions = []
     if (rawEmail) {
       duplicateConditions.push({ email: rawEmail })
@@ -105,12 +106,38 @@ async function createOrMergeLead({
     }
 
     let existingLead = null
+    let crossWorkspaceMatch = null
+
     if (duplicateConditions.length > 0) {
-      existingLead = await Lead.findOne({
-        tenantId: cleanTenantId,
-        $or: duplicateConditions,
-        deletedAt: null,
-      })
+      if (incomingWorkspaceId) {
+        // Workspace-scoped duplicate query
+        existingLead = await Lead.findOne({
+          tenantId: cleanTenantId,
+          workspaceId: incomingWorkspaceId,
+          $or: duplicateConditions,
+          deletedAt: null,
+        })
+
+        // Cross-workspace match detection: if phone/email exists in another workspace, detect without merging across boundaries
+        if (!existingLead) {
+          crossWorkspaceMatch = await Lead.findOne({
+            tenantId: cleanTenantId,
+            workspaceId: { $ne: incomingWorkspaceId },
+            $or: duplicateConditions,
+            deletedAt: null,
+          }).select("_id workspaceId name phone email").lean()
+        }
+      } else {
+        // Standalone or unassigned account-level scope
+        existingLead = await Lead.findOne({
+          tenantId: cleanTenantId,
+          $or: duplicateConditions.map((cond) => ({
+            ...cond,
+            $or: [{ workspaceId: null }, { workspaceId: { $exists: false } }],
+          })),
+          deletedAt: null,
+        })
+      }
     }
 
     const attributionTouch = extractAttributionPayload(payload, source)
@@ -126,6 +153,9 @@ async function createOrMergeLead({
       }
 
     if (duplicateHandling === "update" || duplicateHandling === "merge") {
+      if (incomingWorkspaceId && !existingLead.workspaceId) {
+        existingLead.workspaceId = incomingWorkspaceId
+      }
       // Merge new data into existing lead
       if (options.overwriteName && name) {
         existingLead.name = name
@@ -338,6 +368,14 @@ async function createOrMergeLead({
     leadMetadata.company = payload.company.trim()
   }
 
+  if (crossWorkspaceMatch) {
+    leadMetadata.crossWorkspaceMatch = {
+      matchedLeadId: crossWorkspaceMatch._id,
+      matchedWorkspaceId: crossWorkspaceMatch.workspaceId,
+      detectedAt: new Date(),
+    }
+  }
+
   const initialAssignmentHistory = [
     {
       fromOwnerId: null,
@@ -354,6 +392,7 @@ async function createOrMergeLead({
 
   // 4. Instantiate and Save Lead Model v2 Document
   const newLead = new Lead({
+    workspaceId: incomingWorkspaceId || null,
     name,
     email: rawEmail,
     phone: rawPhone,

@@ -14,6 +14,13 @@ const followUpSchema = new mongoose.Schema(
       required: [true, "Tenant ID is required"],
       index: true,
     },
+    // Optional workspace scoping (null = Standalone mode or unassigned)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     title: {
       type: String,
       required: [true, "Follow-up title or subject is required"],

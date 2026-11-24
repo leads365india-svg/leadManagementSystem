@@ -14,6 +14,7 @@ export const metadata = {
   description: "Streamline your sales process with comprehensive lead tracking and management",
   icons: {
     icon: "/favicon.svg",
+    shortcut: "/favicon.ico",
   },
 }
 

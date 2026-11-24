@@ -489,6 +489,7 @@ async function syncLeadPipelineStatusFromAiCall({
   try {
     await activity.record({
       tenantId: effectiveTenantId,
+      workspaceId: lead.workspaceId || call?.workspaceId || null,
       leadId: lead._id,
       type: "lead.status_changed",
       actor: {
@@ -645,6 +646,7 @@ async function markProposalSent({ leadId, tenantId, user = null, details = {} } 
   try {
     await activity.record({
       tenantId: cleanTenantId,
+      workspaceId: lead.workspaceId || null,
       leadId: lead._id,
       type: "lead.status_changed",
       actor: user || { name: "System", role: "system" },
@@ -729,6 +731,7 @@ async function markClosedWon({ leadId, tenantId, user = null, details = {} } = {
   try {
     await activity.record({
       tenantId: cleanTenantId,
+      workspaceId: lead.workspaceId || null,
       leadId: lead._id,
       type: "lead.status_changed",
       actor: user || { name: "System", role: "system" },

@@ -58,12 +58,36 @@ const accountSchema = new mongoose.Schema(
       index: true,
       default: "",
     },
+    // Multi-Workspace SaaS Mode (Default: false for standalone clients)
+    workspaceModeEnabled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     // White-Label Settings
     customDomain: {
       type: String,
       trim: true,
       default: "",
       lowercase: true,
+      validate: {
+        validator: function (v) {
+          if (!v) return true
+          const clean = v.toLowerCase().trim().replace(/^https?:\/\//i, "").split("/")[0].split(":")[0]
+          if (
+            clean === "leads365.in" ||
+            clean.endsWith(".leads365.in") ||
+            clean === "localhost" ||
+            clean.endsWith(".localhost") ||
+            clean.endsWith(".vercel.app") ||
+            clean.endsWith(".onrender.com")
+          ) {
+            return false
+          }
+          return true
+        },
+        message: (props) => `${props.value} is a core platform domain and cannot be configured as a custom domain.`,
+      },
     },
     domainStatus: {
       type: String,

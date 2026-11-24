@@ -18,9 +18,15 @@ export default function SuperAdminLayout({ children }) {
   const { user, status, loading, logout } = useAuth()
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [mounted, setMounted] = useState(false)
   const profileMenuRef = useRef(null)
 
   const isLoginPage = pathname === "/super-admin/login"
+
+  // Ensure deterministic client hydration matching initial SSR render
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   // Safety fallback timer to prevent infinite spinner on session loading hang
   const [sessionTimedOut, setSessionTimedOut] = useState(false)
@@ -82,7 +88,7 @@ export default function SuperAdminLayout({ children }) {
   }
 
   // Loading state while checking authentication
-  if ((loading || status === "idle") && !sessionTimedOut) {
+  if (!mounted || ((loading || status === "idle") && !sessionTimedOut)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center space-y-4">

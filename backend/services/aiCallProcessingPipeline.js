@@ -71,9 +71,12 @@ async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, forc
     payload: {
       callId: call._id.toString(),
       tenantId: cleanTenantId,
+      workspaceId: call.workspaceId ? call.workspaceId.toString() : null,
       forceNewTranscript: Boolean(forceNewTranscript || force),
     },
     tenantId: cleanTenantId,
+    workspaceId: call.workspaceId || null,
+    scopeMode: call.workspaceId ? "single_workspace" : "standalone",
     idempotencyKey,
     priority,
     maxAttempts: 3,
@@ -167,6 +170,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     // Initialize transcript in PROCESSING state
     transcript = new AITranscript({
       tenantId,
+      workspaceId: call.workspaceId || null,
       callId: callObjId,
       recordingReference: {
         fileId: call.recording?.fileId,
@@ -280,6 +284,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
 
   const analysis = new AICallAnalysis({
     tenantId,
+    workspaceId: call.workspaceId || null,
     callId: callObjId,
     transcriptId: transcript._id,
     analysisVersion: nextAnalysisVersion,

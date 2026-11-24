@@ -9,6 +9,8 @@
 
 const CORE_PLATFORM_HOSTS = new Set([
   "admin.leads365.in",
+  "crm.leads365.in",
+  "app.leads365.in",
   "leads365.in",
   "localhost",
   "127.0.0.1",
@@ -52,8 +54,18 @@ export function isWhiteLabelDomain(hostname) {
     return false
   }
 
+  // Render deployment domains
+  if (host.endsWith(".onrender.com")) {
+    return false
+  }
+
   // Core administrative platform domains
-  if (CORE_PLATFORM_HOSTS.has(host) || host === "admin.leads365.in" || host === "leads365.in") {
+  if (
+    CORE_PLATFORM_HOSTS.has(host) ||
+    host === "admin.leads365.in" ||
+    host === "leads365.in" ||
+    host.endsWith(".leads365.in")
+  ) {
     return false
   }
 

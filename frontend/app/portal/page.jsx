@@ -23,9 +23,17 @@ import {
   Calendar,
   AlertCircle,
 } from "lucide-react"
+import MasterDashboard from "@/components/master-dashboard"
 
 export default function ClientPortalDashboard() {
-  const { user: authUser, hasPermission } = useAuth()
+  const {
+    user: authUser,
+    hasPermission,
+    isMultiWorkspaceEnabled,
+    activeWorkspace,
+    workspaces,
+    setActiveWorkspace,
+  } = useAuth()
   const { branding, isWhiteLabel } = useBranding()
   const router = useRouter()
   const [stats, setStats] = useState({
@@ -121,6 +129,16 @@ export default function ClientPortalDashboard() {
     loadData()
   }, [loadData])
 
+  useEffect(() => {
+    const handleWorkspaceChange = () => {
+      loadData()
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("leadflow_workspace_changed", handleWorkspaceChange)
+      return () => window.removeEventListener("leadflow_workspace_changed", handleWorkspaceChange)
+    }
+  }, [loadData])
+
   const getStatusBadge = (status) => {
     switch (status) {
       case "New":
@@ -153,6 +171,21 @@ export default function ClientPortalDashboard() {
     effectiveUser?.account?.displayName ||
     effectiveUser?.account?.companyName ||
     "Your Organization"
+
+  // Master Dashboard view for Org Admins viewing All Projects
+  if (
+    isMultiWorkspaceEnabled &&
+    activeWorkspace === "all" &&
+    (effectiveUser?.role === "account_admin" || effectiveUser?.role === "super_admin")
+  ) {
+    return (
+      <MasterDashboard
+        workspaces={workspaces}
+        setActiveWorkspace={setActiveWorkspace}
+        user={effectiveUser}
+      />
+    )
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">

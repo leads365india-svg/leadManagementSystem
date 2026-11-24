@@ -46,6 +46,13 @@ const aiTranscriptSchema = new mongoose.Schema(
       index: true,
       trim: true,
     },
+    // Optional workspace scoping (null = Standalone mode or unassigned)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     callId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Call",

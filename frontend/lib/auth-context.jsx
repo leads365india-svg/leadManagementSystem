@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react"
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { apiClient } from "@/lib/api"
 import { isWhiteLabelDomain, normalizeHostname } from "@/lib/domain"
@@ -129,6 +129,11 @@ const AuthContext = createContext({
   setSession: () => {},
   logout: async () => {},
   hasPermission: () => false,
+  workspaces: [],
+  activeWorkspace: null,
+  isMultiWorkspaceEnabled: false,
+  setActiveWorkspace: () => {},
+  reloadWorkspaces: async () => {},
 })
 
 // Robust base64url JWT payload parser compatible with WebKit / Safari and standard browsers
@@ -162,13 +167,110 @@ function parseJwtPayload(token) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [status, setStatus] = useState("loading")
-  const [activeTenant, setActiveTenantState] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("leadflow_active_tenant") || null
-    }
-    return null
-  })
+  const [activeTenant, setActiveTenantState] = useState(null)
+  const [workspaces, setWorkspaces] = useState([])
+  const [isMultiWorkspaceEnabled, setIsMultiWorkspaceEnabled] = useState(false)
+  const [activeWorkspace, setActiveWorkspaceState] = useState(null)
   const router = useRouter()
+
+  const userRef = useRef(user)
+  useEffect(() => {
+    userRef.current = user
+  }, [user])
+
+  // Hydrate client-only persisted values after initial SSR mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const storedTenant = localStorage.getItem("leadflow_active_tenant")
+      if (storedTenant) {
+        setActiveTenantState(storedTenant)
+      }
+      const storedWs = localStorage.getItem("leadflow_active_workspace")
+      if (storedWs) {
+        setActiveWorkspaceState(storedWs)
+      }
+    }
+  }, [])
+
+  const setActiveWorkspace = useCallback((wsId) => {
+    if (typeof window !== "undefined") {
+      if (wsId) {
+        localStorage.setItem("leadflow_active_workspace", wsId)
+      } else {
+        localStorage.removeItem("leadflow_active_workspace")
+      }
+    }
+    setActiveWorkspaceState(wsId || null)
+  }, [])
+
+  const reloadWorkspaces = useCallback(async (targetUser = null) => {
+    // If on a login page, never attempt to fetch workspaces
+    if (typeof window !== "undefined" && window.location.pathname.includes("/login")) {
+      return []
+    }
+
+    const effectiveUser = targetUser || userRef.current
+    if (!effectiveUser) return []
+
+    // Platform Super Admin does not operate on tenant workspaces unless actively inspecting a tenant
+    if (effectiveUser.role === "super_admin") {
+      const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
+      if (!activeTenant) {
+        setWorkspaces([])
+        setIsMultiWorkspaceEnabled(false)
+        setActiveWorkspace(null)
+        return []
+      }
+    }
+
+    try {
+      const res = await apiClient.getWorkspaces()
+      if (res?.status === 429 || res?.isRateLimit) {
+        console.warn("Workspaces request throttled by rate limit")
+        return []
+      }
+      if (res && res.success) {
+        const isEnabled = Boolean(res.workspaceModeEnabled)
+        setIsMultiWorkspaceEnabled(isEnabled)
+        const wsList = Array.isArray(res.data) ? res.data : []
+        setWorkspaces(wsList)
+
+        if (isEnabled && wsList.length > 0) {
+          const isOrgAdmin = effectiveUser.role === "account_admin" || effectiveUser.role === "super_admin"
+          const storedWs = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_workspace") : null
+
+          let selected = null
+          if (storedWs === "all" && isOrgAdmin) {
+            selected = "all"
+          } else if (storedWs && wsList.some((w) => w._id?.toString() === storedWs)) {
+            selected = storedWs
+          } else {
+            if (isOrgAdmin) {
+              selected = "all"
+            } else {
+              const def = wsList.find((w) => w.isDefault) || wsList[0]
+              selected = def ? def._id?.toString() : null
+            }
+          }
+
+          if (selected) {
+            setActiveWorkspace(selected)
+          }
+        } else {
+          setActiveWorkspace(null)
+        }
+        return wsList
+      }
+    } catch (err) {
+      console.warn("Failed to load workspaces:", err?.message || err)
+    }
+    return []
+  }, [setActiveWorkspace])
+
+  const reloadWorkspacesRef = useRef(reloadWorkspaces)
+  useEffect(() => {
+    reloadWorkspacesRef.current = reloadWorkspaces
+  }, [reloadWorkspaces])
 
   const setActiveTenant = useCallback((tenantId) => {
     if (typeof window !== "undefined") {
@@ -181,7 +283,16 @@ export function AuthProvider({ children }) {
     setActiveTenantState(tenantId || null)
   }, [])
 
+  const isCheckingAuthRef = useRef(false)
+  const lastCheckAuthTsRef = useRef(0)
+
   const checkAuth = useCallback(async () => {
+    // Deduplicate in-flight and rapid duplicate calls
+    if (isCheckingAuthRef.current) return null
+    if (Date.now() - lastCheckAuthTsRef.current < 1000) return null
+    isCheckingAuthRef.current = true
+    lastCheckAuthTsRef.current = Date.now()
+
     try {
       // If unauthenticated visitor is on a login page and has no valid token,
       // skip calling /auth/me to avoid unnecessary 401 console errors.
@@ -213,7 +324,7 @@ export function AuthProvider({ children }) {
 
       setStatus("loading")
       const response = await apiClient.getMe()
-      if (response.success && response.data?.user) {
+      if (response && response.success && response.data?.user) {
         const userData = response.data.user
 
         // Validate cross-tenant domain isolation for non-super-admin users
@@ -266,6 +377,14 @@ export function AuthProvider({ children }) {
 
         setUser(userData)
         setStatus("authenticated")
+        if (userData.role !== "super_admin") {
+          await reloadWorkspacesRef.current(userData)
+        } else {
+          const storedTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
+          if (storedTenant) {
+            await reloadWorkspacesRef.current(userData)
+          }
+        }
         return userData
       } else {
         setUser(null)
@@ -276,12 +395,15 @@ export function AuthProvider({ children }) {
       setUser(null)
       setStatus("unauthenticated")
       return null
+    } finally {
+      isCheckingAuthRef.current = false
     }
   }, [])
 
   useEffect(() => {
     checkAuth()
-  }, [checkAuth])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const setSession = useCallback((userData) => {
     if (userData) {
@@ -300,6 +422,9 @@ export function AuthProvider({ children }) {
       if (response.success && response.data?.user) {
         setUser(response.data.user)
         setStatus("authenticated")
+        if (response.data.user.role !== "super_admin") {
+          await reloadWorkspaces(response.data.user)
+        }
         return response
       } else {
         setUser(null)
@@ -311,7 +436,7 @@ export function AuthProvider({ children }) {
       setStatus("unauthenticated")
       throw err
     }
-  }, [])
+  }, [reloadWorkspaces])
 
   const logout = useCallback(async (targetRoute) => {
     const roleAtLogout = user?.role
@@ -324,9 +449,13 @@ export function AuthProvider({ children }) {
     } finally {
       if (typeof window !== "undefined") {
         localStorage.removeItem("leadflow_active_tenant")
+        localStorage.removeItem("leadflow_active_workspace")
         localStorage.removeItem("leadflow_token")
       }
       setActiveTenantState(null)
+      setActiveWorkspace(null)
+      setWorkspaces([])
+      setIsMultiWorkspaceEnabled(false)
       setUser(null)
       setStatus("unauthenticated")
       const destination =
@@ -334,7 +463,7 @@ export function AuthProvider({ children }) {
         (roleAtLogout === "super_admin" ? "/super-admin/login" : "/portal/login")
       router.push(destination)
     }
-  }, [user, router])
+  }, [user, router, setActiveWorkspace])
 
   const checkPermission = useCallback(
     (requiredPermission, requiredScope = null) => {
@@ -349,6 +478,11 @@ export function AuthProvider({ children }) {
     loading: status === "loading",
     activeTenant,
     setActiveTenant,
+    workspaces,
+    activeWorkspace,
+    isMultiWorkspaceEnabled,
+    setActiveWorkspace,
+    reloadWorkspaces,
     checkAuth,
     login,
     setSession,

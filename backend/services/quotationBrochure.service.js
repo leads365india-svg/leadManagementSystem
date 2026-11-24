@@ -65,6 +65,7 @@ async function uploadLeadQuotation({ leadId, buffer, originalName, user, tenantI
   // 2. Create Quotation Document
   const quotation = new Quotation({
     tenantId: cleanTenantId,
+    workspaceId: lead.workspaceId || null,
     leadId: lead._id,
     fileName: stored.fileName,
     originalName: stored.originalName,
@@ -328,6 +329,7 @@ async function uploadTenantBrochure({
   // 2. Create Brochure record
   const brochure = new Brochure({
     tenantId: cleanTenantId,
+    workspaceId: (product && (product.targetWorkspaceId || product.workspaceId)) || null,
     title: title.trim(),
     productId: productId ? new mongoose.Types.ObjectId(productId) : null,
     productName: productName ? productName.trim() : "",

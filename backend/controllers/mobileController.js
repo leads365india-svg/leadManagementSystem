@@ -339,7 +339,8 @@ const reportMobileCall = async (req, res) => {
       const isAssignedAgent =
         (lead.assignedStaffId && userIdStr && lead.assignedStaffId.toString() === userIdStr) ||
         (lead.assignedTo && userIdStr && lead.assignedTo.toString() === userIdStr) ||
-        (lead.assignedTo && user.name && typeof lead.assignedTo === "string" && lead.assignedTo.toLowerCase() === user.name.toLowerCase())
+        (lead.assignedTo && user.name && typeof lead.assignedTo === "string" && lead.assignedTo.toLowerCase() === user.name.toLowerCase()) ||
+        (!lead.assignedStaffId || lead.assignedStaffId === "unassigned")
 
       if (!isTenantAdmin && !isAssignedAgent) {
         return res.status(403).json({
@@ -373,6 +374,93 @@ const reportMobileCall = async (req, res) => {
     targetTenantId = (lead ? lead.tenantId : user.tenantId) || "default"
     const trimmedClientCallId = client_call_id.trim()
 
+    // 1d. Workspace Attribution and Precedence Resolution
+    let resolvedWorkspaceId = null
+    let workspaceConflict = null
+
+    if (tenantAccount && tenantAccount.workspaceModeEnabled) {
+      const WorkspaceMembership = require("../models/WorkspaceMembership")
+      const Workspace = require("../models/Workspace")
+
+      const explicitWorkspaceId = req.body.workspace_id || req.body.workspaceId || req.headers["x-workspace-id"] || null
+      const isAccountAdmin = user.role === "account_admin" || user.role === "super_admin"
+
+      // 1. Identify SIM/DID mapping if present
+      let simWorkspaceId = req.body.sim_workspace_id || null
+
+      // 2. Identify existing CRM lead's workspace
+      let leadWorkspaceId = lead?.workspaceId ? lead.workspaceId.toString() : null
+      if (!leadWorkspaceId && (phone_number || normPhone)) {
+        const phoneMatch = await Lead.findOne({
+          tenantId: targetTenantId,
+          $or: [
+            { phoneNormalized: normPhone },
+            { phone: phone_number.trim() },
+            { "metadata.normalizedPhone": normPhone },
+          ],
+          deletedAt: null,
+        })
+          .setOptions({ skipTenantFilter: true })
+          .select("_id workspaceId")
+          .lean()
+        if (phoneMatch?.workspaceId) {
+          leadWorkspaceId = phoneMatch.workspaceId.toString()
+        }
+      }
+
+      // 3. Resolve agent default workspace
+      let agentDefaultWorkspaceId = null
+      const agentMemberships = await WorkspaceMembership.find({
+        tenantId: targetTenantId,
+        userId: user.id || user._id,
+        status: "active",
+      })
+        .setOptions({ skipTenantFilter: true })
+        .lean()
+
+      if (agentMemberships.length > 0) {
+        const defaultWs = await Workspace.findOne({
+          _id: { $in: agentMemberships.map((m) => m.workspaceId) },
+          isDefault: true,
+          status: "active",
+        })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
+        agentDefaultWorkspaceId = defaultWs ? defaultWs._id.toString() : agentMemberships[0].workspaceId.toString()
+      }
+
+      // 4. Apply Precedence Rules
+      const isInbound = isIncomingDirection || isMissedOrRejected
+      if (isInbound) {
+        // Inbound: (1) SIM/DID mapping -> (2) Unique lead phone -> (3) Explicit client selection -> (4) Agent default
+        if (simWorkspaceId && leadWorkspaceId && simWorkspaceId !== leadWorkspaceId) {
+          workspaceConflict = {
+            simWorkspace: simWorkspaceId,
+            leadWorkspace: leadWorkspaceId,
+            detectedAt: new Date(),
+          }
+          resolvedWorkspaceId = leadWorkspaceId
+        } else {
+          resolvedWorkspaceId = simWorkspaceId || leadWorkspaceId || (explicitWorkspaceId ? explicitWorkspaceId.toString() : null) || agentDefaultWorkspaceId
+        }
+      } else {
+        // Outbound: (1) CRM lead -> (2) App context / explicit -> (3) SIM mapping -> (4) Agent default
+        resolvedWorkspaceId = leadWorkspaceId || (explicitWorkspaceId ? explicitWorkspaceId.toString() : null) || simWorkspaceId || agentDefaultWorkspaceId
+      }
+
+      // 5. Authorization Check: Agent must be a member of the resolved workspace (unless account admin)
+      if (resolvedWorkspaceId && !isAccountAdmin) {
+        const isMember = agentMemberships.some((m) => m.workspaceId.toString() === resolvedWorkspaceId.toString())
+        if (!isMember) {
+          return res.status(403).json({
+            success: false,
+            code: "FORBIDDEN_WORKSPACE_ACCESS",
+            error: "Access denied: You are not authorized to report calls in this workspace.",
+          })
+        }
+      }
+    }
+
     // Helper: Idempotently create or update follow-up for a call event
     const syncFollowUpForCall = async (targetLead) => {
       if (!targetLead || !next_followup_at || typeof next_followup_at !== "number") return
@@ -388,13 +476,13 @@ const reportMobileCall = async (req, res) => {
         let existingFollowUp = await FollowUp.findOne({
           tenantId: targetLead.tenantId,
           sourceCallId: trimmedClientCallId,
-        })
+        }).setOptions({ skipTenantFilter: true })
 
         if (!existingFollowUp) {
           existingFollowUp = await FollowUp.findOne({
             tenantId: targetLead.tenantId,
             idempotencyKey: callIdempKey,
-          })
+          }).setOptions({ skipTenantFilter: true })
         }
 
         if (existingFollowUp) {
@@ -403,6 +491,9 @@ const reportMobileCall = async (req, res) => {
             return
           }
           if (existingFollowUp.status === "pending") {
+            if (resolvedWorkspaceId && !existingFollowUp.workspaceId) {
+              existingFollowUp.workspaceId = resolvedWorkspaceId
+            }
             existingFollowUp.sourceCallId = trimmedClientCallId
             existingFollowUp.idempotencyKey = callIdempKey
             existingFollowUp.title = `Call Follow-up: ${call_outcome || "Follow-up"}`
@@ -417,6 +508,7 @@ const reportMobileCall = async (req, res) => {
         } else {
           try {
             await FollowUp.create({
+              workspaceId: resolvedWorkspaceId || targetLead.workspaceId || null,
               leadId: targetLead._id,
               tenantId: targetLead.tenantId,
               sourceCallId: trimmedClientCallId,
@@ -501,7 +593,7 @@ const reportMobileCall = async (req, res) => {
     }
 
     // 2. Idempotency Check: if clientCallId already processed, update existing record (upsert)
-    const existingCall = await Call.findOne({ clientCallId: trimmedClientCallId })
+    const existingCall = await Call.findOne({ clientCallId: trimmedClientCallId }).setOptions({ skipTenantFilter: true })
     if (existingCall) {
       let isUpdated = false
       if (call_outcome && call_outcome !== "Connected" && existingCall.callOutcome !== call_outcome) {
@@ -531,6 +623,10 @@ const reportMobileCall = async (req, res) => {
         existingCall.isUnlinked = false
         isUpdated = true
       }
+      if (resolvedWorkspaceId && !existingCall.workspaceId) {
+        existingCall.workspaceId = resolvedWorkspaceId
+        isUpdated = true
+      }
       if (isUpdated) {
         await existingCall.save()
       }
@@ -543,6 +639,7 @@ const reportMobileCall = async (req, res) => {
         success: true,
         call_id: existingCall._id.toString(),
         lead_id: lead ? lead._id.toString() : (existingCall.leadId ? existingCall.leadId.toString() : null),
+        workspace_id: existingCall.workspaceId ? existingCall.workspaceId.toString() : (resolvedWorkspaceId || null),
         auto_lead_created: false,
         message: isUpdated ? "Call report updated successfully (idempotent upsert)" : "Call report already received (idempotent)",
         call: existingCall,
@@ -597,6 +694,9 @@ const reportMobileCall = async (req, res) => {
           matchedCall.leadId = lead._id
           matchedCall.isUnlinked = false
         }
+        if (resolvedWorkspaceId && !matchedCall.workspaceId) {
+          matchedCall.workspaceId = resolvedWorkspaceId
+        }
         await matchedCall.save()
 
         if (lead) {
@@ -607,6 +707,7 @@ const reportMobileCall = async (req, res) => {
           success: true,
           call_id: matchedCall._id.toString(),
           lead_id: lead ? lead._id.toString() : (matchedCall.leadId ? matchedCall.leadId.toString() : null),
+          workspace_id: matchedCall.workspaceId ? matchedCall.workspaceId.toString() : (resolvedWorkspaceId || null),
           auto_lead_created: false,
           message: "Matched existing call record by candidate signature (idempotent merge)",
           call: matchedCall,
@@ -624,6 +725,7 @@ const reportMobileCall = async (req, res) => {
 
     const newCall = await Call.create({
       clientCallId: trimmedClientCallId,
+      workspaceId: resolvedWorkspaceId || null,
       leadId: lead ? lead._id : null,
       isUnlinked: !lead,
       tenantId: targetTenantId,
@@ -642,6 +744,7 @@ const reportMobileCall = async (req, res) => {
         reportedAt: Date.now(),
         isUnlinked: !lead,
         attribution: isUnlinkedCall ? "unverified" : "lead",
+        workspaceConflict: workspaceConflict || undefined,
       },
     })
 
@@ -654,6 +757,7 @@ const reportMobileCall = async (req, res) => {
       success: true,
       call_id: newCall._id.toString(),
       lead_id: lead ? lead._id.toString() : null,
+      workspace_id: resolvedWorkspaceId || null,
       auto_lead_created: autoLeadCreated,
       message: autoLeadCreated ? "Call recorded and lead auto-created successfully" : "Call recorded and synced successfully",
     })
@@ -847,6 +951,65 @@ const mobileLogin = async (req, res) => {
       { expiresIn: "30d" }
     )
 
+    let workspacesList = []
+    let activeWorkspaceId = null
+
+    if (account && account.workspaceModeEnabled) {
+      const WorkspaceMembership = require("../models/WorkspaceMembership")
+      const Workspace = require("../models/Workspace")
+
+      const isAccountAdmin = user.role === "account_admin" || user.role === "super_admin"
+      if (isAccountAdmin) {
+        const allWs = await Workspace.find({ tenantId: user.tenantId, status: "active" })
+          .setOptions({ skipTenantFilter: true })
+          .sort({ isDefault: -1, name: 1 })
+          .lean()
+        workspacesList = allWs.map((ws) => ({
+          id: ws._id.toString(),
+          name: ws.name,
+          slug: ws.slug,
+          isDefault: Boolean(ws.isDefault),
+          role: "workspace_admin",
+        }))
+      } else {
+        const memberships = await WorkspaceMembership.find({
+          tenantId: user.tenantId,
+          userId: user._id,
+          status: "active",
+        })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
+
+        if (memberships.length > 0) {
+          const wsIds = memberships.map((m) => m.workspaceId)
+          const wsDocs = await Workspace.find({
+            _id: { $in: wsIds },
+            tenantId: user.tenantId,
+            status: "active",
+          })
+            .setOptions({ skipTenantFilter: true })
+            .sort({ isDefault: -1, name: 1 })
+            .lean()
+
+          const roleMap = new Map()
+          memberships.forEach((m) => roleMap.set(m.workspaceId.toString(), m.role))
+
+          workspacesList = wsDocs.map((ws) => ({
+            id: ws._id.toString(),
+            name: ws.name,
+            slug: ws.slug,
+            isDefault: Boolean(ws.isDefault),
+            role: roleMap.get(ws._id.toString()) || "agent",
+          }))
+        }
+      }
+
+      if (workspacesList.length > 0) {
+        const defaultWs = workspacesList.find((w) => w.isDefault)
+        activeWorkspaceId = defaultWs ? defaultWs.id : workspacesList[0].id
+      }
+    }
+
     return res.status(200).json({
       success: true,
       data: {
@@ -865,6 +1028,8 @@ const mobileLogin = async (req, res) => {
           name: account?.companyName || account?.displayName || "Leads365 Agency",
           accountId: user.tenantId,
         },
+        workspaces: workspacesList,
+        activeWorkspaceId: activeWorkspaceId,
         minVersionCode: 1,
         isUpdateRequired: false,
         isRevoked: false,
@@ -1399,6 +1564,7 @@ const uploadMobileRecording = async (req, res) => {
     const result = await recordingStorage.streamUpload({
       callId: call._id.toString(),
       tenantId: call.tenantId,
+      workspaceId: call.workspaceId || null,
       user,
       readStream: req,
       mimeType,

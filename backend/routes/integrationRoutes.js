@@ -22,6 +22,7 @@ const {
   getIntegrationSnippets,
   testIntegrationById,
 } = require("../controllers/integrationController")
+const { getPublicServices } = require("../controllers/workspaceController")
 const {
   handleMetaWebhookHandshake,
   handleMetaWebhookNotification,
@@ -75,6 +76,7 @@ const webhookLimiter = rateLimit({
 router.get("/snippet.js", serveWebsiteSnippet)
 router.get("/universal-sdk.js", serveWebsiteSnippet)
 router.get("/sdk.js", serveWebsiteSnippet)
+router.get("/public/services", getPublicServices)
 
 // 1. Public Integration Webhook Route (Preserves exact URL, headers, and response contract)
 router.post("/leads/website", webhookLimiter, receiveWebsiteLead)

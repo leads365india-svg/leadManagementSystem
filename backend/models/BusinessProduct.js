@@ -66,6 +66,33 @@ const businessProductSchema = new mongoose.Schema(
       maxlength: [2000, "Additional notes cannot exceed 2000 characters"],
       default: "",
     },
+    // Optional workspace scoping (null = Organization-wide master product/service)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
+    // Optional target workspace for public inquiry routing
+    targetWorkspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
+    // Optional routing code for website form selection (e.g. "SVC_CARDIOLOGY")
+    routingCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: null,
+    },
+    // Flag to expose in public service discovery endpoints
+    isPublicService: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     status: {
       type: String,
       enum: ["active", "inactive", "archived"],

@@ -347,7 +347,7 @@ export default function PortalLoginClient({
         toast.success(`Welcome back, ${response.data.user.name}!`)
         router.replace("/portal")
       } else {
-        const errMsg = response?.error || "Invalid email or password"
+        const errMsg = response?.error || "Login failed. Please check your credentials."
         setError(errMsg)
         toast.error(errMsg)
         setPassword("")
@@ -359,7 +359,7 @@ export default function PortalLoginClient({
         }
       }
     } catch (err) {
-      const errMsg = err.message || "Invalid credentials. Please verify your email and password."
+      const errMsg = err.message || "Login failed. Please check your credentials."
       setError(errMsg)
       toast.error(errMsg)
       setPassword("")

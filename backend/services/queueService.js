@@ -1,6 +1,7 @@
 const crypto = require("crypto")
 const Job = require("../models/Job")
 const DeadLetterJob = require("../models/DeadLetterJob")
+const { runWithTenantContext } = require("../middleware/tenantContext")
 
 /**
  * Queue Service - Phase 9: Background Jobs Infrastructure
@@ -50,6 +51,8 @@ async function addJob({
   name,
   payload = {},
   tenantId = "__system__",
+  workspaceId = null,
+  scopeMode = null,
   idempotencyKey = null,
   delayMs = 0,
   maxAttempts = 3,
@@ -64,6 +67,8 @@ async function addJob({
 
   const cleanName = name.trim()
   const cleanTenantId = tenantId && typeof tenantId === "string" ? tenantId.trim() : "__system__"
+  const cleanWorkspaceId = workspaceId || payload?.workspaceId || null
+  const cleanScopeMode = scopeMode || (cleanWorkspaceId ? "single_workspace" : (cleanTenantId !== "__system__" ? "standalone" : "system"))
   const cleanIdempotencyKey = idempotencyKey && typeof idempotencyKey === "string" ? idempotencyKey.trim() : null
 
   // Idempotency check: if key already exists for this tenant, return existing job
@@ -85,6 +90,8 @@ async function addJob({
       jobId,
       name: cleanName,
       tenantId: cleanTenantId,
+      workspaceId: cleanWorkspaceId,
+      scopeMode: cleanScopeMode,
       idempotencyKey: cleanIdempotencyKey,
       payload,
       status: "pending",
@@ -226,6 +233,8 @@ async function failJob(jobId, error, durationMs = 0) {
       originalJobId: job.jobId,
       name: job.name,
       tenantId: job.tenantId,
+      workspaceId: job.workspaceId || null,
+      scopeMode: job.scopeMode || "standalone",
       idempotencyKey: job.idempotencyKey,
       payload: job.payload,
       totalAttempts: job.attempts,
@@ -306,8 +315,21 @@ async function processJob(job, workerId = "worker_default") {
   }
 
   const startTime = Date.now()
+  const resolvedWorkspaceId = job.workspaceId || job.payload?.workspaceId || null
+  const resolvedScopeMode = job.scopeMode || (resolvedWorkspaceId ? "single_workspace" : (job.tenantId && job.tenantId !== "__system__" ? "standalone" : "system"))
+  const executionContext = {
+    tenantId: job.tenantId,
+    workspaceId: resolvedWorkspaceId,
+    mode: resolvedScopeMode,
+    isSuperAdmin: false,
+    isBackgroundJob: true,
+    jobId: job.jobId,
+  }
+
   try {
-    const result = await handler(job, { workerId })
+    const result = await runWithTenantContext(executionContext, async () => {
+      return await handler(job, { workerId, context: executionContext })
+    })
     const durationMs = Date.now() - startTime
     return completeJob(job.jobId, result, durationMs)
   } catch (err) {

@@ -10,8 +10,14 @@ const crypto = require("crypto")
  */
 
 const shouldSkipDashboardRateLimit = (req) => {
+  if (req.method === "OPTIONS") return true
   const url = req.originalUrl || req.baseUrl || req.url || ""
-  return url.startsWith("/api/integrations")
+  return (
+    url.startsWith("/api/integrations") ||
+    url.startsWith("/api/auth") ||
+    url.startsWith("/api/health") ||
+    url === "/health"
+  )
 }
 
 const generateIntegrationKey = (req) => {
@@ -29,7 +35,34 @@ const dashboardLimiter = rateLimit({
   max: 300,
   keyGenerator: (req) => {
     // Key by authenticated user ID if present, otherwise IP
-    return req.user?.id ? `user_${req.user.id}` : (req.ip || "unknown_ip")
+    if (req.user?.id || req.user?._id) {
+      return `user_${req.user.id || req.user._id}`
+    }
+    try {
+      const authHeader = req.headers?.authorization || req.headers?.Authorization
+      let token = null
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        token = authHeader.split(" ")[1]
+      } else if (req.cookies?.superadmin_token) {
+        token = req.cookies.superadmin_token
+      } else if (req.cookies?.client_token) {
+        token = req.cookies.client_token
+      } else if (req.headers?.cookie) {
+        const match = req.headers.cookie.match(/(?:^|;\s*)(?:superadmin_token|client_token)=([^;]+)/)
+        if (match) {
+          token = decodeURIComponent(match[1])
+        }
+      }
+      if (token) {
+        const jwt = require("jsonwebtoken")
+        const { getJwtSecret } = require("./authMiddleware")
+        const verified = jwt.verify(token, getJwtSecret())
+        if (verified && (verified.id || verified._id)) {
+          return `user_${verified.id || verified._id}`
+        }
+      }
+    } catch (_) {}
+    return req.ip || "unknown_ip"
   },
   skip: shouldSkipDashboardRateLimit,
   standardHeaders: true,

@@ -415,7 +415,7 @@ export default function LeadDetailDrawer({
       if (res.success) {
         toast.success("Follow-up marked completed")
         fetchLeadFollowUps()
-        if (typeof onLeadUpdated === "function") onLeadUpdated(lead)
+        if (typeof onLeadUpdated === "function" && lead) onLeadUpdated(lead)
       } else {
         toast.error(res.error || "Failed to complete follow-up")
       }
@@ -802,7 +802,8 @@ export default function LeadDetailDrawer({
         fetchLeadQuotations()
         fetchLeadActivities()
         fetchLeadDetails()
-        if (typeof onLeadUpdated === "function") onLeadUpdated(res?.data?.lead || lead)
+        const updatedLeadPayload = res?.data?.lead || lead
+        if (typeof onLeadUpdated === "function" && updatedLeadPayload) onLeadUpdated(updatedLeadPayload)
       } else {
         toast.error(res?.error || "Failed to upload quotation")
       }
@@ -848,7 +849,8 @@ export default function LeadDetailDrawer({
         fetchLeadCommHistory()
         fetchLeadActivities()
         fetchLeadDetails()
-        if (typeof onLeadUpdated === "function") onLeadUpdated(res?.data?.lead || lead)
+        const updatedLeadPayload = res?.data?.lead || lead
+        if (typeof onLeadUpdated === "function" && updatedLeadPayload) onLeadUpdated(updatedLeadPayload)
       } else {
         const errorMsg = res?.error || "Failed to send quotation"
         toast.error(errorMsg)
@@ -877,9 +879,9 @@ export default function LeadDetailDrawer({
         fetchLeadQuotations()
         fetchLeadActivities()
         fetchLeadDetails()
-        if (typeof onLeadUpdated === "function") {
+        if (typeof onLeadUpdated === "function" && (lead?._id || lead?.id)) {
           onLeadUpdated({
-            ...(lead || {}),
+            ...lead,
             quotationStatus: res.data?.leadQuotationStatus || lead?.quotationStatus,
           })
         }

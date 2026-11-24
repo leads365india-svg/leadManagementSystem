@@ -69,6 +69,13 @@ const quotationSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    // Optional workspace scoping (null = Standalone mode or unassigned)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     leadId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Lead",

@@ -38,6 +38,7 @@ const quotationRoutes = require("./routes/quotationRoutes")
 const brochureRoutes = require("./routes/brochureRoutes")
 const emailConfigRoutes = require("./routes/emailConfigRoutes")
 const dealAnalyticsRoutes = require("./routes/dealAnalyticsRoutes")
+const workspaceRoutes = require("./routes/workspaceRoutes")
 const { getJwtSecret, verifyCSRF } = require("./middleware/authMiddleware")
 const { tenantContextMiddleware } = require("./middleware/tenantContext")
 const { errorHandler, notFound } = require("./middleware/errorHandler")
@@ -73,15 +74,18 @@ const defaultLocalOrigins = [
   "http://127.0.0.1:3002",
 ]
 
-// Support Vercel production & preview deployments alongside configured origins
-const vercelDefaults = [
+// Support core platform and preview deployments alongside configured origins
+const platformDefaults = [
+  "https://leads365.in",
+  "https://*.leads365.in",
   "https://*.vercel.app",
+  "https://*.onrender.com",
 ]
 
 const allowedOrigins = [
   ...new Set([
     ...configuredFrontendUrls,
-    ...vercelDefaults,
+    ...platformDefaults,
     ...defaultLocalOrigins,
   ]),
 ]
@@ -150,6 +154,8 @@ const defaultAllowedHeaders = [
   "X-Auth-Portal",
   "x-tenant-id",
   "X-Tenant-Id",
+  "x-workspace-id",
+  "X-Workspace-Id",
   "x-csrf-token",
   "X-CSRF-Token",
   "x-requested-with",
@@ -321,6 +327,7 @@ app.use("/api/quotations", quotationRoutes)
 app.use("/api/brochures", brochureRoutes)
 app.use("/api/email-config", emailConfigRoutes)
 app.use("/api/deal-analytics", dealAnalyticsRoutes)
+app.use("/api/workspaces", workspaceRoutes)
 
 // Secure Call Recording Streaming & Playback endpoints (Phase 8 + Final Integration)
 const {

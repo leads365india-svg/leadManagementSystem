@@ -66,6 +66,7 @@ async function ensureGridFSIndexes() {
     const filesCollection = db.collection("recordings.files")
     await filesCollection.createIndex({ "metadata.tenantId": 1, "metadata.callId": 1 })
     await filesCollection.createIndex({ "metadata.tenantId": 1, "metadata.leadId": 1 })
+    await filesCollection.createIndex({ "metadata.tenantId": 1, "metadata.workspaceId": 1 })
     await filesCollection.createIndex({ "metadata.expiresAt": 1 })
     await filesCollection.createIndex({ "metadata.sha256": 1 })
   } catch (err) {
@@ -231,6 +232,7 @@ async function processAndConvertGridFSRecording({
         contentType: "audio/mpeg",
         metadata: {
           tenantId,
+          workspaceId: call.workspaceId || null,
           callId: call._id,
           leadId: call.leadId,
           agentId: call.agentId,
@@ -416,6 +418,7 @@ async function streamUpload({
     contentType: cleanMime,
     metadata: {
       tenantId,
+      workspaceId: call.workspaceId || options.workspaceId || null,
       callId: call._id,
       leadId: call.leadId,
       agentId: call.agentId,

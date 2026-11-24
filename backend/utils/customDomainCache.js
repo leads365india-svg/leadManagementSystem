@@ -1,5 +1,7 @@
 const mongoose = require("mongoose")
 const Account = require("../models/Account")
+const DomainMapping = require("../models/DomainMapping")
+const Workspace = require("../models/Workspace")
 
 /**
  * In-memory cache for tenant custom domains with 60s TTL.
@@ -22,6 +24,41 @@ const sanitizeHostname = (domain) => {
     .replace(/\/.*$/, "")
     .replace(/:\d+$/, "")
     .trim()
+}
+
+/**
+ * Determines whether a given hostname is a core Leads365 platform domain
+ * or local dev environment (not a tenant white-label custom domain).
+ * All tenant logins and Super Admin platform logins are permitted on platform domains.
+ * @param {string} hostname
+ * @returns {boolean}
+ */
+const isPlatformDomain = (hostname) => {
+  if (!hostname || typeof hostname !== "string") return false
+  const clean = sanitizeHostname(hostname)
+  if (!clean) return false
+
+  // Local development / loopback
+  if (
+    clean === "localhost" ||
+    clean === "127.0.0.1" ||
+    clean === "::1" ||
+    clean.endsWith(".localhost")
+  ) {
+    return true
+  }
+
+  // Core production & preview platform domains
+  if (
+    clean === "leads365.in" ||
+    clean.endsWith(".leads365.in") ||
+    clean.endsWith(".vercel.app") ||
+    clean.endsWith(".onrender.com")
+  ) {
+    return true
+  }
+
+  return false
 }
 
 /**
@@ -59,7 +96,22 @@ const getCustomDomainsCached = async () => {
     const domainSet = new Set()
     for (const acc of accounts) {
       const clean = sanitizeHostname(acc.customDomain)
-      if (clean) {
+      if (clean && !isPlatformDomain(clean)) {
+        domainSet.add(clean)
+      }
+    }
+
+    // Include verified custom domains from DomainMapping (both Accounts and Workspaces)
+    const verifiedMappings = await DomainMapping.find({
+      status: "verified",
+    })
+      .setOptions({ skipTenantFilter: true })
+      .select("domain")
+      .lean()
+
+    for (const m of verifiedMappings) {
+      const clean = sanitizeHostname(m.domain)
+      if (clean && !isPlatformDomain(clean)) {
         domainSet.add(clean)
       }
     }
@@ -93,15 +145,7 @@ const getAccountByCustomDomainCached = async (hostname) => {
   if (!cleanHost) return null
 
   // Fast rejection of core platform or local hosts
-  if (
-    cleanHost === "localhost" ||
-    cleanHost === "127.0.0.1" ||
-    cleanHost === "::1" ||
-    cleanHost.endsWith(".localhost") ||
-    cleanHost.endsWith(".vercel.app") ||
-    cleanHost === "admin.leads365.in" ||
-    cleanHost === "leads365.in"
-  ) {
+  if (isPlatformDomain(cleanHost)) {
     return null
   }
 
@@ -113,10 +157,38 @@ const getAccountByCustomDomainCached = async (hostname) => {
 
   try {
     const escaped = cleanHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    const account = await Account.findOne({
-      customDomain: { $regex: new RegExp(`^${escaped}$`, "i") },
-      status: { $ne: "suspended" },
-    }).lean()
+
+    // 1. Check DomainMapping collection first (Mode B global domain router)
+    let boundWorkspace = null
+    const mapping = await DomainMapping.findOne({
+      domain: cleanHost,
+      status: "verified",
+    })
+      .setOptions({ skipTenantFilter: true })
+      .lean()
+
+    let account = null
+    if (mapping) {
+      if (mapping.targetType === "WORKSPACE") {
+        boundWorkspace = await Workspace.findOne({ _id: mapping.targetId, status: "active" })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
+        account = await Account.findOne({ accountId: mapping.tenantId, status: { $ne: "suspended" } }).lean()
+        if (account && boundWorkspace) {
+          account.boundWorkspace = boundWorkspace
+        }
+      } else {
+        account = await Account.findOne({ _id: mapping.targetId, status: { $ne: "suspended" } }).lean()
+      }
+    }
+
+    // 2. Fallback to direct Account.customDomain for backward compatibility with existing accounts
+    if (!account) {
+      account = await Account.findOne({
+        customDomain: { $regex: new RegExp(`^${escaped}$`, "i") },
+        status: { $ne: "suspended" },
+      }).lean()
+    }
 
     cachedAccountByDomainMap.set(cleanHost, {
       account: account || null,
@@ -140,6 +212,11 @@ const isCustomDomainAllowed = async (origin) => {
 
   const cleanHost = sanitizeHostname(origin)
   if (!cleanHost) return false
+
+  // Fast-path: core platform domains are always allowed origins
+  if (isPlatformDomain(cleanHost)) {
+    return true
+  }
 
   // Disallow localhost or IP from custom domain bypass
   if (
@@ -181,6 +258,21 @@ const isCustomDomainAllowed = async (origin) => {
       return true
     }
 
+    // Direct database fallback for DomainMapping verified domains
+    const mappingMatch = await DomainMapping.findOne({
+      domain: cleanHost,
+      status: "verified",
+    })
+      .setOptions({ skipTenantFilter: true })
+      .lean()
+
+    if (mappingMatch && mappingMatch.domain) {
+      if (allowedDomains) {
+        allowedDomains.add(cleanHost)
+      }
+      return true
+    }
+
     return false
   } catch (err) {
     console.error("isCustomDomainAllowed check error:", err.message)
@@ -193,5 +285,6 @@ module.exports = {
   getAccountByCustomDomainCached,
   invalidateCustomDomainCache,
   isCustomDomainAllowed,
+  isPlatformDomain,
   sanitizeHostname,
 }

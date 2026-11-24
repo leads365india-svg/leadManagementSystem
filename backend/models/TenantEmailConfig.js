@@ -13,9 +13,19 @@ const tenantEmailConfigSchema = new mongoose.Schema(
     tenantId: {
       type: String,
       required: [true, "Tenant ID is required for email config"],
-      unique: true,
       trim: true,
       index: true,
+    },
+    // Optional workspace scoping (null = Organization-wide default SMTP)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
+    isDefault: {
+      type: Boolean,
+      default: false,
     },
     senderName: {
       type: String,
@@ -116,8 +126,43 @@ Best regards,
   }
 )
 
+tenantEmailConfigSchema.index({ tenantId: 1, workspaceId: 1 }, { unique: true })
+
 tenantEmailConfigSchema.plugin(tenantIsolationPlugin, { tenantField: "tenantId" })
 
 const TenantEmailConfig = mongoose.models.TenantEmailConfig || mongoose.model("TenantEmailConfig", tenantEmailConfigSchema)
+
+/**
+ * Migration helper to ensure hardened compound unique index is created safely.
+ * Drops legacy single-field unique index tenantId_1 to enable workspace-level overrides.
+ */
+async function ensureUniqueIndexes() {
+  try {
+    if (TenantEmailConfig.collection && TenantEmailConfig.db.readyState === 1) {
+      const indexes = await TenantEmailConfig.collection.indexes()
+      for (const idx of indexes) {
+        if (idx.name === "tenantId_1" && idx.unique) {
+          await TenantEmailConfig.collection.dropIndex("tenantId_1").catch(() => {})
+        }
+      }
+      await TenantEmailConfig.collection.createIndex(
+        { tenantId: 1, workspaceId: 1 },
+        { unique: true }
+      )
+    }
+  } catch (err) {
+    // Non-fatal
+  }
+}
+
+TenantEmailConfig.ensureUniqueIndexes = ensureUniqueIndexes
+
+if (mongoose.connection && mongoose.connection.readyState === 1) {
+  ensureUniqueIndexes()
+} else if (mongoose.connection) {
+  mongoose.connection.once("open", () => {
+    ensureUniqueIndexes()
+  })
+}
 
 module.exports = TenantEmailConfig

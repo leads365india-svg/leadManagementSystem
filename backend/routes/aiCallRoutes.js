@@ -8,6 +8,8 @@ const {
   listAnalyzedCalls,
   getDashboardMetrics,
   getUsageMetrics,
+  getLinkedFollowUps,
+  deleteCallAnalysis,
 } = require("../controllers/aiCallController")
 const { authenticate, requireAccountAdmin } = require("../middleware/authMiddleware")
 
@@ -25,6 +27,8 @@ router.post("/:callId/analyze", authenticate, triggerCallAnalysis)
 router.get("/:callId/status", authenticate, getCallStatus)
 router.get("/:callId/transcript", authenticate, getCallTranscript)
 router.get("/:callId/analysis", authenticate, getCallAnalysis)
+router.get("/:callId/analysis/linked-followups", authenticate, getLinkedFollowUps)
+router.delete("/:callId/analysis", authenticate, deleteCallAnalysis)
 router.post("/:callId/reprocess", authenticate, requireAccountAdmin, reprocessCall)
 
 module.exports = router

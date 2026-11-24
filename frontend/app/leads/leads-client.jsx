@@ -1445,20 +1445,20 @@ export default function LeadsClient() {
         initialLead={activeLeadDetails}
         onClose={() => setActiveLeadDetails(null)}
         onLeadUpdated={(updatedLead) => {
-          if (!updatedLead || typeof updatedLead !== "object" || (!updatedLead._id && !updatedLead.id)) {
+          if (!updatedLead || typeof updatedLead !== "object" || (!updatedLead?._id && !updatedLead?.id)) {
             fetchLeads()
             fetchLeadStats()
             return
           }
           setActiveLeadDetails((prev) => (prev ? { ...prev, ...updatedLead } : updatedLead))
           setLeadsData((prev) => {
-            if (!prev?.leads) return prev
-            const targetId = updatedLead._id || updatedLead.id
+            if (!prev?.leads || !Array.isArray(prev.leads)) return prev
+            const targetId = updatedLead?._id || updatedLead?.id
             if (!targetId) return prev
             return {
               ...prev,
               leads: prev.leads.map((l) => {
-                const currentId = l._id || l.id
+                const currentId = l?._id || l?.id
                 return currentId === targetId ? { ...l, ...updatedLead } : l
               }),
             }

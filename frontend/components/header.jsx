@@ -336,6 +336,14 @@ const NAV_CATEGORIES = [
         icon: Mail,
         permission: "settings.manage",
       },
+      {
+        id: "settings-workspaces",
+        label: "Workspaces",
+        href: "/settings/workspaces",
+        description: "Manage projects, sub-accounts, staff memberships & routing",
+        icon: Building2,
+        permission: "roles.manage",
+      },
     ],
   },
 ]
@@ -356,24 +364,45 @@ export default function Header() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [mounted, setMounted] = useState(false)
+  const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false)
+  const workspaceDropdownRef = useRef(null)
 
   useEffect(() => {
     setMounted(true)
   }, [])
-  const { user: authUser, logout, setActiveTenant, checkAuth, hasPermission } = useAuth()
+  const {
+    user: authUser,
+    logout,
+    setActiveTenant,
+    checkAuth,
+    hasPermission,
+    workspaces,
+    activeWorkspace,
+    isMultiWorkspaceEnabled,
+    setActiveWorkspace,
+  } = useAuth()
   const { branding, isWhiteLabel } = useBranding()
   const [logoError, setLogoError] = useState(false)
   const user = authUser
 
-  // Load and poll pending AI callbacks and reminders for notification bell
+  // Load and poll pending AI callbacks and reminders for notification bell (standard tenant CRM routes only)
   useEffect(() => {
     let isMounted = true
+    const isExcludedPage =
+      !pathname ||
+      pathname === "/" ||
+      pathname.startsWith("/super-admin") ||
+      pathname.startsWith("/portal/login") ||
+      pathname === "/login"
+
+    if (isExcludedPage) {
+      return
+    }
+
     const loadCallbacks = async () => {
       try {
         if (!user) return
-        if (user.role === "super_admin" && !user.tenantId && typeof window !== "undefined" && !localStorage.getItem("leadflow_active_tenant")) {
-          return
-        }
+        if (user.role === "super_admin") return
         const [statsRes, listRes] = await Promise.all([
           apiClient.getFollowUpStats().catch(() => null),
           apiClient.getFollowUps({ status: "pending", limit: 5, sortBy: "scheduledAt", sortOrder: "asc" }).catch(() => null),
@@ -391,13 +420,14 @@ export default function Header() {
         }
       } catch (_) {}
     }
+
     loadCallbacks()
     const timer = setInterval(loadCallbacks, 60000)
     return () => {
       isMounted = false
       clearInterval(timer)
     }
-  }, [user])
+  }, [user?.id, pathname])
 
   // Filter NAV_CATEGORIES dynamically based on user role and granular permissions
   const filteredNavCategories = useMemo(() => {
@@ -471,6 +501,7 @@ export default function Header() {
     setActiveDropdown(null)
     setMobileMenuOpen(false)
     setUserDropdownOpen(false)
+    setWorkspaceDropdownOpen(false)
   }, [pathname])
 
   // Close menus on outside click, handle Escape and keyboard shortcut (Ctrl/Cmd + K)
@@ -482,6 +513,9 @@ export default function Header() {
         setActiveDropdown(null)
         setUserDropdownOpen(false)
       }
+      if (workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(event.target)) {
+        setWorkspaceDropdownOpen(false)
+      }
     }
 
     const handleKeyDown = (e) => {
@@ -489,6 +523,7 @@ export default function Header() {
         setActiveDropdown(null)
         setUserDropdownOpen(false)
         setMobileMenuOpen(false)
+        setWorkspaceDropdownOpen(false)
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault()
@@ -702,6 +737,112 @@ export default function Header() {
                 </span>
               </div>
             </Link>
+
+            {/* Multi-Workspace Switcher — Only rendered when organization has multi-workspace mode enabled */}
+            {isMultiWorkspaceEnabled && workspaces && workspaces.length > 0 && (
+              <div className="relative shrink-0" ref={workspaceDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceDropdownOpen((prev) => !prev)}
+                  className="flex items-center space-x-2 px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-100/90 hover:bg-slate-200/90 text-slate-800 border border-slate-200/80 transition-all shadow-2xs group cursor-pointer"
+                  title="Switch active project/workspace"
+                >
+                  <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                  <span className="truncate max-w-[120px] sm:max-w-[150px]">
+                    {activeWorkspace === "all"
+                      ? "All Projects"
+                      : (workspaces.find((w) => w._id?.toString() === activeWorkspace)?.name || "Select Workspace")}
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-transform" />
+                </button>
+
+                {workspaceDropdownOpen && (
+                  <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-3 py-1.5 border-b border-slate-100">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Project / Workspace</p>
+                    </div>
+
+                    {/* All Projects option for Org Admins */}
+                    {(user?.role === "account_admin" || user?.role === "super_admin") && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveWorkspace("all")
+                          setWorkspaceDropdownOpen(false)
+                          if (typeof window !== "undefined") {
+                            window.dispatchEvent(new CustomEvent("leadflow_workspace_changed", { detail: { workspaceId: "all" } }))
+                          }
+                          router.refresh()
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
+                          activeWorkspace === "all" ? "bg-indigo-50/80 text-indigo-700 font-semibold" : "text-slate-700"
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <Layers className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">All Projects</p>
+                            <p className="text-[10px] text-slate-400">Consolidated Master View</p>
+                          </div>
+                        </div>
+                        {activeWorkspace === "all" && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                      </button>
+                    )}
+
+                    <div className="max-h-56 overflow-y-auto py-1">
+                      {workspaces.map((ws) => {
+                        const isSelected = activeWorkspace === ws._id?.toString()
+                        return (
+                          <button
+                            key={ws._id}
+                            type="button"
+                            onClick={() => {
+                              const wsId = ws._id?.toString()
+                              setActiveWorkspace(wsId)
+                              setWorkspaceDropdownOpen(false)
+                              if (typeof window !== "undefined") {
+                                window.dispatchEvent(new CustomEvent("leadflow_workspace_changed", { detail: { workspaceId: wsId } }))
+                              }
+                              router.refresh()
+                            }}
+                            className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
+                              isSelected ? "bg-indigo-50/80 text-indigo-700 font-semibold" : "text-slate-700"
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2 min-w-0">
+                              <div
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: ws.branding?.primaryColor || "#4f46e5" }}
+                              />
+                              <div className="min-w-0">
+                                <p className="truncate font-medium">{ws.name}</p>
+                                <p className="text-[10px] text-slate-400 truncate">
+                                  {ws.slug} {ws.userRole ? `• ${ws.userRole}` : ""}
+                                </p>
+                              </div>
+                            </div>
+                            {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {(user?.role === "account_admin" || user?.role === "super_admin") && (
+                      <div className="border-t border-slate-100 pt-1 mt-1 px-1">
+                        <Link
+                          href="/settings/workspaces"
+                          onClick={() => setWorkspaceDropdownOpen(false)}
+                          className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50/60 rounded-lg font-medium transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Manage Workspaces</span>
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Spacious Search Bar — Positioned to the left, generous responsive width */}
             <form

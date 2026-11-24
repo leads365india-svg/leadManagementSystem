@@ -375,6 +375,7 @@ function generateUniversalFormSdkScript() {
       var phone = '';
       var company = '';
       var message = '';
+      var serviceCode = '';
 
       var customFields = [];
       var orderCounter = 1;
@@ -420,6 +421,10 @@ function generateUniversalFormSdkScript() {
           message = String(val).trim();
           continue;
         }
+        if ((cleanKey === 'service_code' || cleanKey === 'servicecode' || cleanKey === 'service' || cleanKey === 'selected_service') && !serviceCode) {
+          serviceCode = String(val).trim();
+          continue;
+        }
 
         // Generic structured custom field
         customFields.push({
@@ -446,6 +451,7 @@ function generateUniversalFormSdkScript() {
         phone: phone,
         company: company,
         message: message,
+        service_code: serviceCode || undefined,
         customFields: customFields,
         formId: formId,
         landingPage: window.location.href,
@@ -639,8 +645,71 @@ function generateUniversalFormSdkScript() {
       });
     }
 
+    // 10. Dynamic Service Dropdown Population
+    function populateServiceDropdowns() {
+      try {
+        var serviceSelects = document.querySelectorAll(
+          'select[data-leads365-service-select], select[name="service_code"], select[name="serviceCode"], select[data-service-select]'
+        );
+        if (!serviceSelects || serviceSelects.length === 0) return;
+
+        var activeKey = siteKey;
+        if (!activeKey) {
+          var anyKeyEl = document.querySelector('[data-site-key], [data-leads365-site-key]');
+          if (anyKeyEl) {
+            activeKey = anyKeyEl.getAttribute('data-site-key') || anyKeyEl.getAttribute('data-leads365-site-key');
+          }
+        }
+        if (!activeKey) return;
+
+        var servicesUrl = scriptOrigin
+          ? (scriptOrigin + '/api/workspaces/public/services?siteKey=' + encodeURIComponent(activeKey))
+          : ('/api/workspaces/public/services?siteKey=' + encodeURIComponent(activeKey));
+
+        fetch(servicesUrl)
+          .then(function(res) { return res.json(); })
+          .then(function(result) {
+            if (!result || !result.success || !Array.isArray(result.data) || result.data.length === 0) return;
+            var services = result.data;
+            for (var s = 0; s < serviceSelects.length; s++) {
+              var sel = serviceSelects[s];
+              if (sel.getAttribute('data-leads365-populated') === 'true') continue;
+
+              var hasOptions = false;
+              for (var o = 0; o < sel.options.length; o++) {
+                if (sel.options[o].value && sel.options[o].value !== '') {
+                  hasOptions = true;
+                  break;
+                }
+              }
+
+              if (!hasOptions || sel.hasAttribute('data-leads365-service-select')) {
+                if (sel.options.length === 0) {
+                  var defOpt = document.createElement('option');
+                  defOpt.value = '';
+                  defOpt.textContent = sel.getAttribute('data-placeholder') || 'Select a Service';
+                  sel.appendChild(defOpt);
+                }
+                for (var i = 0; i < services.length; i++) {
+                  var svc = services[i];
+                  var opt = document.createElement('option');
+                  opt.value = svc.code || svc.routingCode;
+                  opt.textContent = svc.name;
+                  sel.appendChild(opt);
+                }
+                sel.setAttribute('data-leads365-populated', 'true');
+              }
+            }
+          })
+          .catch(function(err) {
+            log('Service dropdown discovery skipped:', err.message);
+          });
+      } catch (e) {}
+    }
+
     function initListeners() {
       document.addEventListener('submit', handleFormSubmit, true);
+      populateServiceDropdowns();
       log('Universal Form SDK initialized and listening exclusively for explicitly configured forms.');
     }
 
@@ -693,6 +762,8 @@ function generateUniversalFormSdkScript() {
       var extracted = extractFormData(form);
       return buildLeadPayload(extracted, form);
     };
+
+    window.Leads365.populateServices = populateServiceDropdowns;
 
   } catch (err) {
     if (window.console && window.console.warn) {

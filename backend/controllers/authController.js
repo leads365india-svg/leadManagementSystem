@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const { getJwtSecret } = require("../middleware/authMiddleware")
-const { getAccountByCustomDomainCached } = require("../utils/customDomainCache")
+const { getAccountByCustomDomainCached, isPlatformDomain, sanitizeHostname } = require("../utils/customDomainCache")
 const audit = require("../services/auditService")
 
 const JWT_EXPIRES_IN = "24h"
@@ -207,36 +207,14 @@ const login = async (req, res) => {
       req.headers.origin ||
       ""
 
-    const normalizeDomain = (val) => {
-      if (!val || typeof val !== "string") return ""
-      return val
-        .trim()
-        .replace(/^https?:\/\//i, "")
-        .split("/")[0]
-        .split(":")[0]
-        .toLowerCase()
-    }
+    const cleanReqDomain = sanitizeHostname(rawDomain)
 
-    const cleanReqDomain = normalizeDomain(rawDomain)
-
-    if (
-      cleanReqDomain &&
-      cleanReqDomain !== "localhost" &&
-      cleanReqDomain !== "127.0.0.1" &&
-      cleanReqDomain !== "::1" &&
-      !cleanReqDomain.endsWith(".localhost") &&
-      !cleanReqDomain.endsWith(".vercel.app") &&
-      cleanReqDomain !== "admin.leads365.in" &&
-      cleanReqDomain !== "leads365.in"
-    ) {
-      const domainAccount = await Account.findOne({
-        customDomain: cleanReqDomain,
-        status: { $ne: "suspended" },
-      }).lean()
+    if (cleanReqDomain && !isPlatformDomain(cleanReqDomain)) {
+      const domainAccount = await getAccountByCustomDomainCached(cleanReqDomain)
 
       if (domainAccount) {
         // Enforce: User MUST belong to this domain's tenant
-        // Super admins or users from different tenants are strictly rejected
+        // Super admins or users from different tenants are strictly rejected on dedicated white-label domains
         if (user.role === "super_admin") {
           return res.status(403).json({
             success: false,
@@ -255,6 +233,26 @@ const login = async (req, res) => {
             success: false,
             error: "Access denied: This account does not belong to this portal domain.",
           })
+        }
+
+        // If domain is dedicated to a child workspace, verify user has active membership
+        if (domainAccount.boundWorkspace && user.role !== "account_admin") {
+          const WorkspaceMembership = require("../models/WorkspaceMembership")
+          const isMember = await WorkspaceMembership.findOne({
+            tenantId: userTenant,
+            workspaceId: domainAccount.boundWorkspace._id,
+            userId: user._id,
+            status: "active",
+          })
+            .setOptions({ skipTenantFilter: true })
+            .lean()
+
+          if (!isMember) {
+            return res.status(403).json({
+              success: false,
+              error: `Cross-workspace access denied: Your session does not belong to workspace '${domainAccount.boundWorkspace.name}'.`,
+            })
+          }
         }
       }
     }
@@ -532,7 +530,7 @@ const getTenantInfo = async (req, res) => {
 
     // Clean term to match customDomain or slug (strip protocol, path, port)
     const cleanDomain = rawTerm.replace(/^https?:\/\//i, "").split("/")[0].split(":")[0].toLowerCase()
-    const account = await Account.findOne({
+    let account = await Account.findOne({
       $or: [
         { accountId: rawTerm },
         { slug: cleanDomain },
@@ -541,9 +539,34 @@ const getTenantInfo = async (req, res) => {
     }).lean()
 
     if (!account) {
+      account = await getAccountByCustomDomainCached(cleanDomain)
+    }
+
+    if (!account) {
       return res.status(404).json({
         success: false,
         error: "No active Leads Account found with this identifier or domain",
+      })
+    }
+
+    if (account.boundWorkspace) {
+      const ws = account.boundWorkspace
+      return res.status(200).json({
+        success: true,
+        data: {
+          accountId: account.accountId,
+          companyName: ws.branding?.displayName || ws.name,
+          displayName: ws.branding?.displayName || ws.name,
+          status: ws.status || "active",
+          slug: ws.slug || "",
+          customDomain: cleanDomain,
+          logoUrl: ws.branding?.logoUrl || account.logoUrl || "",
+          primaryColor: ws.branding?.primaryColor || account.primaryColor || "#4f46e5",
+          pageTitle: ws.branding?.displayName || ws.name,
+          workspaceId: ws._id,
+          workspaceSlug: ws.slug,
+          isWorkspaceDomain: true,
+        },
       })
     }
 
@@ -629,6 +652,27 @@ const getBranding = async (req, res) => {
         data: {
           isWhiteLabel: false,
           unconfiguredDomain: true,
+        },
+      })
+    }
+
+    if (account.boundWorkspace) {
+      const ws = account.boundWorkspace
+      return res.status(200).json({
+        success: true,
+        data: {
+          isWhiteLabel: true,
+          isWorkspaceDomain: true,
+          workspaceId: ws._id,
+          workspaceSlug: ws.slug,
+          workspaceName: ws.name,
+          tenantId: account.accountId,
+          accountId: account.accountId,
+          companyName: ws.branding?.displayName || ws.name,
+          displayName: ws.branding?.displayName || ws.name,
+          browserPageTitle: ws.branding?.displayName || ws.name,
+          logoUrl: ws.branding?.logoUrl || account.logoUrl || "",
+          brandPrimaryColor: ws.branding?.primaryColor || account.primaryColor || "#4f46e5",
         },
       })
     }

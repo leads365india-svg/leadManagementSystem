@@ -9,98 +9,150 @@ const normalizeApiBase = (url) => {
 export const API_BASE_URL = normalizeApiBase(process.env.NEXT_PUBLIC_API_URL)
 
 class ApiClient {
+  constructor() {
+    this.inFlightRequests = new Map()
+  }
+
   async request(endpoint, options = {}) {
     const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`
     const finalEndpoint = cleanEndpoint.startsWith("/api/") ? cleanEndpoint.slice(4) : cleanEndpoint
     const url = `${API_BASE_URL}${finalEndpoint}`
+    const method = (options.method || "GET").toUpperCase()
 
-    // Include credentials so HTTP-only session cookies are sent across origins
-    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData
-    const headers = {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
-      ...options.headers,
+    // Deduplicate simultaneous in-flight GET requests
+    const isGet = method === "GET"
+    const reqKey = isGet
+      ? `${url}:${options.headers?.["x-tenant-id"] || ""}:${options.headers?.["x-workspace-id"] || ""}`
+      : null
+
+    if (isGet && this.inFlightRequests.has(reqKey)) {
+      return this.inFlightRequests.get(reqKey)
     }
 
-    // Attach Authorization Bearer token as a reliable cross-origin fallback
-    if (!headers.Authorization && !headers.authorization && typeof window !== "undefined") {
-      try {
-        const storedToken = localStorage.getItem("leadflow_token")
-        if (storedToken) {
-          headers["Authorization"] = `Bearer ${storedToken}`
-        }
-      } catch (_) {}
-    }
-
-    // Attach active tenant ID header on administrative / non-white-label platforms only
-    if (!headers["x-tenant-id"] && !headers["X-Tenant-Id"] && typeof window !== "undefined") {
-      try {
-        const currentHost = window.location?.hostname || ""
-        // On white-label domains, the hostname is the authoritative tenant boundary; do not leak stale localStorage active tenant
-        if (!isWhiteLabelDomain(currentHost)) {
-          const activeTenant = localStorage.getItem("leadflow_active_tenant")
-          if (activeTenant && activeTenant.trim()) {
-            headers["x-tenant-id"] = activeTenant.trim()
-          }
-        }
-      } catch (_) {}
-    }
-
-    // Attach current portal domain header for white-label tenant boundary verification
-    if (!headers["x-tenant-domain"] && typeof window !== "undefined" && window.location?.hostname) {
-      headers["x-tenant-domain"] = window.location.hostname
-    }
-
-    // Attach portal identifier header to prevent Safari Referer truncation from misidentifying Super Admin routes
-    if (!headers["x-auth-portal"] && typeof window !== "undefined" && window.location?.pathname?.startsWith("/super-admin")) {
-      headers["x-auth-portal"] = "super_admin"
-    }
-
-    const config = {
-      method: options.method || "GET",
-      credentials: "include",
-      headers,
-      ...options,
-    }
-
-    try {
-      const response = await fetch(url, config)
-      const data = await response.json().catch(() => ({}))
-
-      if (!response.ok) {
-        if ((response.status === 401 || data?.code === "CROSS_TENANT_SESSION_MISMATCH") && typeof window !== "undefined") {
-          try {
-            localStorage.removeItem("token")
-            localStorage.removeItem("leadflow_token")
-          } catch (_) {}
-          const isAuthEndpoint =
-            endpoint === "/auth/me" ||
-            endpoint === "/auth/login" ||
-            endpoint.startsWith("/auth/tenant-info")
-          const isLoginPage = window.location.pathname.includes("/login")
-          if (!isAuthEndpoint && !isLoginPage) {
-            const redirectUrl = window.location.pathname.startsWith("/super-admin")
-              ? "/super-admin/login?session=expired"
-              : data?.code === "CROSS_TENANT_SESSION_MISMATCH"
-              ? "/portal/login?session=mismatch"
-              : "/portal/login?session=expired"
-            window.location.href = redirectUrl
-          }
-        }
-        throw new Error(data.error || `HTTP ${response.status}`)
+    const execRequest = async () => {
+      // Include credentials so HTTP-only session cookies are sent across origins
+      const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData
+      const headers = {
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        ...options.headers,
       }
 
-      return data
-    } catch (error) {
-      if (error instanceof Error) {
-        // Safe, clear error reporting for browser network disconnections
-        if (error.name === "TypeError" && error.message.toLowerCase().includes("fetch")) {
-          throw new Error("Unable to connect to the backend server. Please verify your internet connection or check backend service availability.")
+      // Attach Authorization Bearer token as a reliable cross-origin fallback
+      if (!headers.Authorization && !headers.authorization && typeof window !== "undefined") {
+        try {
+          const storedToken = localStorage.getItem("leadflow_token")
+          if (storedToken) {
+            headers["Authorization"] = `Bearer ${storedToken}`
+          }
+        } catch (_) {}
+      }
+
+      // Attach active tenant ID header on administrative / non-white-label platforms only
+      if (!headers["x-tenant-id"] && !headers["X-Tenant-Id"] && typeof window !== "undefined") {
+        try {
+          const currentHost = window.location?.hostname || ""
+          // On white-label domains, the hostname is the authoritative tenant boundary; do not leak stale localStorage active tenant
+          if (!isWhiteLabelDomain(currentHost)) {
+            const activeTenant = localStorage.getItem("leadflow_active_tenant")
+            if (activeTenant && activeTenant.trim()) {
+              headers["x-tenant-id"] = activeTenant.trim()
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Attach current portal domain header for white-label tenant boundary verification
+      if (!headers["x-tenant-domain"] && typeof window !== "undefined" && window.location?.hostname) {
+        headers["x-tenant-domain"] = window.location.hostname
+      }
+
+      // Attach portal identifier header to prevent Safari Referer truncation from misidentifying Super Admin routes
+      if (!headers["x-auth-portal"] && typeof window !== "undefined" && window.location?.pathname?.startsWith("/super-admin")) {
+        headers["x-auth-portal"] = "super_admin"
+      }
+
+      // Attach active workspace header if multi-workspace is active in localStorage
+      if (!headers["x-workspace-id"] && !headers["X-Workspace-Id"] && typeof window !== "undefined") {
+        try {
+          const activeWs = localStorage.getItem("leadflow_active_workspace")
+          if (activeWs && activeWs.trim()) {
+            headers["x-workspace-id"] = activeWs.trim()
+          }
+        } catch (_) {}
+      }
+
+      const config = {
+        method,
+        credentials: "include",
+        headers,
+        ...options,
+      }
+
+      try {
+        const response = await fetch(url, config)
+        const data = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            console.warn(`[RateLimit 429] Request to ${endpoint} throttled:`, data?.error)
+            return {
+              success: false,
+              status: 429,
+              isRateLimit: true,
+              error: data?.error || "Too many dashboard requests. Please slow down and try again shortly.",
+              retryAfter: response.headers?.get ? response.headers.get("retry-after") : null,
+            }
+          }
+
+          if ((response.status === 401 || data?.code === "CROSS_TENANT_SESSION_MISMATCH") && typeof window !== "undefined") {
+            const isAuthEndpoint =
+              endpoint === "/auth/me" ||
+              endpoint === "/auth/login" ||
+              endpoint.startsWith("/auth/tenant-info")
+            const isLoginPage = window.location.pathname.includes("/login")
+            // Only redirect and clear tokens on core auth endpoint failures or cross-tenant mismatches,
+            // NOT on arbitrary secondary background API 401s (e.g. unassigned workspace features).
+            if (isAuthEndpoint || data?.code === "CROSS_TENANT_SESSION_MISMATCH") {
+              try {
+                localStorage.removeItem("token")
+                localStorage.removeItem("leadflow_token")
+              } catch (_) {}
+              if (!isLoginPage) {
+                const redirectUrl = window.location.pathname.startsWith("/super-admin")
+                  ? "/super-admin/login?session=expired"
+                  : data?.code === "CROSS_TENANT_SESSION_MISMATCH"
+                  ? "/portal/login?session=mismatch"
+                  : "/portal/login?session=expired"
+                window.location.href = redirectUrl
+              }
+            }
+          }
+          throw new Error(data.error || `HTTP ${response.status}`)
         }
-        throw new Error(error.message)
-      } else {
-        throw new Error("API request failed with an unexpected error")
+
+        return data
+      } catch (error) {
+        if (error instanceof Error) {
+          // Safe, clear error reporting for browser network disconnections
+          if (error.name === "TypeError" && error.message.toLowerCase().includes("fetch")) {
+            throw new Error("Unable to connect to the backend server. Please verify your internet connection or check backend service availability.")
+          }
+          throw error
+        } else {
+          throw new Error("API request failed with an unexpected error")
+        }
       }
     }
+
+    const requestPromise = execRequest()
+    if (isGet) {
+      this.inFlightRequests.set(reqKey, requestPromise)
+      requestPromise.finally(() => {
+        this.inFlightRequests.delete(reqKey)
+      })
+    }
+
+    return requestPromise
   }
 
   // --- Lead Endpoints ---
@@ -1282,6 +1334,17 @@ class ApiClient {
     return this.request(`/ai-calls/${callId}/analysis`)
   }
 
+  async getAICallLinkedFollowUps(callId) {
+    return this.request(`/ai-calls/${callId}/analysis/linked-followups`)
+  }
+
+  async deleteAICallAnalysis(callId, payload = {}) {
+    return this.request(`/ai-calls/${callId}/analysis`, {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    })
+  }
+
   async triggerAICallAnalysis(callId, payload = {}) {
     return this.request(`/ai-calls/${callId}/analyze`, {
       method: "POST",
@@ -1542,6 +1605,99 @@ class ApiClient {
     })
     const qs = searchParams.toString()
     return this.request(`/deal-analytics${qs ? `?${qs}` : ""}`)
+  }
+
+  // --- Multi-Workspace & Project Administration Endpoints (Wave 1-3) ---
+  async getWorkspaces() {
+    return this.request("/workspaces")
+  }
+
+  async createWorkspace(data) {
+    return this.request("/workspaces", {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getWorkspace(workspaceId) {
+    return this.request(`/workspaces/${workspaceId}`)
+  }
+
+  async updateWorkspace(workspaceId, data) {
+    return this.request(`/workspaces/${workspaceId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async archiveWorkspace(workspaceId) {
+    return this.request(`/workspaces/${workspaceId}`, {
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceMembers(workspaceId) {
+    return this.request(`/workspaces/${workspaceId}/members`)
+  }
+
+  async addWorkspaceMember(workspaceId, data) {
+    return this.request(`/workspaces/${workspaceId}/members`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async removeWorkspaceMember(workspaceId, userId) {
+    return this.request(`/workspaces/${workspaceId}/members/${userId}`, {
+      method: "DELETE",
+    })
+  }
+
+  async toggleWorkspaceMode(enabled) {
+    return this.request("/workspaces/mode/toggle", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    })
+  }
+
+  async getMasterDashboard() {
+    return this.request("/workspaces/dashboard/master")
+  }
+
+  async getUnassignedQueue() {
+    return this.request("/workspaces/unassigned/queue")
+  }
+
+  async assignUnassignedItem(data) {
+    return this.request("/workspaces/unassigned/assign", {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  // --- Workspace Custom Domains (Wave 4) ---
+  async getWorkspaceDomain(workspaceId) {
+    return this.request(`/workspaces/${workspaceId}/domain`)
+  }
+
+  async setWorkspaceDomain(workspaceId, data) {
+    return this.request(`/workspaces/${workspaceId}/domain`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async verifyWorkspaceDomain(workspaceId, data = {}) {
+    return this.request(`/workspaces/${workspaceId}/domain/verify`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  async removeWorkspaceDomain(workspaceId) {
+    return this.request(`/workspaces/${workspaceId}/domain`, {
+      method: "DELETE",
+    })
   }
 
 }

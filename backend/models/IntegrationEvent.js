@@ -70,6 +70,12 @@ const integrationEventSchema = new mongoose.Schema(
       index: true,
       default: null,
     },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     integrationType: {
       type: String,
       default: "website",
