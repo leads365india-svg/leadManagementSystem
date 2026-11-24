@@ -16,15 +16,17 @@ const audit = require("../services/auditService")
 function canManageAiReports(user) {
   if (!user) return false
   if (user.role === "super_admin" || user.role === "superadmin" || user.isSuperAdmin) return true
-  if (user.role === "account_admin" || user.role === "admin") return true
+  if (user.role === "account_admin" || user.role === "admin" || user.role === "workspace_admin") return true
   const permissions = Array.isArray(user.permissions) ? user.permissions : []
   return permissions.some((p) =>
     p === "*" ||
     p === "calls.*" ||
     p === "calls.delete" ||
     p === "calls.manage" ||
+    p === "calls.edit" ||
     p === "ai.*" ||
-    p === "ai.manage"
+    p === "ai.manage" ||
+    p === "ai.delete"
   )
 }
 
@@ -729,31 +731,80 @@ async function deleteCallAnalysis(req, res) {
       })
     }
 
-    const { callId } = req.params
-    if (!mongoose.Types.ObjectId.isValid(callId)) {
-      return res.status(400).json({ success: false, message: "Invalid callId format" })
+    const targetId =
+      req.params.callId ||
+      req.params.reportId ||
+      req.params.analysisId ||
+      req.params.id ||
+      req.body?.reportId ||
+      req.body?.analysisId ||
+      req.body?.callId
+    if (!targetId || !mongoose.Types.ObjectId.isValid(targetId)) {
+      return res.status(400).json({ success: false, message: "Invalid callId or reportId format" })
     }
 
-    // Tenant-isolated call lookup
-    const call = await Call.findOne({ _id: callId, tenantId }).setOptions({ skipTenantFilter: true })
-    if (!call) {
-      return res.status(404).json({ success: false, message: "Call record not found" })
-    }
+    // Tenant-isolated lookup: try finding Call first, or find AICallAnalysis directly
+    let call = await Call.findOne({ _id: targetId, tenantId }).setOptions({ skipTenantFilter: true })
+    let analysis = null
 
-    // Locate the active (non-deleted) AI analysis for this call
-    const analysis = await AICallAnalysis.findOne({
-      tenantId,
-      callId: call._id,
-      deletedAt: null,
-    })
-      .sort({ analysisVersion: -1 })
-      .setOptions({ skipTenantFilter: true })
+    if (call) {
+      // If a specific reportId/analysisId was also sent in body or query, verify it matches
+      const specificReportId =
+        req.body?.reportId || req.body?.analysisId || req.query?.reportId || req.query?.analysisId
+      if (specificReportId && mongoose.Types.ObjectId.isValid(specificReportId)) {
+        analysis = await AICallAnalysis.findOne({
+          _id: specificReportId,
+          tenantId,
+          callId: call._id,
+          deletedAt: null,
+        }).setOptions({ skipTenantFilter: true })
+      }
+      if (!analysis) {
+        analysis = await AICallAnalysis.findOne({
+          tenantId,
+          callId: call._id,
+          deletedAt: null,
+        })
+          .sort({ analysisVersion: -1 })
+          .setOptions({ skipTenantFilter: true })
+      }
+    } else {
+      // targetId was not a Call ID; check if it is an AICallAnalysis ID directly
+      analysis = await AICallAnalysis.findOne({
+        _id: targetId,
+        tenantId,
+        deletedAt: null,
+      }).setOptions({ skipTenantFilter: true })
+
+      if (analysis && analysis.callId) {
+        call = await Call.findOne({ _id: analysis.callId, tenantId }).setOptions({ skipTenantFilter: true })
+      }
+    }
 
     if (!analysis) {
       return res.status(404).json({
         success: false,
         message: "Active AI Call Intelligence report not found for this call.",
       })
+    }
+
+    // Verify workspaceId authorization if workspace-scoped
+    const targetWorkspaceId = analysis.workspaceId || (call && call.workspaceId)
+    if (targetWorkspaceId && req.user?.role !== "account_admin" && req.user?.role !== "super_admin") {
+      const WorkspaceMembership = require("../models/WorkspaceMembership")
+      const membership = await WorkspaceMembership.findOne({
+        tenantId,
+        workspaceId: targetWorkspaceId,
+        userId: req.user?._id || req.user?.id,
+        status: "active",
+      }).setOptions({ skipTenantFilter: true }).lean()
+
+      if (!membership) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: You do not have active membership in this workspace.",
+        })
+      }
     }
 
     // 1. Soft delete the AI Call Analysis document
@@ -765,7 +816,10 @@ async function deleteCallAnalysis(req, res) {
     await analysis.save()
 
     // 2. Query linked follow-up tasks to report preservation stats
-    const orConditions = [{ sourceCallId: call._id.toString() }]
+    const orConditions = []
+    if (call && call._id) {
+      orConditions.push({ sourceCallId: call._id.toString() })
+    }
     if (analysis._id) {
       orConditions.push({ aiAnalysisId: analysis._id })
       orConditions.push({ "metadata.aiAnalysisId": analysis._id })
@@ -774,38 +828,43 @@ async function deleteCallAnalysis(req, res) {
       orConditions.push({ _id: analysis.scheduledFollowUpId })
     }
 
-    const linkedFollowUps = await FollowUp.find({
-      tenantId,
-      $or: orConditions,
-      deletedAt: null,
-    }).setOptions({ skipTenantFilter: true })
+    let linkedFollowUps = []
+    if (orConditions.length > 0) {
+      linkedFollowUps = await FollowUp.find({
+        tenantId,
+        $or: orConditions,
+        deletedAt: null,
+      }).setOptions({ skipTenantFilter: true })
+    }
 
     // PRESERVATION GUARANTEE: Never delete or modify follow-up tasks!
     // All linked follow-up documents (both manual and AI-scheduled) are left completely untouched and active.
 
     // 3. Clear denormalized AI fields on Call document (preserving recording and transcript)
-    call.metadata = call.metadata || {}
-    call.metadata.aiAnalysisStatus = "NOT_ANALYZED"
-    call.metadata.aiAnalysisId = null
-    call.metadata.aiCallOutcome = null
-    call.metadata.aiSentiment = null
-    call.metadata.aiProductRelevanceScore = null
-    call.metadata.aiProductFit = null
-    call.metadata.aiCustomerRequestedProduct = null
-    call.metadata.aiLeadQualificationScore = null
-    call.metadata.aiQualificationStatus = null
-    call.metadata.aiQualificationReason = null
-    call.metadata.aiCallbackRequested = null
-    call.metadata.aiRequestedCallbackDateTime = null
-    call.metadata.aiCallbackDirection = null
-    call.metadata.aiDirection = null
-    call.metadata.aiTaskAction = null
-    call.metadata.aiAnalyzedAt = null
-    call.markModified("metadata")
-    await call.save().catch((err) => console.warn("Failed saving call metadata on AI report delete:", err))
+    if (call) {
+      call.metadata = call.metadata || {}
+      call.metadata.aiAnalysisStatus = "NOT_ANALYZED"
+      call.metadata.aiAnalysisId = null
+      call.metadata.aiCallOutcome = null
+      call.metadata.aiSentiment = null
+      call.metadata.aiProductRelevanceScore = null
+      call.metadata.aiProductFit = null
+      call.metadata.aiCustomerRequestedProduct = null
+      call.metadata.aiLeadQualificationScore = null
+      call.metadata.aiQualificationStatus = null
+      call.metadata.aiQualificationReason = null
+      call.metadata.aiCallbackRequested = null
+      call.metadata.aiRequestedCallbackDateTime = null
+      call.metadata.aiCallbackDirection = null
+      call.metadata.aiDirection = null
+      call.metadata.aiTaskAction = null
+      call.metadata.aiAnalyzedAt = null
+      call.markModified("metadata")
+      await call.save().catch((err) => console.warn("Failed saving call metadata on AI report delete:", err))
+    }
 
     // 4. Clean denormalized AI analysis fields on Lead if linked
-    const leadId = call.leadId?._id || call.leadId
+    const leadId = call?.leadId?._id || call?.leadId
     if (leadId) {
       try {
         const lead = await Lead.findById(leadId).setOptions({ skipTenantFilter: true })
@@ -839,9 +898,9 @@ async function deleteCallAnalysis(req, res) {
         category: "ai_call_intelligence",
         entity: "AICallAnalysis",
         entityId: analysis._id,
-        summary: `Soft-deleted AI Call Intelligence report v${analysis.analysisVersion} for call ${call._id}`,
+        summary: `Soft-deleted AI Call Intelligence report v${analysis.analysisVersion} for call ${call ? call._id : analysis.callId}`,
         details: {
-          callId: call._id,
+          callId: call ? call._id : analysis.callId,
           analysisId: analysis._id,
           version: analysis.analysisVersion,
           deletedBy: req.user?._id,
@@ -858,7 +917,7 @@ async function deleteCallAnalysis(req, res) {
       success: true,
       message: "AI Call Intelligence report deleted successfully.",
       data: {
-        callId: call._id,
+        callId: call ? call._id : analysis.callId,
         analysisId: analysis._id,
         analysisVersion: analysis.analysisVersion,
         deletedAt: analysis.deletedAt,

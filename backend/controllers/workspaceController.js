@@ -26,6 +26,26 @@ const slugify = (text) => {
     .replace(/^-+|-+$/g, "")
 }
 
+// Helper to determine the canonical platform base URL
+const getPlatformBaseUrl = () => {
+  return (
+    process.env.PLATFORM_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://crm.leads365.in"
+  ).replace(/\/+$/, "")
+}
+
+// Generate the authoritative access URL for a workspace
+const buildWorkspaceAccessUrl = (orgSlug, ws) => {
+  if (ws && ws.customDomain && (ws.domainStatus === "verified" || ws.domainStatus === "active")) {
+    return `https://${ws.customDomain}/portal/login`
+  }
+  const base = getPlatformBaseUrl()
+  const safeOrg = orgSlug || "org"
+  const safeWs = ws?.slug || ""
+  return `${base}/portal/login?organization=${encodeURIComponent(safeOrg)}&workspace=${encodeURIComponent(safeWs)}`
+}
+
 /**
  * GET /api/workspaces
  * List workspaces accessible by the current user
@@ -80,14 +100,20 @@ const listWorkspaces = async (req, res) => {
       }))
     }
 
-    // Include account-level workspaceModeEnabled flag
-    const account = await Account.findOne({ accountId: tenantId }).select("workspaceModeEnabled").lean()
+    // Include account-level workspaceModeEnabled flag and slug
+    const account = await Account.findOne({ accountId: tenantId }).select("workspaceModeEnabled slug companyName accountId").lean()
+    const orgSlug = account?.slug || slugify(account?.companyName) || account?.accountId || tenantId
+
+    const enrichedWorkspaces = workspaces.map((w) => ({
+      ...w,
+      accessUrl: buildWorkspaceAccessUrl(orgSlug, w),
+    }))
 
     return res.status(200).json({
       success: true,
-      count: workspaces.length,
+      count: enrichedWorkspaces.length,
       workspaceModeEnabled: Boolean(account?.workspaceModeEnabled),
-      data: workspaces,
+      data: enrichedWorkspaces,
     })
   } catch (error) {
     console.error("Error listing workspaces:", error.message)
@@ -175,10 +201,15 @@ const createWorkspace = async (req, res) => {
       }).catch(() => {})
     }
 
+    const account = await Account.findOne({ accountId: tenantId }).select("slug companyName accountId").lean()
+    const orgSlug = account?.slug || slugify(account?.companyName) || account?.accountId || tenantId
+    const wsObj = workspace.toObject ? workspace.toObject() : workspace
+    wsObj.accessUrl = buildWorkspaceAccessUrl(orgSlug, wsObj)
+
     return res.status(201).json({
       success: true,
       message: "Workspace created successfully",
-      data: workspace,
+      data: wsObj,
     })
   } catch (error) {
     console.error("Error creating workspace:", error.message)
@@ -223,7 +254,16 @@ const getWorkspaceById = async (req, res) => {
       return res.status(404).json({ success: false, error: "Workspace not found" })
     }
 
-    return res.status(200).json({ success: true, data: workspace })
+    const account = await Account.findOne({ accountId: tenantId }).select("slug companyName accountId").lean()
+    const orgSlug = account?.slug || slugify(account?.companyName) || account?.accountId || tenantId
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...workspace,
+        accessUrl: buildWorkspaceAccessUrl(orgSlug, workspace),
+      },
+    })
   } catch (error) {
     console.error("Error fetching workspace:", error.message)
     return res.status(500).json({ success: false, error: "Failed to fetch workspace" })
@@ -268,10 +308,35 @@ const updateWorkspace = async (req, res) => {
       return res.status(404).json({ success: false, error: "Workspace not found" })
     }
 
-    const { name, description, branding, isDefault, settings, status } = req.body
+    const { name, slug, description, branding, isDefault, settings, status } = req.body
 
     if (name && typeof name === "string" && name.trim()) {
       workspace.name = name.trim()
+    }
+    if (slug && typeof slug === "string" && slug.trim()) {
+      const cleanSlug = slugify(slug.trim())
+      if (!cleanSlug) {
+        return res.status(400).json({ success: false, error: "Valid workspace slug is required" })
+      }
+      if (cleanSlug !== workspace.slug) {
+        const duplicate = await Workspace.findOne({
+          tenantId,
+          slug: cleanSlug,
+          _id: { $ne: workspace._id },
+        }).lean()
+        if (duplicate) {
+          return res.status(409).json({
+            success: false,
+            error: `A workspace with slug '${cleanSlug}' already exists in this organization.`,
+            code: "DUPLICATE_WORKSPACE_SLUG",
+          })
+        }
+        workspace.slug = cleanSlug
+        await DomainMapping.updateMany(
+          { tenantId, targetWorkspaceId: workspace._id },
+          { $set: { targetSlug: cleanSlug } }
+        )
+      }
     }
     if (description !== undefined) {
       workspace.description = String(description).trim()
@@ -300,10 +365,15 @@ const updateWorkspace = async (req, res) => {
 
     await workspace.save()
 
+    const account = await Account.findOne({ accountId: tenantId }).select("slug companyName accountId").lean()
+    const orgSlug = account?.slug || slugify(account?.companyName) || account?.accountId || tenantId
+    const wsObj = workspace.toObject ? workspace.toObject() : workspace
+    wsObj.accessUrl = buildWorkspaceAccessUrl(orgSlug, wsObj)
+
     return res.status(200).json({
       success: true,
       message: "Workspace updated successfully",
-      data: workspace,
+      data: wsObj,
     })
   } catch (error) {
     console.error("Error updating workspace:", error.message)
@@ -1552,10 +1622,16 @@ const removeWorkspaceDomain = async (req, res) => {
 
     invalidateCustomDomainCache()
 
+    const account = await Account.findOne({ accountId: tenantId }).select("slug companyName accountId").lean()
+    const orgSlug = account?.slug || slugify(account?.companyName) || account?.accountId || tenantId
+
     return res.status(200).json({
       success: true,
       message: "Custom domain removed successfully from workspace",
-      data: { workspaceId: workspace._id },
+      data: {
+        workspaceId: workspace._id,
+        accessUrl: buildWorkspaceAccessUrl(orgSlug, workspace),
+      },
     })
   } catch (error) {
     console.error("Error removing workspace domain:", error.message)

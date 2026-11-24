@@ -90,6 +90,18 @@ export default function PortalLoginClient({
   const router = useRouter()
   const searchParams = useSearchParams()
   const tenantParam = searchParams.get("tenant") || initialSearchParams?.tenant || ""
+  const organizationParam =
+    searchParams.get("organization") ||
+    searchParams.get("org") ||
+    initialSearchParams?.organization ||
+    initialSearchParams?.org ||
+    ""
+  const workspaceParam =
+    searchParams.get("workspace") ||
+    searchParams.get("ws") ||
+    initialSearchParams?.workspace ||
+    initialSearchParams?.ws ||
+    ""
   const { login, user: authUser, status: authStatus } = useAuth()
 
   // Determine candidate domain status synchronously to prevent flash of generic form
@@ -220,10 +232,10 @@ export default function PortalLoginClient({
           }
         }
 
-        // 3. Fallback: check ?tenant= parameter if specified on non-white-label domain
-        const effectiveTenant = tenantParam || tenantId
+        // 3. Fallback: check ?organization= or ?tenant= parameter if specified on non-white-label domain
+        const effectiveTenant = organizationParam || tenantParam || tenantId
         if (effectiveTenant && effectiveTenant.trim()) {
-          const tenantRes = await apiClient.getTenantInfo(effectiveTenant.trim())
+          const tenantRes = await apiClient.getTenantInfo(effectiveTenant.trim(), workspaceParam)
           if (isMounted && tenantRes?.success && tenantRes?.data) {
             setTenantInfo(tenantRes.data)
             if (tenantRes.data.accountId) {
@@ -324,8 +336,13 @@ export default function PortalLoginClient({
       if (typeof window !== "undefined" && window.location.hostname) {
         loginPayload.domain = window.location.hostname
       }
-      if (tenantId && tenantId.trim()) {
+      if (organizationParam && organizationParam.trim()) {
+        loginPayload.organization = organizationParam.trim()
+      } else if (tenantId && tenantId.trim()) {
         loginPayload.tenantId = tenantId.trim()
+      }
+      if (workspaceParam && workspaceParam.trim()) {
+        loginPayload.workspace = workspaceParam.trim()
       }
 
       const response = await login(loginPayload)
@@ -344,6 +361,11 @@ export default function PortalLoginClient({
           toast.success(`Welcome back, ${response.data.user.name}!`)
           router.replace("/super-admin")
           return
+        }
+        if (response.data.user.targetWorkspace) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("leadflow_active_workspace", response.data.user.targetWorkspace.id)
+          }
         }
         toast.success(`Welcome back, ${response.data.user.name}!`)
         router.replace("/portal")

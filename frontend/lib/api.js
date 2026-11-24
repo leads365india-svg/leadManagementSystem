@@ -348,10 +348,11 @@ class ApiClient {
     return this.request("/auth/me")
   }
 
-  async getTenantInfo(identifier) {
+  async getTenantInfo(identifier, workspace = "") {
     if (!identifier) return { success: false, error: "Identifier required" }
     const clean = identifier.toString().trim()
-    return this.request(`/auth/tenant-info?tenantId=${encodeURIComponent(clean)}`)
+    const wsParam = workspace ? `&workspace=${encodeURIComponent(workspace.toString().trim())}` : ""
+    return this.request(`/auth/tenant-info?tenantId=${encodeURIComponent(clean)}${wsParam}`)
   }
 
   async getBranding(domain) {
@@ -1341,8 +1342,19 @@ class ApiClient {
     return this.request(`/ai-calls/${callId}/analysis/linked-followups`)
   }
 
-  async deleteAICallAnalysis(callId, payload = {}) {
-    return this.request(`/ai-calls/${callId}/analysis`, {
+  async getLinkedFollowUps(callId) {
+    return this.getAICallLinkedFollowUps(callId)
+  }
+
+  async deleteAICallAnalysis(callIdOrReportId, payload = {}) {
+    return this.request(`/ai-calls/${callIdOrReportId}/analysis`, {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async deleteAIReport(reportId, payload = {}) {
+    return this.request(`/ai-calls/reports/${reportId}`, {
       method: "DELETE",
       body: JSON.stringify(payload),
     })

@@ -29,6 +29,9 @@ router.get("/:callId/transcript", authenticate, getCallTranscript)
 router.get("/:callId/analysis", authenticate, getCallAnalysis)
 router.get("/:callId/analysis/linked-followups", authenticate, getLinkedFollowUps)
 router.delete("/:callId/analysis", authenticate, deleteCallAnalysis)
+router.delete("/reports/:reportId", authenticate, deleteCallAnalysis)
+router.delete("/analysis/:analysisId", authenticate, deleteCallAnalysis)
+router.delete("/:callId", authenticate, deleteCallAnalysis)
 router.post("/:callId/reprocess", authenticate, requireAccountAdmin, reprocessCall)
 
 module.exports = router

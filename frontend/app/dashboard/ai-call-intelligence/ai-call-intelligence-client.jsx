@@ -79,9 +79,16 @@ export default function AICallIntelligenceClient() {
   const isAdmin = Boolean(
     user?.role === "admin" ||
     user?.role === "account_admin" ||
+    user?.role === "workspace_admin" ||
     user?.role === "superadmin" ||
     user?.role === "super_admin" ||
-    user?.isSuperAdmin
+    user?.isSuperAdmin ||
+    (Array.isArray(user?.permissions) && (
+      user.permissions.includes("*") ||
+      user.permissions.includes("ai.*") ||
+      user.permissions.includes("calls.*") ||
+      user.permissions.includes("calls.delete")
+    ))
   )
 
   // --- Dashboard & Listing State ---
@@ -336,17 +343,24 @@ export default function AICallIntelligenceClient() {
 
   // Confirm and Execute AI Report Deletion
   const handleConfirmDeleteReport = async () => {
-    if (!reportToDelete?.callId || isDeletingReport) return
+    const targetCallId = reportToDelete?.callId
+    const targetReportId = reportToDelete?.analysisId
+    if ((!targetCallId && !targetReportId) || isDeletingReport) return
 
     try {
       setIsDeletingReport(true)
-      const res = await apiClient.deleteAICallAnalysis(reportToDelete.callId)
+      const primaryId = targetCallId || targetReportId
+      const res = await apiClient.deleteAICallAnalysis(primaryId, {
+        callId: targetCallId,
+        reportId: targetReportId,
+        analysisId: targetReportId,
+      })
 
       if (res && res.success) {
         toast.success(res.message || "AI Call Intelligence report deleted successfully.")
 
         // If drawer is open for this call, close it
-        if (selectedCallId && String(selectedCallId) === String(reportToDelete.callId)) {
+        if (selectedCallId && String(selectedCallId) === String(targetCallId)) {
           handleCloseDrawer()
         }
 
@@ -354,7 +368,7 @@ export default function AICallIntelligenceClient() {
         setCalls((prev) =>
           prev.map((c) => {
             const currentId = c._id || c.id
-            if (String(currentId) === String(reportToDelete.callId)) {
+            if (String(currentId) === String(targetCallId)) {
               return {
                 ...c,
                 aiAnalysis: null,
@@ -1072,7 +1086,7 @@ export default function AICallIntelligenceClient() {
                               </button>
                             )}
 
-                            {isAdmin && (call.aiAnalysis || call.intelligenceStatus === "COMPLETED") && (
+                            {isAdmin && (call.aiAnalysis || (call.intelligenceStatus && call.intelligenceStatus !== "NOT_ANALYZED")) && (
                               <button
                                 type="button"
                                 onClick={() => handleOpenDeleteModal(call)}
@@ -1145,7 +1159,7 @@ export default function AICallIntelligenceClient() {
               </div>
 
               <div className="flex items-center gap-2">
-                {isAdmin && selectedCallId && (detailData.analysis || detailData.status?.overallStatus === "COMPLETED") && (
+                {isAdmin && selectedCallId && (detailData.analysis || (detailData.status?.overallStatus && detailData.status?.overallStatus !== "NOT_ANALYZED")) && (
                   <button
                     type="button"
                     onClick={() =>

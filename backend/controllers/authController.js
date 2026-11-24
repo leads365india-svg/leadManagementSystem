@@ -273,13 +273,131 @@ const login = async (req, res) => {
           code: "INVALID_PASSWORD",
         })
       }
+
+      // --- Resolution & Verification for Auto-Generated Platform Access URLs ---
+      // Requirement A: Resolve organization from registered slug, validate parent tenant,
+      // validate active WorkspaceMembership, reject unauthorized workspace access with 403.
+      const Workspace = require("../models/Workspace")
+      const WorkspaceMembership = require("../models/WorkspaceMembership")
+
+      const rawOrg = (req.body.organization || req.body.org || req.query?.organization || req.query?.org || "").toString().trim()
+      const rawWs = (req.body.workspace || req.body.ws || req.query?.workspace || req.query?.ws || "").toString().trim()
+
+      var resolvedTargetWorkspace = null
+      var resolvedOrgAccount = null
+
+      if (rawOrg) {
+        const cleanOrg = rawOrg.toLowerCase()
+        resolvedOrgAccount = await Account.findOne({
+          $or: [
+            { slug: cleanOrg },
+            { accountId: rawOrg },
+          ],
+        }).lean()
+
+        if (!resolvedOrgAccount) {
+          return res.status(404).json({
+            success: false,
+            error: `Organization '${rawOrg}' not found. Please verify your workspace access URL.`,
+            code: "ORGANIZATION_NOT_FOUND",
+          })
+        }
+
+        const userTenant =
+          user.tenantId ||
+          (user._id && resolvedOrgAccount.adminUserId && resolvedOrgAccount.adminUserId.toString() === user._id.toString()
+            ? resolvedOrgAccount.accountId
+            : null)
+
+        if (!userTenant || userTenant !== resolvedOrgAccount.accountId) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied: This account belongs to another organization and cannot sign in on this workspace.",
+            code: "DOMAIN_TENANT_MISMATCH",
+          })
+        }
+      }
+
+      if (rawWs) {
+        const cleanWs = rawWs.toLowerCase()
+        const targetTenantId = resolvedOrgAccount ? resolvedOrgAccount.accountId : user.tenantId
+
+        const targetWorkspace = await Workspace.findOne({
+          tenantId: targetTenantId,
+          slug: cleanWs,
+          status: { $ne: "archived" },
+        }).lean()
+
+        if (!targetWorkspace) {
+          return res.status(404).json({
+            success: false,
+            error: `Workspace '${rawWs}' not found in this organization.`,
+            code: "WORKSPACE_NOT_FOUND",
+          })
+        }
+
+        // Authorization check: Org Admin and Super Admin have full access across all workspaces
+        const isOrgAdmin = user.role === "account_admin" || user.role === "super_admin"
+        if (!isOrgAdmin) {
+          const membership = await WorkspaceMembership.findOne({
+            tenantId: targetTenantId,
+            workspaceId: targetWorkspace._id,
+            userId: user._id,
+            status: "active",
+          })
+            .setOptions({ skipTenantFilter: true })
+            .lean()
+
+          if (!membership) {
+            return res.status(403).json({
+              success: false,
+              error: `Access denied: You do not have access to this workspace (${targetWorkspace.name}).`,
+              code: "WORKSPACE_ACCESS_FORBIDDEN",
+            })
+          }
+        }
+
+        resolvedTargetWorkspace = {
+          id: targetWorkspace._id.toString(),
+          name: targetWorkspace.name,
+          slug: targetWorkspace.slug,
+        }
+      } else if (user.role !== "account_admin" && user.role !== "super_admin" && user.tenantId) {
+        // Single login identity across organization:
+        // When assigned to only one workspace, navigate directly to it
+        const activeMemberships = await WorkspaceMembership.find({
+          tenantId: user.tenantId,
+          userId: user._id,
+          status: "active",
+        })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
+
+        if (activeMemberships.length === 1) {
+          const singleWs = await Workspace.findOne({
+            _id: activeMemberships[0].workspaceId,
+            tenantId: user.tenantId,
+            status: "active",
+          })
+            .select("name slug")
+            .lean()
+
+          if (singleWs) {
+            resolvedTargetWorkspace = {
+              id: singleWs._id.toString(),
+              name: singleWs.name,
+              slug: singleWs.slug,
+            }
+          }
+        }
+      }
     }
 
     // If tenant user/admin (non-super-admin), retrieve tenant account metadata
     let accountData = null
     if (user.role !== "super_admin") {
-      let account = null
-      if (user.tenantId) {
+      let account = resolvedOrgAccount || null
+      if (!account && user.tenantId) {
         account = await Account.findOne({ accountId: user.tenantId }).lean()
       }
       if (!account && user._id) {
@@ -379,6 +497,7 @@ const login = async (req, res) => {
       lastLoginAt: user.lastLoginAt,
       permissions: userPermissions,
       account: accountData,
+      targetWorkspace: resolvedTargetWorkspace || null,
     }
 
     // Asynchronously record lastLoginAt and audit trail without delaying client response
@@ -565,6 +684,36 @@ const getTenantInfo = async (req, res) => {
         success: false,
         error: "No active Leads Account found with this identifier or domain",
       })
+    }
+
+    // Support workspace context resolution from query param
+    const rawWs = (req.query.workspace || req.query.ws || "").toString().trim()
+    if (rawWs && account.accountId) {
+      const Workspace = require("../models/Workspace")
+      const ws = await Workspace.findOne({
+        tenantId: account.accountId,
+        slug: rawWs.toLowerCase(),
+        status: { $ne: "archived" },
+      }).lean()
+      if (ws) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            accountId: account.accountId,
+            companyName: ws.branding?.displayName || ws.name || account.companyName,
+            displayName: ws.branding?.displayName || ws.name || account.displayName,
+            status: ws.status || "active",
+            slug: ws.slug || "",
+            customDomain: account.customDomain || "",
+            logoUrl: ws.branding?.logoUrl || account.logoUrl || "",
+            primaryColor: ws.branding?.primaryColor || account.primaryColor || "#4f46e5",
+            pageTitle: ws.branding?.displayName || ws.name || account.pageTitle || account.companyName,
+            workspaceId: ws._id,
+            workspaceSlug: ws.slug,
+            isWorkspaceContext: true,
+          },
+        })
+      }
     }
 
     if (account.boundWorkspace) {
