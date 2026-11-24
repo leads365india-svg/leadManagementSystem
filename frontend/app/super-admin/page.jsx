@@ -35,7 +35,7 @@ import {
 
 export default function SuperAdminDashboardPage() {
   const router = useRouter()
-  const { setActiveTenant, checkAuth } = useAuth()
+  const { setActiveTenant, checkAuth, user, status } = useAuth()
   const [stats, setStats] = useState({
     totalAccounts: 0,
     activeAccounts: 0,
@@ -315,13 +315,17 @@ export default function SuperAdminDashboardPage() {
 
   // Initial load of global metrics
   useEffect(() => {
-    loadStats()
-  }, [loadStats])
+    if (status === "authenticated" && user?.role === "super_admin") {
+      loadStats()
+    }
+  }, [status, user?.role, loadStats])
 
   // Instant or debounced trigger for accounts list
   useEffect(() => {
-    loadAccounts(debouncedSearch, statusFilter, page)
-  }, [debouncedSearch, statusFilter, page, loadAccounts])
+    if (status === "authenticated" && user?.role === "super_admin") {
+      loadAccounts(debouncedSearch, statusFilter, page)
+    }
+  }, [status, user?.role, debouncedSearch, statusFilter, page, loadAccounts])
 
   // Complete data refresh (both stats and accounts)
   const refreshAllData = useCallback(async () => {

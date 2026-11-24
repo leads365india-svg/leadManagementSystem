@@ -140,14 +140,27 @@ async function probeAudio(filePath) {
 
     const audioMatch = stderr.match(/Stream #\d+:\d+(?:\[0x[0-9a-f]+\])?(?:\([^)]*\))?:\s*Audio:\s*([^,\n]+)(?:,\s*(\d+)\s*Hz)?(?:,\s*([^,\n]+))?(?:,\s*([^\n,]+))?(?:,\s*(\d+)\s*kb\/s)?/)
     if (audioMatch) {
-      codec = (audioMatch[1] || "").trim().toLowerCase()
+      const rawCodec = (audioMatch[1] || "").trim().toLowerCase()
+      // Clean codec string by removing parenthetical info (e.g. "pcm_s16le ([1][0]...)" -> "pcm_s16le", "aac (LC)" -> "aac")
+      codec = rawCodec.split(/[\s(]/)[0]
       sampleRate = parseInt(audioMatch[2], 10) || 44100
       const chStr = (audioMatch[3] || "").toLowerCase()
-      channels = chStr.includes("stereo") ? 2 : 1
+      const isStereo = /stereo|2\s*channels/i.test(stderr)
+      const isMono = /mono|1\s*channels/i.test(stderr)
+      channels = isStereo ? 2 : (isMono ? 1 : (chStr.includes("stereo") ? 2 : 1))
       bitrate = parseInt(audioMatch[5], 10) || 128
     }
 
-    const isMp3 = codec.includes("mp3") || format.includes("mp3")
+    // Precise format & container detection to avoid misidentifying WAV, WebM, AMR, μ-law as MP3
+    const isWav = format.includes("wav") || codec.startsWith("pcm_")
+    const isWebm = format.includes("webm") || format.includes("matroska") || codec === "opus" || codec === "vorbis"
+    const isAmr = format.includes("amr") || codec.startsWith("amr")
+    const isM4a = (format.includes("mp4") || format.includes("m4a") || format.includes("mov")) && !format.includes("mp3")
+    const isOgg = format.includes("ogg") && !format.includes("mp3")
+    const isMulaw = codec === "pcm_mulaw"
+
+    // File is ONLY MP3 if codec is mp3/mp3float AND container is not WAV, WebM, AMR, OGG, or MP4
+    const isMp3 = !isWav && !isWebm && !isAmr && !isM4a && !isOgg && (codec.startsWith("mp3") || (format === "mp3" && !codec.startsWith("pcm_")))
 
     return {
       isValid: true,
@@ -159,6 +172,11 @@ async function probeAudio(filePath) {
       bitrate,
       sizeBytes: stat.size,
       isMp3,
+      isWav,
+      isWebm,
+      isAmr,
+      isM4a,
+      isMulaw,
     }
   } catch (err) {
     return {
@@ -200,6 +218,25 @@ async function convertToMp3(inputPath, outputPath = null) {
   }
 
   const finalOutput = outputPath || path.join(os.tmpdir(), `converted_${Date.now()}_${crypto.randomBytes(6).toString("hex")}.mp3`)
+
+  // Bypass transcoding if input is already a valid MP3 — avoids unnecessary re-encoding and quality loss
+  if (probe.isMp3) {
+    if (path.resolve(inputPath) !== path.resolve(finalOutput)) {
+      fs.copyFileSync(inputPath, finalOutput)
+    }
+    const hash = crypto.createHash("sha256")
+    const fileBuf = fs.readFileSync(finalOutput)
+    hash.update(fileBuf)
+    const sha256 = hash.digest("hex")
+
+    return {
+      outputPath: finalOutput,
+      sizeBytes: stat.size,
+      duration: probe.duration || 0,
+      sha256,
+      reEncoded: false,
+    }
+  }
 
   // Voice Call Audio Preservation:
   // 1. Maintain native channel count (mono for 1-channel phone calls) to prevent out-of-phase robotic/alien hollow voice

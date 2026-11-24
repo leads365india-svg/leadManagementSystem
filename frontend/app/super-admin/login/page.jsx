@@ -65,7 +65,7 @@ export default function SuperAdminLoginPage() {
         router.replace("/super-admin")
         return
       }
-      if (authUser.role === "account_admin") {
+      if (authUser.role !== "super_admin") {
         router.replace("/portal")
         return
       }

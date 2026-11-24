@@ -1612,6 +1612,12 @@ class ApiClient {
 
   // --- Multi-Workspace & Project Administration Endpoints (Wave 1-3) ---
   async getWorkspaces() {
+    if (typeof window !== "undefined") {
+      const pathname = window.location.pathname || ""
+      if (pathname.includes("/login") || pathname.startsWith("/super-admin")) {
+        return { success: true, data: [], workspaceModeEnabled: false }
+      }
+    }
     return this.request("/workspaces")
   }
 

@@ -36,6 +36,68 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/octet-stream",
 ])
 
+function getExtensionFromMime(mimeType = "", originalFilename = "") {
+  if (originalFilename) {
+    const ext = path.extname(originalFilename).toLowerCase()
+    if (ext && ext.length >= 2 && ext.length <= 5) return ext
+  }
+  const clean = (mimeType || "").split(";")[0].trim().toLowerCase()
+  switch (clean) {
+    case "audio/wav":
+    case "audio/x-wav":
+      return ".wav"
+    case "audio/mp4":
+    case "audio/m4a":
+    case "audio/x-m4a":
+      return ".m4a"
+    case "audio/mpeg":
+    case "audio/mp3":
+      return ".mp3"
+    case "audio/aac":
+      return ".aac"
+    case "audio/amr":
+      return ".amr"
+    case "audio/3gpp":
+    case "audio/3gp":
+      return ".3gp"
+    case "audio/ogg":
+      return ".ogg"
+    default:
+      return ".m4a"
+  }
+}
+
+function resolveAudioMimeType(filename = "", contentType = "") {
+  const clean = (contentType || "").split(";")[0].trim().toLowerCase()
+  if (clean && clean !== "application/octet-stream" && clean !== "binary/octet-stream") {
+    if (clean === "audio/mp3") return "audio/mpeg"
+    if (clean === "audio/x-wav") return "audio/wav"
+    if (clean === "audio/x-m4a") return "audio/mp4"
+    return clean
+  }
+  const ext = path.extname(filename || "").toLowerCase()
+  switch (ext) {
+    case ".mp3":
+      return "audio/mpeg"
+    case ".wav":
+      return "audio/wav"
+    case ".m4a":
+    case ".mp4":
+      return "audio/mp4"
+    case ".aac":
+      return "audio/aac"
+    case ".amr":
+      return "audio/amr"
+    case ".3gp":
+    case ".3gpp":
+      return "audio/3gpp"
+    case ".ogg":
+      return "audio/ogg"
+    default:
+      return "audio/mpeg"
+  }
+}
+
 const DEFAULT_RETENTION_DAYS = parseInt(process.env.RECORDING_RETENTION_DAYS, 10) || 30
 const MAX_UPLOAD_BYTES = 52428800 // 50 MB
 
@@ -164,7 +226,8 @@ async function processAndConvertGridFSRecording({
   computedSha256,
   expiresAt,
 }) {
-  const tempInputPath = path.join(os.tmpdir(), `orig_${call._id}_${Date.now()}.bin`)
+  const fileExt = getExtensionFromMime(cleanMime, call.recording?.filename)
+  const tempInputPath = path.join(os.tmpdir(), `orig_${call._id}_${Date.now()}${fileExt}`)
   let tempOutputPath = null
 
   try {
@@ -183,6 +246,7 @@ async function processAndConvertGridFSRecording({
     const probe = await audioConverter.probeAudio(tempInputPath)
 
     if (!probe.isValid) {
+      call.hasRecording = true
       call.recording = call.recording || {}
       call.recording.fileId = originalFileId
       call.recording.sizeBytes = bytesWritten
@@ -193,6 +257,17 @@ async function processAndConvertGridFSRecording({
       call.recording.codec = probe.codec || "unknown"
       call.recording.format = probe.format || "unknown"
       call.recording.duration = 0
+
+      call.metadata = call.metadata || {}
+      call.metadata.recordingUrl = `/api/calls/${call._id}/recording`
+      call.metadata.recordingMp3Url = `/api/calls/${call._id}/recording?format=mp3`
+      call.metadata.recordingMimeType = cleanMime
+      call.metadata.recordingSha256 = computedSha256
+      call.metadata.recordingSizeBytes = bytesWritten
+      call.metadata.recordingUploadedAt = Date.now()
+      call.metadata.duration = 0
+
+      call.markModified("metadata")
       call.markModified("recording")
       await call.save()
       return { conversionStatus: "failed", duration: 0 }
@@ -367,6 +442,7 @@ async function streamUpload({
   retentionDays = DEFAULT_RETENTION_DAYS,
   allowUnmatchedReview = false,
   allowOverwrite = false,
+  workspaceId = null,
 }) {
   // Validate eligibility before reading any audio stream
   const readStream = inputReadStream || inputStream
@@ -418,7 +494,7 @@ async function streamUpload({
     contentType: cleanMime,
     metadata: {
       tenantId,
-      workspaceId: call.workspaceId || options.workspaceId || null,
+      workspaceId: call.workspaceId || workspaceId || null,
       callId: call._id,
       leadId: call.leadId,
       agentId: call.agentId,
@@ -623,7 +699,7 @@ function streamFromRemoteUrl({ url, rangeHeader, res, mimeType, expectedSize, au
         "Content-Type": remoteRes.headers["content-type"] || mimeType || "audio/mpeg",
         "Accept-Ranges": "bytes",
         "Cross-Origin-Resource-Policy": "cross-origin",
-        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+        "Cache-Control": "private, no-transform, max-age=3600",
       }
 
       if (remoteRes.headers["content-length"]) {
@@ -656,7 +732,20 @@ function streamFromRemoteUrl({ url, rangeHeader, res, mimeType, expectedSize, au
       res.writeHead(statusCode, responseHeaders)
       remoteRes.pipe(res)
       remoteRes.on("end", resolve)
-      remoteRes.on("error", reject)
+      remoteRes.on("error", (err) => {
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, error: "Remote streaming error" })
+        } else {
+          res.destroy(err)
+        }
+        reject(err)
+      })
+      res.on("close", () => {
+        try {
+          remoteRes.destroy()
+          request.destroy()
+        } catch (_) {}
+      })
     })
 
     request.on("error", reject)
@@ -790,29 +879,42 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
 
 
   // 5b. GridFS file selection (MP3 vs original source)
+  const toGridFsId = (id) => {
+    if (!id) return null
+    if (id instanceof mongoose.Types.ObjectId) return id
+    return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null
+  }
 
-  if (wantsOriginal && call.recording?.fileId) {
+  const origFileId = toGridFsId(call.recording?.fileId)
+  const mp3FileId = toGridFsId(call.recording?.mp3FileId)
+
+  if (wantsOriginal && origFileId) {
     // Client explicitly asked for original unconverted format (e.g. download)
     try {
-      fileToStream = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": effectiveTenantId }).next()
+      fileToStream = await bucket.find({ _id: origFileId, "metadata.tenantId": effectiveTenantId }).next()
       if (fileToStream) {
         mimeType = fileToStream.contentType || fileToStream.metadata?.mimeType || "audio/m4a"
       }
     } catch (_) {}
-  } else if (call.recording?.mp3FileId) {
+  } else if (mp3FileId) {
     // Converted MP3 is available
     try {
-      fileToStream = await bucket.find({ _id: call.recording.mp3FileId, "metadata.tenantId": effectiveTenantId }).next()
+      fileToStream = await bucket.find({ _id: mp3FileId, "metadata.tenantId": effectiveTenantId }).next()
       mimeType = "audio/mpeg"
     } catch (_) {}
   }
 
   // If MP3 file not found or not yet converted, check original file in GridFS
-  if (!fileToStream && call.recording?.fileId) {
+  if (!fileToStream && origFileId) {
     try {
-      const origFile = await bucket.find({ _id: call.recording.fileId, "metadata.tenantId": effectiveTenantId }).next()
+      const origFile = await bucket.find({ _id: origFileId, "metadata.tenantId": effectiveTenantId }).next()
       if (origFile && origFile.length > 0) {
-        const isAlreadyMp3 = origFile.contentType === "audio/mpeg" || origFile.contentType === "audio/mp3"
+        // Verify genuine MP3 format before assuming no conversion is needed
+        const isKnownNonMp3 = ["wav", "amr", "webm", "opus", "pcm_mulaw", "pcm_s16le"].includes(call.recording?.codec) ||
+                              ["wav", "amr", "webm", "ogg"].includes(call.recording?.format)
+        const isAlreadyMp3 = !isKnownNonMp3 &&
+          (call.recording?.codec === "mp3" || call.recording?.format === "mp3" ||
+           ((origFile.contentType === "audio/mpeg" || origFile.contentType === "audio/mp3") && origFile.filename?.toLowerCase().endsWith(".mp3")))
         if (isAlreadyMp3) {
           fileToStream = origFile
           mimeType = "audio/mpeg"
@@ -836,8 +938,9 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
               })
             })
             // Re-fetch converted MP3
-            if (call.recording?.mp3FileId) {
-              convertedMp3 = await bucket.find({ _id: call.recording.mp3FileId, "metadata.tenantId": effectiveTenantId }).next()
+            const updatedMp3Id = toGridFsId(call.recording?.mp3FileId)
+            if (updatedMp3Id) {
+              convertedMp3 = await bucket.find({ _id: updatedMp3Id, "metadata.tenantId": effectiveTenantId }).next()
             }
           } catch (convErr) {
             console.warn(`[RecordingStorage] On-the-fly conversion notice for call ${call._id}:`, convErr.message)
@@ -860,8 +963,37 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
 
   // 6. Serve from GridFS
   if (fileToStream && fileToStream.length > 0) {
+    // Verify that binary chunks physically exist in GridFS before sending headers / Content-Length
+    const chunksColl = bucket.s.db.collection(`${bucket.s.options.bucketName || "recordings"}.chunks`)
+    const chunkDoc = await chunksColl.findOne({ files_id: fileToStream._id }, { projection: { _id: 1 } })
+
+    if (!chunkDoc) {
+      // If the selected file (e.g. mp3) is missing chunks, attempt fallback to original file if it has chunks
+      const alternateId = fileToStream._id.toString() === mp3FileId?.toString() ? origFileId : mp3FileId
+      if (alternateId) {
+        const altFile = await bucket.find({ _id: alternateId, "metadata.tenantId": effectiveTenantId }).next()
+        if (altFile && altFile.length > 0) {
+          const altChunkDoc = await chunksColl.findOne({ files_id: altFile._id }, { projection: { _id: 1 } })
+          if (altChunkDoc) {
+            fileToStream = altFile
+            mimeType = altFile.contentType || altFile.metadata?.mimeType || "audio/mpeg"
+          }
+        }
+      }
+    }
+
+    // Final verification: if no chunks exist, fail closed immediately with 404 rather than sending an incorrect Content-Length
+    const hasFinalChunks = fileToStream ? await chunksColl.findOne({ files_id: fileToStream._id }, { projection: { _id: 1 } }) : null
+    if (!hasFinalChunks) {
+      console.warn(`[RecordingStorage Playback] Audio file ${fileToStream?._id} has zero binary chunks in GridFS. Returning 404.`)
+      fileToStream = null
+    }
+  }
+
+  if (fileToStream && fileToStream.length > 0) {
     const totalLength = fileToStream.length
-    const streamMime = mimeType || fileToStream.contentType || "audio/mpeg"
+    const rawMime = mimeType || fileToStream.contentType || fileToStream.metadata?.mimeType || "audio/mpeg"
+    const streamMime = resolveAudioMimeType(fileToStream.filename, rawMime)
 
     // Audit playback action
     if (audit && typeof audit.log === "function") {
@@ -883,7 +1015,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
       const start = parseInt(parts[0], 10)
       const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1
 
-      if (isNaN(start) || start >= totalLength || (parts[1] && end >= totalLength) || start > end) {
+      if (isNaN(start) || start < 0 || start >= totalLength || (parts[1] && end >= totalLength) || start > end) {
         res.setHeader("Content-Range", `bytes */${totalLength}`)
         return res.status(416).send("Requested Range Not Satisfiable")
       }
@@ -895,12 +1027,22 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
         "Content-Length": chunksize,
         "Content-Type": streamMime,
         "Cross-Origin-Resource-Policy": "cross-origin",
-        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+        "Cache-Control": "private, no-cache, no-transform, max-age=3600",
       })
 
       const downloadStream = bucket.openDownloadStream(fileToStream._id, {
         start,
-        end: end + 1,
+        end: Math.min(end + 1, totalLength),
+      })
+      downloadStream.on("error", (streamErr) => {
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, error: "Audio streaming error: " + streamErr.message })
+        } else {
+          res.destroy(streamErr)
+        }
+      })
+      res.on("close", () => {
+        downloadStream.destroy()
       })
       return downloadStream.pipe(res)
     } else {
@@ -909,10 +1051,20 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
         "Content-Type": streamMime,
         "Accept-Ranges": "bytes",
         "Cross-Origin-Resource-Policy": "cross-origin",
-        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+        "Cache-Control": "private, no-cache, no-transform, max-age=3600",
       })
 
       const downloadStream = bucket.openDownloadStream(fileToStream._id)
+      downloadStream.on("error", (streamErr) => {
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, error: "Audio streaming error: " + streamErr.message })
+        } else {
+          res.destroy(streamErr)
+        }
+      })
+      res.on("close", () => {
+        downloadStream.destroy()
+      })
       return downloadStream.pipe(res)
     }
   }

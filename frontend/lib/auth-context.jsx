@@ -203,25 +203,46 @@ export function AuthProvider({ children }) {
     setActiveWorkspaceState(wsId || null)
   }, [])
 
+  const isReloadingWorkspacesRef = useRef(false)
+  const lastReloadWorkspacesTsRef = useRef(0)
+
   const reloadWorkspaces = useCallback(async (targetUser = null) => {
-    // If on a login page, never attempt to fetch workspaces
-    if (typeof window !== "undefined" && window.location.pathname.includes("/login")) {
-      return []
-    }
-
-    const effectiveUser = targetUser || userRef.current
-    if (!effectiveUser) return []
-
-    // Platform Super Admin does not operate on tenant workspaces unless actively inspecting a tenant
-    if (effectiveUser.role === "super_admin") {
-      const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
-      if (!activeTenant) {
+    // If on a login page or super-admin management console, never attempt to fetch tenant workspaces
+    if (typeof window !== "undefined") {
+      const pathname = window.location.pathname || ""
+      if (pathname.includes("/login") || pathname.startsWith("/super-admin")) {
         setWorkspaces([])
         setIsMultiWorkspaceEnabled(false)
         setActiveWorkspace(null)
         return []
       }
     }
+
+    const effectiveUser = targetUser || userRef.current
+    if (!effectiveUser) {
+      setWorkspaces([])
+      setIsMultiWorkspaceEnabled(false)
+      setActiveWorkspace(null)
+      return []
+    }
+
+    // Platform Super Admin does not operate on tenant workspaces unless actively inspecting a tenant inside /portal
+    if (effectiveUser.role === "super_admin") {
+      const pathname = typeof window !== "undefined" ? window.location.pathname || "" : ""
+      const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
+      if (!activeTenant || !pathname.startsWith("/portal")) {
+        setWorkspaces([])
+        setIsMultiWorkspaceEnabled(false)
+        setActiveWorkspace(null)
+        return []
+      }
+    }
+
+    // In-flight deduplication and throttle: prevent duplicate network requests
+    if (isReloadingWorkspacesRef.current) return []
+    if (Date.now() - lastReloadWorkspacesTsRef.current < 1500) return []
+    isReloadingWorkspacesRef.current = true
+    lastReloadWorkspacesTsRef.current = Date.now()
 
     try {
       const res = await apiClient.getWorkspaces()
@@ -262,7 +283,11 @@ export function AuthProvider({ children }) {
         return wsList
       }
     } catch (err) {
-      console.warn("Failed to load workspaces:", err?.message || err)
+      if (err?.status !== 401) {
+        console.warn("Failed to load workspaces:", err?.message || err)
+      }
+    } finally {
+      isReloadingWorkspacesRef.current = false
     }
     return []
   }, [setActiveWorkspace])
@@ -377,11 +402,14 @@ export function AuthProvider({ children }) {
 
         setUser(userData)
         setStatus("authenticated")
+        const currentPath = typeof window !== "undefined" ? window.location.pathname || "" : ""
         if (userData.role !== "super_admin") {
-          await reloadWorkspacesRef.current(userData)
+          if (!currentPath.includes("/login") && !currentPath.startsWith("/super-admin")) {
+            await reloadWorkspacesRef.current(userData)
+          }
         } else {
           const storedTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
-          if (storedTenant) {
+          if (storedTenant && currentPath.startsWith("/portal")) {
             await reloadWorkspacesRef.current(userData)
           }
         }
@@ -422,7 +450,13 @@ export function AuthProvider({ children }) {
       if (response.success && response.data?.user) {
         setUser(response.data.user)
         setStatus("authenticated")
-        if (response.data.user.role !== "super_admin") {
+        const currentPath = typeof window !== "undefined" ? window.location.pathname || "" : ""
+        if (
+          response.data.user.role !== "super_admin" &&
+          credentials?.portal !== "super_admin" &&
+          !currentPath.startsWith("/super-admin") &&
+          !currentPath.includes("/login")
+        ) {
           await reloadWorkspaces(response.data.user)
         }
         return response

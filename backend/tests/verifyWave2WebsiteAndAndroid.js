@@ -633,8 +633,12 @@ async function main() {
     await Job.deleteMany({ tenantId: { $in: [TENANT_ORG, TENANT_STANDALONE] } })
     const db = mongoose.connection.db
     if (db) {
-      await db.collection("recordings.files").deleteMany({ "metadata.tenantId": { $in: [TENANT_ORG, TENANT_STANDALONE] } })
-      await db.collection("recordings.chunks").deleteMany({})
+      const testFiles = await db.collection("recordings.files").find({ "metadata.tenantId": { $in: [TENANT_ORG, TENANT_STANDALONE] } }).project({ _id: 1 }).toArray()
+      const testFileIds = testFiles.map((f) => f._id)
+      if (testFileIds.length > 0) {
+        await db.collection("recordings.files").deleteMany({ _id: { $in: testFileIds } })
+        await db.collection("recordings.chunks").deleteMany({ files_id: { $in: testFileIds } })
+      }
     }
     console.log("Cleanup complete.")
   }

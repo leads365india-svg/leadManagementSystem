@@ -102,7 +102,7 @@ export default function InBrowserAudioPlayer({
     let token = null
     if (typeof window !== "undefined") {
       try {
-        token = localStorage.getItem("leadflow_token")
+        token = localStorage.getItem("leadflow_token") || localStorage.getItem("token")
       } catch (_) {}
     }
 
@@ -139,7 +139,7 @@ export default function InBrowserAudioPlayer({
         setIsPlaying(true)
         setError(null)
       }).catch((e) => {
-        if (e.name !== "AbortError") {
+        if (e.name !== "AbortError" && e.name !== "NotAllowedError") {
           setIsPlaying(false)
         }
       })
@@ -160,18 +160,40 @@ export default function InBrowserAudioPlayer({
       try {
         let token = null
         if (typeof window !== "undefined") {
-          try { token = localStorage.getItem("leadflow_token") } catch (_) {}
+          try {
+            token = localStorage.getItem("leadflow_token") || localStorage.getItem("token")
+          } catch (_) {}
         }
         const checkRes = await fetch(`${API_BASE_URL}/calls/${callId}/recording?format=mp3`, {
+          credentials: "include",
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
-        if (!checkRes.ok) {
+        if (checkRes.ok) {
+          const audioBlob = await checkRes.blob()
+          if (audioBlob && audioBlob.size > 0) {
+            const newBlobUrl = URL.createObjectURL(audioBlob)
+            blobUrlRef.current = newBlobUrl
+            setBlobUrl(newBlobUrl)
+            setError(null)
+            return
+          }
+        } else {
           const errData = await checkRes.json().catch(() => ({}))
-          setError(errData.error || (checkRes.status === 404 ? "Recording audio not found on server." : "Unable to stream audio recording."))
+          setError(
+            errData.error ||
+            (checkRes.status === 404
+              ? "Recording audio file not found on server."
+              : checkRes.status === 403
+              ? "Playback forbidden by compliance or permission policy."
+              : `Server error (${checkRes.status}) streaming recording.`)
+          )
           return
         }
-      } catch (_) {}
-      setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+      } catch (fErr) {
+        setError(fErr?.message || "Audio playback connection error.")
+        return
+      }
+      setError("Audio stream playback failed. Please check network connection.")
     }
 
     audio.addEventListener("loadedmetadata", handleLoadedMetadata)
@@ -214,7 +236,7 @@ export default function InBrowserAudioPlayer({
         .catch((err) => {
           if (err.name !== "AbortError") {
             console.error("Playback start error:", err)
-            setError("Audio stream playback failed. Please verify credentials or compliance eligibility.")
+            setError(err.message || "Unable to play audio stream.")
           }
         })
     }
@@ -280,6 +302,7 @@ export default function InBrowserAudioPlayer({
         ref={audioRef}
         src={streamSrc || blobUrl || undefined}
         preload="metadata"
+        crossOrigin="use-credentials"
       />
 
       {/* Header Info */}
