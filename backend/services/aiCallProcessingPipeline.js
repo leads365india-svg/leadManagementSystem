@@ -120,18 +120,60 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     throw new Error(`Call '${callId}' does not exist for tenant '${tenantId}'.`)
   }
 
+  const recordingSizeBytes = call.recording?.mp3SizeBytes || call.recording?.sizeBytes || call.recordingSize || (audioBuffer ? audioBuffer.length : 0)
+  const recordingDuration = call.recording?.duration || call.duration || call.durationSeconds || 0
+
   const hasRecording = Boolean(
     call.hasRecording ||
     call.recording?.status === "stored" ||
     call.recording?.fileId ||
     call.recording?.mp3FileId ||
     call.recordingFileId ||
-    call.recordingUrl
+    call.recordingUrl ||
+    audioBuffer
   )
 
-  if (!hasRecording) {
-    console.warn(`[AIPipeline] Call ${callId} has no stored recording. Skipping intelligence job.`)
-    return { skipped: true, reason: "No stored recording" }
+  const hasValidRecording = hasRecording && (recordingSizeBytes > 0 || audioBuffer) && recordingDuration > 0
+
+  if (!hasValidRecording) {
+    console.warn(`[AIPipeline] Call ${callId} has incomplete recording (size=${recordingSizeBytes}, duration=${recordingDuration}). Marking UNRESOLVED.`)
+    const lastAnalysis = await AICallAnalysis.findOne({ tenantId, callId: callObjId })
+      .sort({ analysisVersion: -1 })
+      .setOptions({ skipTenantFilter: true })
+    const nextAnalysisVersion = lastAnalysis ? lastAnalysis.analysisVersion + 1 : 1
+
+    const unresolvedAnalysis = new AICallAnalysis({
+      tenantId,
+      workspaceId: call.workspaceId || null,
+      callId: callObjId,
+      analysisVersion: nextAnalysisVersion,
+      status: "COMPLETED",
+      callOutcome: "UNRESOLVED",
+      qualificationStatus: "UNRESOLVED",
+      qualificationReason: "INSUFFICIENT_AUDIO_RECORDING",
+      productFit: "UNRESOLVED",
+      crmLeadAction: "DO_NOT_UPDATE",
+      summary: "Full audio recording missing or incomplete (zero bytes or invalid duration).",
+      customerIntent: "Incomplete audio recording",
+      productRelevanceScore: 0.0,
+      leadQualificationScore: 0.0,
+      customerPurchaseIntent: false,
+      isProductRelevant: false,
+      callbackRequested: false,
+      completedAt: new Date(),
+    })
+    await unresolvedAnalysis.save()
+
+    call.metadata = call.metadata || {}
+    call.metadata.aiAnalysisStatus = "COMPLETED"
+    call.metadata.aiAnalysisId = unresolvedAnalysis._id
+    call.metadata.aiCallOutcome = "UNRESOLVED"
+    call.metadata.aiQualificationStatus = "UNRESOLVED"
+    call.metadata.aiAnalyzedAt = Date.now()
+    call.markModified("metadata")
+    await call.save().catch(() => {})
+
+    return { completed: true, analysisId: unresolvedAnalysis._id, callOutcome: "UNRESOLVED", crmLeadAction: "DO_NOT_UPDATE" }
   }
 
   const startTime = Date.now()
@@ -281,6 +323,52 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     .sort({ analysisVersion: -1 })
     .setOptions({ skipTenantFilter: true })
   const nextAnalysisVersion = lastAnalysis ? lastAnalysis.analysisVersion + 1 : 1
+
+  // Transcript Pre-Flight Verification: complete audio with speaker attribution; if missing, empty, or < 20 chars -> UNRESOLVED (crmLeadAction: "DO_NOT_UPDATE")
+  const transcriptText = (transcript?.transcriptText || "").trim()
+  const hasSpeakerAttribution = (Array.isArray(transcript?.segments) && transcript.segments.length > 0 &&
+    transcript.segments.some((s) => s.speaker === "Customer" || s.speaker === "Agent")) ||
+    transcriptText.includes("Customer:") || transcriptText.includes("Agent:") ||
+    transcriptText.includes("Customer") || transcriptText.includes("Agent") ||
+    transcriptText.includes("caller:") || transcriptText.includes("agent:")
+
+  if (!transcript || transcriptText.length < 20 || !hasSpeakerAttribution) {
+    console.warn(`[AIPipeline] Call ${callId} transcript incomplete (< 20 chars or missing speaker attribution). Marking UNRESOLVED.`)
+    const unresolvedAnalysis = new AICallAnalysis({
+      tenantId,
+      workspaceId: call.workspaceId || null,
+      callId: callObjId,
+      transcriptId: transcript?._id || null,
+      analysisVersion: nextAnalysisVersion,
+      status: "COMPLETED",
+      callOutcome: "UNRESOLVED",
+      qualificationStatus: "UNRESOLVED",
+      qualificationReason: "INSUFFICIENT_CALL_DATA",
+      productFit: "UNRESOLVED",
+      crmLeadAction: "DO_NOT_UPDATE",
+      summary: "Call transcript is insufficient or missing speaker attribution (Customer vs Agent).",
+      customerIntent: "Unclear / insufficient transcript",
+      productRelevanceScore: 0.0,
+      leadQualificationScore: 0.0,
+      customerPurchaseIntent: false,
+      isProductRelevant: false,
+      callbackRequested: false,
+      completedAt: new Date(),
+    })
+    await unresolvedAnalysis.save()
+
+    call.metadata = call.metadata || {}
+    call.metadata.aiAnalysisStatus = "COMPLETED"
+    call.metadata.aiAnalysisId = unresolvedAnalysis._id
+    call.metadata.aiTranscriptId = transcript?._id || null
+    call.metadata.aiCallOutcome = "UNRESOLVED"
+    call.metadata.aiQualificationStatus = "UNRESOLVED"
+    call.metadata.aiAnalyzedAt = Date.now()
+    call.markModified("metadata")
+    await call.save().catch(() => {})
+
+    return { completed: true, analysisId: unresolvedAnalysis._id, callOutcome: "UNRESOLVED", crmLeadAction: "DO_NOT_UPDATE" }
+  }
 
   const analysis = new AICallAnalysis({
     tenantId,

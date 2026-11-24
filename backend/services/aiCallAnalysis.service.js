@@ -109,7 +109,7 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
 
   // Check out of scope patterns
   const isRecruitment = /\b(placement agency|hiring ke regarding|recruitment|vacancy|vacancies|job vacancy|job chahiye)\b/i.test(text)
-  const isVendorPitch = /\b(seo service|digital marketing|personal loan|business loan|credit card|website development)\b/i.test(text)
+  const isVendorPitch = /\b(seo service|digital marketing|personal loan|business loan|credit card|website development|mithai|sweets?\s+shop|hamari\s+mithai|catering|retail\s+vendor|printing\s+services?)\b/i.test(text)
   const isWrongNumber = /\b(wrong number|galat number|galat jagah)\b/i.test(text)
   const isOutOfScope = isRecruitment || isVendorPitch || isWrongNumber
 
@@ -128,7 +128,7 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
   }
 
   // Determine outcome based on strict qualification rules
-  let callOutcome = "NOT_INTERESTED"
+  let callOutcome = "UNRESOLVED"
   let summary = ""
   let customerIntent = ""
   let customerNeeds = []
@@ -137,7 +137,7 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
   let followUpRecommendations = []
 
   if (isRecruitment) {
-    callOutcome = "NOT_INTERESTED"
+    callOutcome = "OUT_OF_SCOPE"
     summary = "External placement/recruitment agency representative contacted the organization inquiring about hiring vacancies. The organization representative stated all vacancies are full. Call is out-of-scope and unrelated to company products."
     customerIntent = "Inquiring about job vacancies and offering recruitment services."
     customerNeeds = []
@@ -145,8 +145,8 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     nextSteps = ["No action required. Call is out-of-scope."]
     followUpRecommendations = ["Do not pursue as a CRM lead. Disqualified as non-product call."]
   } else if (isVendorPitch) {
-    callOutcome = "NOT_INTERESTED"
-    summary = "Third-party vendor pitched unrelated services. Prospect expressed no interest."
+    callOutcome = "OUT_OF_SCOPE"
+    summary = "Third-party vendor pitched unrelated goods or services. Prospect expressed no interest."
     customerIntent = "Unrelated vendor sales pitch."
     customerNeeds = []
     productInterests = []
@@ -284,9 +284,9 @@ function generateDeterministicCallAnalysis({ transcript, call = {}, topicMatches
     nextSteps = ["Process onboarding and dispatch documentation."]
     followUpRecommendations = ["Assign implementation specialist."]
   } else {
-    callOutcome = "NOT_INTERESTED"
+    callOutcome = "UNRESOLVED"
     summary = "Conversation had no demonstrable product interest or commercial sales opportunity."
-    customerIntent = "General inquiry without product interest."
+    customerIntent = "General inquiry without clear product interest."
     customerNeeds = []
     productInterests = []
     nextSteps = []
@@ -376,12 +376,13 @@ Your objective is to extract objective, grounded intelligence from this phone ca
 ${businessSection}${topicMatchesSection}
 STRICT GROUNDING & PRODUCT-RELEVANCE RULES:
 1. STRICT SPEAKER ATTRIBUTION: Carefully distinguish who initiated the call and what each party stated.
-   - If an external caller contacts the organization to offer third-party services (e.g., placement/recruitment agency, job applicants, staffing, loans, SEO, vendor supplies), the caller is NOT inquiring about our products.
-   - Never interpret a company representative's polite reply (e.g., "vacancies full hain, WhatsApp daal do", "send details on WhatsApp", "will let you know") as customer purchase intent or genuine product interest.
+   - If an external caller contacts the organization to offer third-party services or goods (e.g., placement/recruitment agency, job applicants, staffing, loans, SEO, food/sweets/mithai shop, catering, printing, vendor supplies), the caller is NOT inquiring about our products.
+   - VENDOR PITCH & THIRD-PARTY SERVICES: If an external caller is pitching, selling, or offering third-party goods, services, products, or supplies (e.g. food/sweets/mithai shop, retail products, catering, printing, personal/business loans, digital marketing, staffing, consultancy, recruitment), even if the company representative politely responds with 'haan', 'theek hai', 'ok', 'WhatsApp kar do', you MUST classify \`callOutcome\` as \`OUT_OF_SCOPE\` (NEVER \`INTERESTED\` or \`FOLLOW_UP_REQUIRED\`). Under no circumstances is a vendor pitch considered customer buying interest.
+   - Never interpret a company representative's polite reply (e.g., "vacancies full hain, WhatsApp daal do", "send details on WhatsApp", "theek hai, WhatsApp kar dijiye", "will let you know") as customer purchase intent or genuine product interest.
 2. PRODUCT RELEVANCE GATE: Compare the call against the Tenant Business & Products context above.
    - Only classify as \`INTERESTED\`, \`FOLLOW_UP_REQUIRED\`, \`CALL_BACK_LATER\`, or \`DEAL_CLOSED\` if a customer is genuinely inquiring about, evaluating, or purchasing the tenant's own approved products/services.
    - Website URLs (such as https://example.com/ or tenant websites) are web links, NOT product names. Do NOT use website URLs as product interests.
-   - If the call is an unrelated pitch (e.g., recruitment agency, hiring inquiry, vendor sales pitch, spam, wrong number), or if the prospect explicitly rejects or has no need, you MUST classify \`callOutcome\` as \`NOT_INTERESTED\` (or \`WRONG_NUMBER\` if wrong party).
+   - If the call is an unrelated pitch (e.g., recruitment agency, hiring inquiry, vendor sales pitch, selling goods/supplies, spam, wrong number), you MUST classify \`callOutcome\` as \`OUT_OF_SCOPE\` (or \`WRONG_NUMBER\` if wrong party). If the prospect explicitly rejects or has no need, classify as \`NOT_INTERESTED\`.
    - Under \`productInterests\`, list ONLY the tenant's approved products/modules from the Tenant Business & Products context above. NEVER put 'Placement and hiring services' or any third-party service under \`productInterests\`. Leave it empty \`[]\` for irrelevant calls.
 3. Label sentiment accurately as POSITIVE, NEUTRAL, NEGATIVE, or MIXED based on actual conversation tone. A polite or neutral caller pitching recruitment is still \`NOT_INTERESTED\` in terms of callOutcome.
 4. Output MUST be valid JSON adhering strictly to this schema:
@@ -453,7 +454,7 @@ STRICT GROUNDING & PRODUCT-RELEVANCE RULES:
   }
 
   const sentiment = VALID_SENTIMENTS.has(parsed.sentiment) ? parsed.sentiment : "NEUTRAL"
-  const callOutcome = VALID_OUTCOMES.has(parsed.callOutcome) ? parsed.callOutcome : "FOLLOW_UP_REQUIRED"
+  const callOutcome = VALID_OUTCOMES.has(parsed.callOutcome) ? parsed.callOutcome : "UNRESOLVED"
 
   const keyMoments = Array.isArray(parsed.keyMoments)
     ? parsed.keyMoments.map((km) => ({

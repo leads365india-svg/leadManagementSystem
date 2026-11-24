@@ -210,7 +210,7 @@ const reportMobileCall = async (req, res) => {
       call_direction === "REJECTED" ||
       call_direction === "missed" ||
       call_direction === "rejected" ||
-      (typeof call_type === "number" && call_type !== 1) || // Native CallLog.Calls.INCOMING_TYPE is 1
+      (typeof call_type === "number" && (call_type === 3 || call_type === 5 || call_type === 6)) || // Native CallLog.Calls.MISSED_TYPE=3, REJECTED_TYPE=5
       String(call_outcome || "").toLowerCase().includes("missed") ||
       String(call_outcome || "").toLowerCase().includes("reject") ||
       String(call_outcome || "").toLowerCase().includes("unanswered") ||
@@ -382,7 +382,7 @@ const reportMobileCall = async (req, res) => {
       const WorkspaceMembership = require("../models/WorkspaceMembership")
       const Workspace = require("../models/Workspace")
 
-      const explicitWorkspaceId = req.body.workspace_id || req.body.workspaceId || req.headers["x-workspace-id"] || null
+      const explicitWorkspaceId = req.body.workspace_id || req.body.workspaceId || req.headers?.["x-workspace-id"] || null
       const isAccountAdmin = user.role === "account_admin" || user.role === "super_admin"
 
       // 1. Identify SIM/DID mapping if present

@@ -102,7 +102,8 @@ const aiCallAnalysisSchema = new mongoose.Schema(
     transcriptId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AITranscript",
-      required: [true, "Transcript ID is required"],
+      required: false,
+      default: null,
       index: true,
     },
     analysisVersion: {
@@ -231,7 +232,7 @@ const aiCallAnalysisSchema = new mongoose.Schema(
         "UNRESOLVED",
         "OUT_OF_SCOPE",
       ],
-      default: "FOLLOW_UP_REQUIRED",
+      default: "UNRESOLVED",
       index: true,
     },
     keyMoments: [keyMomentSchema],

@@ -287,11 +287,12 @@ const login = async (req, res) => {
       var resolvedOrgAccount = null
 
       if (rawOrg) {
-        const cleanOrg = rawOrg.toLowerCase()
+        const cleanOrg = rawOrg.replace(/^https?:\/\//i, "").split("/")[0].split(":")[0].toLowerCase()
         resolvedOrgAccount = await Account.findOne({
           $or: [
             { slug: cleanOrg },
             { accountId: rawOrg },
+            { customDomain: cleanOrg },
           ],
         }).lean()
 
@@ -326,7 +327,9 @@ const login = async (req, res) => {
           tenantId: targetTenantId,
           slug: cleanWs,
           status: { $ne: "archived" },
-        }).lean()
+        })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
 
         if (!targetWorkspace) {
           return res.status(404).json({
@@ -379,6 +382,7 @@ const login = async (req, res) => {
             tenantId: user.tenantId,
             status: "active",
           })
+            .setOptions({ skipTenantFilter: true })
             .select("name slug")
             .lean()
 
@@ -657,7 +661,14 @@ const getMe = async (req, res) => {
 // GET /api/auth/tenant-info?tenantId=ACC-XXXX or ?domain=crm.medical365.in
 const getTenantInfo = async (req, res) => {
   try {
-    const rawTerm = (req.query.tenantId || req.query.domain || req.query.identifier || "").toString().trim()
+    const rawTerm = (
+      req.query.tenantId ||
+      req.query.organization ||
+      req.query.org ||
+      req.query.domain ||
+      req.query.identifier ||
+      ""
+    ).toString().trim()
     if (!rawTerm) {
       return res.status(400).json({
         success: false,
@@ -694,7 +705,9 @@ const getTenantInfo = async (req, res) => {
         tenantId: account.accountId,
         slug: rawWs.toLowerCase(),
         status: { $ne: "archived" },
-      }).lean()
+      })
+        .setOptions({ skipTenantFilter: true })
+        .lean()
       if (ws) {
         return res.status(200).json({
           success: true,

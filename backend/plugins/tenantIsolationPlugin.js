@@ -60,6 +60,19 @@ function tenantIsolationPlugin(schema, options = {}) {
       return
     }
 
+    // Anonymous pre-auth context (e.g. unauthenticated /auth/login or /auth/tenant-info)
+    if (context.mode === "anonymous") {
+      if (
+        (currentQuery[tenantField] !== undefined && currentQuery[tenantField] !== null) ||
+        (currentQuery._id !== undefined && currentQuery._id !== null)
+      ) {
+        return
+      }
+      throw new Error(
+        `Tenant context missing in anonymous mode: Query on tenant-scoped model executed without explicit ${tenantField} or _id.`
+      )
+    }
+
     const effectiveTenantId = context.tenantId
     if (!effectiveTenantId) {
       throw new Error(`Tenant context invalid: Non-superadmin context has no tenantId.`)
@@ -126,6 +139,16 @@ function tenantIsolationPlugin(schema, options = {}) {
       return
     }
 
+    if (context.mode === "anonymous") {
+      const pipeline = this.pipeline()
+      if (pipeline && pipeline.length > 0 && pipeline[0].$match && pipeline[0].$match[tenantField]) {
+        return
+      }
+      throw new Error(
+        `Tenant context missing in anonymous mode: Aggregation on tenant-scoped collection executed without explicit tenant filter.`
+      )
+    }
+
     const effectiveTenantId = context.tenantId
     if (!effectiveTenantId) {
       throw new Error(`Tenant context invalid: Non-superadmin context has no tenantId.`)
@@ -178,6 +201,17 @@ function tenantIsolationPlugin(schema, options = {}) {
       return next(
         new Error(
           `Tenant context missing: Cannot save tenant-scoped document without tenant context or explicit tenantId.`
+        )
+      )
+    }
+
+    if (context.mode === "anonymous") {
+      if (this[tenantField]) {
+        return next()
+      }
+      return next(
+        new Error(
+          `Tenant context missing in anonymous mode: Cannot save tenant-scoped document without explicit ${tenantField}.`
         )
       )
     }

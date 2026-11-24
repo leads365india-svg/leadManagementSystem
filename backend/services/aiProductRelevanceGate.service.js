@@ -37,10 +37,10 @@ const OUT_OF_SCOPE_PATTERNS = [
     regex: /\b(placement\s+agency|hiring\s+ke\s+regarding|hiring\s+chal\s+rahi|recruitment\s+agency|consultancy\s+se|job\s+vacancy|vacancies|job\s+chahiye|resume|cv\s+share|staffing\s+solution|candidates?\s+provide|interview|open\s+positions?|job\s+opening|naukri)\b/i,
     description: "Recruitment/placement agency or hiring inquiry",
   },
-  // Unrelated vendor services (SEO, digital marketing, loans, real estate if not real estate tenant, insurance, office supplies)
+  // Unrelated vendor services (SEO, digital marketing, loans, real estate if not real estate tenant, insurance, office supplies, sweets/food)
   {
     type: "UNRELATED_VENDOR_SALES",
-    regex: /\b(personal\s+loan|business\s+loan|credit\s+card|insurance\s+policy|seo\s+services?|digital\s+marketing\s+agency|website\s+development\s+services?|app\s+development\s+agency|office\s+space\s+for\s+rent|commercial\s+property\s+sale|interior\s+design\s+vendor|printing\s+services?)\b/i,
+    regex: /\b(personal\s+loan|business\s+loan|credit\s+card|insurance\s+policy|seo\s+services?|digital\s+marketing\s+agency|website\s+development\s+services?|app\s+development\s+agency|office\s+space\s+for\s+rent|commercial\s+property\s+sale|interior\s+design\s+vendor|printing\s+services?|mithai|sweets?\s+shop|hamari\s+mithai|catering|retail\s+vendor)\b/i,
     description: "Unrelated vendor sales pitch",
   },
   // Wrong number / personal
@@ -55,6 +55,13 @@ const OUT_OF_SCOPE_PATTERNS = [
 const EXPLICIT_REJECTION_PATTERNS = [
   /\b(not\s+interested|bilkul\s+nahi\s+chahiye|nahi\s+chahiye|software\s+nahi\s+chahiye|already\s+have|pehle\s+se\s+hai|koi\s+requirement\s+nahi|no\s+need|don'?t\s+need|do\s+not\s+call|mat\s+karo\s+call)\b/i,
   /\b(all\s+vacancies\s+full|saari\s+vacancies\s+full|hiring\s+nahi\s+hai|vacanc(?:y|ies)\s+full)\b/i,
+]
+
+// Agent declined or unsupported variant patterns (e.g. "nahi banate", "we don't sell", "not available")
+const AGENT_DECLINED_PATTERNS = [
+  /\b(nahi\s+banate|nahi\s+rakhte|nahi\s+bechte|deal\s+nahi\s+karte|available\s+nahi|out\s+of\s+stock|hum\s+nahi\s+karte|ham\s+nahi\s+karte)\b/i,
+  /\b(we\s+don'?t\s+sell|we\s+don'?t\s+offer|we\s+don'?t\s+make|not\s+available|not\s+offered|we\s+do\s+not\s+deal|we\s+do\s+not\s+sell|we\s+do\s+not\s+offer|we\s+do\s+not\s+make)\b/i,
+  /(?:नहीं\s*बनाते|नहीं\s*रखते|नहीं\s*बेचते|डील\s*नहीं\s*करते|उपलब्ध\s*नहीं|स्टॉक\s*में\s*नहीं)/u,
 ]
 
 // Polite deflection patterns (often accompanying rejections, e.g. "WhatsApp daal do")
@@ -299,8 +306,23 @@ async function evaluateProductRelevanceAndGate({
   let crmLeadAction = "CLOSE_LOST"
   let customerRequestedProductName = customerProductInquiry ? customerProductInquiry.productName : ""
 
-  if (callerIsPitchingOutOfScope) {
-    // RULE C: OUT-OF-SCOPE PITCH (Recruitment, Vendor Pitch, Spam, Wrong Number)
+  const isRawOutOfScope = rawAnalysis.callOutcome === "OUT_OF_SCOPE" && genuineApprovedMatches.length === 0
+  const isAgentDeclined = AGENT_DECLINED_PATTERNS.some((p) => p.test(agentText)) &&
+    !(genuineApprovedMatches.length > 0 && customerText.includes("haan"))
+
+  if (isRawOutOfScope) {
+    // When rawAnalysis.callOutcome === "OUT_OF_SCOPE" and no approved tenant product was requested as buyer
+    qualificationStatus = "DISQUALIFIED"
+    qualificationReason = detectedOutOfScope?.description
+      ? `OUT_OF_SCOPE_${detectedOutOfScope.type}`
+      : "OUT_OF_SCOPE_NON_PRODUCT_CALL"
+    callOutcome = "OUT_OF_SCOPE"
+    productRelevanceScore = 0.0
+    leadQualificationScore = 0.0
+    customerPurchaseIntent = false
+    crmLeadAction = "CLOSE_LOST"
+  } else if (callerIsPitchingOutOfScope) {
+    // RULE C: OUT-OF-SCOPE PITCH (Recruitment, Vendor Pitch, Sweets/Supplies, Spam, Wrong Number)
     qualificationStatus = "DISQUALIFIED"
     qualificationReason = detectedOutOfScope?.description
       ? `OUT_OF_SCOPE_${detectedOutOfScope.type}`
@@ -309,6 +331,15 @@ async function evaluateProductRelevanceAndGate({
     productRelevanceScore = 0.0
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
+    crmLeadAction = "CLOSE_LOST"
+  } else if (isAgentDeclined) {
+    // RULE AGENT REFUSED / UNSUPPORTED VARIANT:
+    // Agent explicitly declined ("nahi banate", "nahi rakhte", "nahi bechte", "deal nahi karte", "out of stock", "not available")
+    qualificationStatus = "DISQUALIFIED"
+    qualificationReason = "AGENT_DECLINED_OR_UNAVAILABLE_PRODUCT"
+    callOutcome = "NOT_INTERESTED"
+    leadQualificationScore = 0.0
+    customerPurchaseIntent = Boolean(hasBuyingIntent)
     crmLeadAction = "CLOSE_LOST"
   } else if (productFit === "UNSUPPORTED") {
     // RULE U: UNSUPPORTED PRODUCT REQUEST (Mandatory Business Rule)
@@ -492,6 +523,8 @@ async function evaluateProductRelevanceAndGate({
   const isQualifyingCallback = isProductRelevant &&
     productFit === "SUPPORTED" &&
     !callerIsPitchingOutOfScope &&
+    !isRawOutOfScope &&
+    !isAgentDeclined &&
     !hasExplicitRejection &&
     callbackIntent.callbackRequested
 
