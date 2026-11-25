@@ -102,7 +102,7 @@ export default function PortalLoginClient({
     initialSearchParams?.workspace ||
     initialSearchParams?.ws ||
     ""
-  const { login, user: authUser, status: authStatus } = useAuth()
+  const { login, user: authUser, status: authStatus, setActiveWorkspace } = useAuth()
 
   // Determine candidate domain status synchronously to prevent flash of generic form
   const [effectiveHost] = useState(() => {
@@ -363,8 +363,12 @@ export default function PortalLoginClient({
           return
         }
         if (response.data.user.targetWorkspace) {
+          const targetWsId = response.data.user.targetWorkspace.id
           if (typeof window !== "undefined") {
-            localStorage.setItem("leadflow_active_workspace", response.data.user.targetWorkspace.id)
+            localStorage.setItem("leadflow_active_workspace", targetWsId)
+          }
+          if (typeof setActiveWorkspace === "function") {
+            setActiveWorkspace(targetWsId)
           }
         }
         toast.success(`Welcome back, ${response.data.user.name}!`)

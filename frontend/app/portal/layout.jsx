@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth-context"
 export default function PortalLayout({ children }) {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, status, loading } = useAuth()
+  const { user, status, loading, workspaces, reloadWorkspaces } = useAuth()
 
   const isLoginPage = pathname === "/portal/login"
 
@@ -17,6 +17,12 @@ export default function PortalLayout({ children }) {
     if (status === "unauthenticated") {
       router.replace("/portal/login")
       return
+    }
+
+    if (status === "authenticated" && user && user.role !== "super_admin") {
+      if (!workspaces || workspaces.length === 0) {
+        reloadWorkspaces(user)
+      }
     }
 
     if (status === "authenticated" && user?.role === "super_admin") {

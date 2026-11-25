@@ -177,7 +177,9 @@ const createStaff = async (req, res) => {
       teamId = null,
       managerId = null,
       maxOpenLeads = 50,
+      password = null,
       temporaryPassword = null,
+      workspaceId = null,
     } = req.body
 
     if (!name || typeof name !== "string" || !name.trim()) {
@@ -237,15 +239,21 @@ const createStaff = async (req, res) => {
       })
     }
 
-    // 3. Generate cryptographic invite token
-    const rawInviteToken = crypto.randomBytes(32).toString("hex")
-    const inviteTokenHash = crypto.createHash("sha256").update(rawInviteToken).digest("hex")
-    const inviteTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+    // 3. Password handling & cryptographic tokens
+    const directPassword = (password || temporaryPassword || "").toString().trim()
+    if (directPassword && directPassword.length < 6) {
+      return res.status(400).json({ success: false, error: "Password must be at least 6 characters" })
+    }
 
-    // If temporary password was not supplied, generate secure random password
-    const passwordToSet = temporaryPassword && temporaryPassword.length >= 6
-      ? temporaryPassword
+    const hasDirectPassword = Boolean(directPassword && directPassword.length >= 6)
+    const passwordToSet = hasDirectPassword
+      ? directPassword
       : `TmpPass_${crypto.randomBytes(8).toString("hex")}!`
+
+    // Do NOT generate or send invite tokens if password was directly set
+    const rawInviteToken = hasDirectPassword ? null : crypto.randomBytes(32).toString("hex")
+    const inviteTokenHash = rawInviteToken ? crypto.createHash("sha256").update(rawInviteToken).digest("hex") : null
+    const inviteTokenExpiresAt = rawInviteToken ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null
 
     const newStaff = new User({
       name: name.trim(),
@@ -275,13 +283,31 @@ const createStaff = async (req, res) => {
       })
     }
 
-    // 5. Construct invite URL
-    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http"
-    const host = req.get("host") || "localhost:3000"
-    const frontendBase = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",")[0].trim().replace(/\/+$/, "") : `${protocol}://${host}`
-    const inviteUrl = `${frontendBase}/invite/accept?token=${rawInviteToken}&email=${encodeURIComponent(cleanEmail)}`
+    // 5. Workspace assignment & membership
+    const effectiveWorkspaceId = workspaceId || req.headers["x-workspace-id"] || req.workspaceId
+    if (effectiveWorkspaceId && targetTenantId) {
+      try {
+        const WorkspaceMembership = require("../models/WorkspaceMembership")
+        await WorkspaceMembership.findOneAndUpdate(
+          { tenantId: targetTenantId, workspaceId: effectiveWorkspaceId, userId: newStaff._id },
+          { $setOnInsert: { status: "active", role: newStaff.role, createdAt: new Date() } },
+          { upsert: true, new: true }
+        )
+      } catch (wsErr) {
+        console.warn("Failed to associate staff with workspace:", wsErr.message)
+      }
+    }
 
-    // Log staff creation event to audit trail
+    // 6. Construct invite URL only for legacy invite workflow
+    let inviteUrl = null
+    if (!hasDirectPassword && rawInviteToken) {
+      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http"
+      const host = req.get("host") || "localhost:3000"
+      const frontendBase = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",")[0].trim().replace(/\/+$/, "") : `${protocol}://${host}`
+      inviteUrl = `${frontendBase}/invite/accept?token=${rawInviteToken}&email=${encodeURIComponent(cleanEmail)}`
+    }
+
+    // Log staff creation event to audit trail (never log passwords)
     await audit.log({
       tenantId: targetTenantId,
       actor: req.user,
@@ -294,30 +320,36 @@ const createStaff = async (req, res) => {
         teamId: newStaff.teamId,
         managerId: newStaff.managerId,
         maxOpenLeads: newStaff.maxOpenLeads,
+        hasDirectPassword,
       },
       req,
     })
 
+    const responseData = {
+      staff: {
+        id: newStaff._id.toString(),
+        name: newStaff.name,
+        email: newStaff.email,
+        phone: newStaff.phone,
+        role: newStaff.role,
+        teamId: newStaff.teamId,
+        managerId: newStaff.managerId,
+        maxOpenLeads: newStaff.maxOpenLeads,
+        isActive: newStaff.isActive,
+        status: newStaff.status,
+        createdAt: newStaff.createdAt,
+      },
+    }
+
+    if (!hasDirectPassword) {
+      responseData.inviteToken = rawInviteToken
+      responseData.inviteUrl = inviteUrl
+    }
+
     res.status(201).json({
       success: true,
       message: "Staff member created successfully",
-      data: {
-        staff: {
-          id: newStaff._id.toString(),
-          name: newStaff.name,
-          email: newStaff.email,
-          phone: newStaff.phone,
-          role: newStaff.role,
-          teamId: newStaff.teamId,
-          managerId: newStaff.managerId,
-          maxOpenLeads: newStaff.maxOpenLeads,
-          isActive: newStaff.isActive,
-          status: newStaff.status,
-          createdAt: newStaff.createdAt,
-        },
-        inviteToken: rawInviteToken,
-        inviteUrl,
-      },
+      data: responseData,
     })
   } catch (error) {
     console.error("Error creating staff member:", error)

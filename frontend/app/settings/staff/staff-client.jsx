@@ -28,6 +28,9 @@ import {
   ExternalLink,
   Sliders,
   Briefcase,
+  Eye,
+  EyeOff,
+  Lock,
 } from "lucide-react"
 
 export default function StaffClient() {
@@ -67,7 +70,10 @@ export default function StaffClient() {
     role: "agent",
     teamId: "",
     maxOpenLeads: 50,
+    password: "",
+    confirmPassword: "",
   })
+  const [showStaffPassword, setShowStaffPassword] = useState(false)
 
   const [teamFormData, setTeamFormData] = useState({
     name: "",
@@ -141,17 +147,40 @@ export default function StaffClient() {
       toast.error("Name and Email are required")
       return
     }
+    if (!formData.password || formData.password.length < 6) {
+      toast.error("Password must be at least 6 characters")
+      return
+    }
+    if (formData.confirmPassword && formData.password !== formData.confirmPassword) {
+      toast.error("Passwords do not match")
+      return
+    }
 
     try {
       setSubmitting(true)
       const res = await apiClient.createStaff({
-        ...formData,
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        role: formData.role,
         teamId: formData.teamId || null,
+        maxOpenLeads: formData.maxOpenLeads,
+        password: formData.password,
       })
 
       if (res.success) {
-        toast.success(`Staff member '${res.data.staff.name}' created!`)
-        setGeneratedInvite(res.data)
+        toast.success(`Staff member '${res.data.staff.name}' created! They can log in immediately.`)
+        setIsAddModalOpen(false)
+        setFormData({
+          name: "",
+          email: "",
+          phone: "",
+          role: "agent",
+          teamId: "",
+          maxOpenLeads: 50,
+          password: "",
+          confirmPassword: "",
+        })
         fetchStaffData()
       }
     } catch (err) {
@@ -614,175 +643,171 @@ export default function StaffClient() {
               </button>
             </div>
 
-            {generatedInvite ? (
-              <div className="p-6 space-y-4">
-                <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
-                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-semibold text-sm">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    Staff Member Created Successfully!
-                  </div>
-                  <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1">
-                    An activation link has been generated. Share this one-time link with{" "}
-                    <strong>{generatedInvite.staff.name}</strong> so they can set their password and start handling leads.
-                  </p>
-                </div>
+            <form onSubmit={handleCreateStaff} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Full Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="e.g. Alex Morgan"
+                  className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    One-Time Set Password Link
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Email Address <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="alex@agency.com"
+                  className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              {/* Password Direct Creation */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Initial Password <span className="text-rose-500">*</span>
                   </label>
-                  <div className="flex items-center gap-2">
+                  <div className="relative">
                     <input
-                      readOnly
-                      value={generatedInvite.inviteUrl}
-                      className="flex-1 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 font-mono text-slate-700 dark:text-slate-300 select-all"
+                      type={showStaffPassword ? "text" : "password"}
+                      required
+                      minLength={6}
+                      value={formData.password}
+                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                      placeholder="Min 6 characters"
+                      className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 pr-10 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                     <button
-                      onClick={() => copyToClipboard(generatedInvite.inviteUrl)}
-                      className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-colors flex items-center gap-1.5"
+                      type="button"
+                      onClick={() => setShowStaffPassword(!showStaffPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+                      aria-label={showStaffPassword ? "Hide password" : "Show password"}
                     >
-                      {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      {copiedLink ? "Copied" : "Copy"}
+                      {showStaffPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
 
-                <div className="pt-4 flex justify-end">
-                  <button
-                    onClick={() => {
-                      setIsAddModalOpen(false)
-                      setGeneratedInvite(null)
-                    }}
-                    className="px-4 py-2 text-sm font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
-                  >
-                    Done
-                  </button>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Confirm Password <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type={showStaffPassword ? "text" : "password"}
+                    required
+                    minLength={6}
+                    value={formData.confirmPassword}
+                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                    placeholder="Re-enter password"
+                    className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
               </div>
-            ) : (
-              <form onSubmit={handleCreateStaff} className="p-6 space-y-4">
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Phone Number (for dialer & call match)
+                </label>
+                <input
+                  type="tel"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  placeholder="+1 555-0199"
+                  className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Full Name <span className="text-rose-500">*</span>
+                    Role <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="e.g. Alex Morgan"
+                  <select
+                    value={formData.role}
+                    onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                     className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Email Address <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="alex@agency.com"
-                    className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Phone Number (for dialer & call match)
-                  </label>
-                  <input
-                    type="tel"
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    placeholder="+1 555-0199"
-                    className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Role <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      value={formData.role}
-                      onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                      className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      {availableRoles.length > 0 ? (
-                        availableRoles.map((r) => (
-                          <option key={r.slug} value={r.slug}>
-                            {r.name} {r.isSystem ? `(${r.slug === "account_admin" ? "Admin" : r.slug})` : "(Custom)"}
-                          </option>
-                        ))
-                      ) : (
-                        <>
-                          <option value="agent">Agent (Sales Rep)</option>
-                          <option value="manager">Manager (Team Lead)</option>
-                          <option value="viewer">Viewer (Read Only)</option>
-                          <option value="account_admin">Account Admin</option>
-                        </>
-                      )}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Department / Team
-                    </label>
-                    <select
-                      value={formData.teamId}
-                      onChange={(e) => setFormData({ ...formData, teamId: e.target.value })}
-                      className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="">Unassigned</option>
-                      {teams.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
+                  >
+                    {availableRoles.length > 0 ? (
+                      availableRoles.map((r) => (
+                        <option key={r.slug} value={r.slug}>
+                          {r.name} {r.isSystem ? `(${r.slug === "account_admin" ? "Admin" : r.slug})` : "(Custom)"}
                         </option>
-                      ))}
-                    </select>
-                  </div>
+                      ))
+                    ) : (
+                      <>
+                        <option value="agent">Agent (Sales Rep)</option>
+                        <option value="manager">Manager (Team Lead)</option>
+                        <option value="viewer">Viewer (Read Only)</option>
+                        <option value="account_admin">Account Admin</option>
+                      </>
+                    )}
+                  </select>
                 </div>
 
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Max Open Leads Capacity
+                    Department / Team
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="1000"
-                    value={formData.maxOpenLeads}
-                    onChange={(e) => setFormData({ ...formData, maxOpenLeads: Number(e.target.value) || 0 })}
+                  <select
+                    value={formData.teamId}
+                    onChange={(e) => setFormData({ ...formData, teamId: e.target.value })}
                     className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <span className="text-[11px] text-slate-500 mt-0.5 block">
-                    Used by automatic assignment rules to balance team workload.
-                  </span>
+                  >
+                    <option value="">Unassigned</option>
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
+              </div>
 
-                <div className="pt-4 flex items-center justify-end gap-2 border-t border-slate-200 dark:border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddModalOpen(false)}
-                    className="px-4 py-2 text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {submitting ? "Creating..." : "Create & Generate Invite"}
-                  </button>
-                </div>
-              </form>
-            )}
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Max Open Leads Capacity
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="1000"
+                  value={formData.maxOpenLeads}
+                  onChange={(e) => setFormData({ ...formData, maxOpenLeads: Number(e.target.value) || 0 })}
+                  className="w-full text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <span className="text-[11px] text-slate-500 mt-0.5 block">
+                  Used by automatic assignment rules to balance team workload.
+                </span>
+              </div>
+
+              <div className="pt-4 flex items-center justify-end gap-2 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="px-4 py-2 text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {submitting ? "Creating..." : "Create Staff Member"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

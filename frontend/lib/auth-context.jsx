@@ -207,8 +207,8 @@ export function AuthProvider({ children }) {
   const lastReloadWorkspacesTsRef = useRef(0)
 
   const reloadWorkspaces = useCallback(async (targetUser = null) => {
-    // If on a login page or super-admin management console, never attempt to fetch tenant workspaces
-    if (typeof window !== "undefined") {
+    // If on a login page or super-admin management console and not authenticating, skip
+    if (typeof window !== "undefined" && !targetUser) {
       const pathname = window.location.pathname || ""
       if (pathname.includes("/login") || pathname.startsWith("/super-admin")) {
         setWorkspaces([])
@@ -261,16 +261,27 @@ export function AuthProvider({ children }) {
           const storedWs = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_workspace") : null
 
           let selected = null
-          if (storedWs === "all" && isOrgAdmin) {
+          const targetWsId = effectiveUser.targetWorkspace?.id
+          const targetWsSlug = effectiveUser.targetWorkspace?.slug
+
+          // Prioritize targetWorkspace if explicitly requested during login
+          if (targetWsId && wsList.some((w) => (w._id?.toString() === targetWsId || w.id?.toString() === targetWsId))) {
+            const matched = wsList.find((w) => (w._id?.toString() === targetWsId || w.id?.toString() === targetWsId))
+            selected = matched ? (matched._id || matched.id).toString() : targetWsId
+          } else if (targetWsSlug && wsList.some((w) => w.slug === targetWsSlug)) {
+            const matched = wsList.find((w) => w.slug === targetWsSlug)
+            selected = matched ? (matched._id || matched.id).toString() : targetWsSlug
+          } else if (storedWs === "all" && isOrgAdmin) {
             selected = "all"
-          } else if (storedWs && wsList.some((w) => w._id?.toString() === storedWs)) {
-            selected = storedWs
+          } else if (storedWs && (wsList.some((w) => w._id?.toString() === storedWs) || wsList.some((w) => w.id?.toString() === storedWs) || wsList.some((w) => w.slug === storedWs))) {
+            const matched = wsList.find((w) => w._id?.toString() === storedWs || w.id?.toString() === storedWs || w.slug === storedWs)
+            selected = matched ? (matched._id || matched.id).toString() : storedWs
           } else {
             if (isOrgAdmin) {
               selected = "all"
             } else {
               const def = wsList.find((w) => w.isDefault) || wsList[0]
-              selected = def ? def._id?.toString() : null
+              selected = def ? (def._id || def.id)?.toString() : null
             }
           }
 
@@ -448,16 +459,20 @@ export function AuthProvider({ children }) {
     try {
       const response = await apiClient.login(credentials)
       if (response.success && response.data?.user) {
-        setUser(response.data.user)
+        const authUser = response.data.user
+        if (authUser.targetWorkspace?.id) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("leadflow_active_workspace", authUser.targetWorkspace.id)
+          }
+          setActiveWorkspaceState(authUser.targetWorkspace.id)
+        }
+        setUser(authUser)
         setStatus("authenticated")
-        const currentPath = typeof window !== "undefined" ? window.location.pathname || "" : ""
         if (
-          response.data.user.role !== "super_admin" &&
-          credentials?.portal !== "super_admin" &&
-          !currentPath.startsWith("/super-admin") &&
-          !currentPath.includes("/login")
+          authUser.role !== "super_admin" &&
+          credentials?.portal !== "super_admin"
         ) {
-          await reloadWorkspaces(response.data.user)
+          await reloadWorkspaces(authUser)
         }
         return response
       } else {
