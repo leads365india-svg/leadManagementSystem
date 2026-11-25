@@ -93,19 +93,15 @@ async function enqueueCallIntelligenceJob({ callId, tenantId, priority = 0, forc
  * Primary worker handler for the AI Call Intelligence pipeline.
  */
 async function processCallIntelligenceJob(job, workerContext = {}) {
-  const payloadFallback = job.payload?.allowFallback !== undefined
-    ? Boolean(job.payload.allowFallback)
-    : (!process.env.GEMINI_API_KEY || process.env.ALLOW_OFFLINE_AI === "true" || process.env.NODE_ENV === "test")
-
   const {
     callId,
     tenantId,
     forceNewTranscript = false,
     httpClient,
-    allowFallback = payloadFallback,
-    apiKey = null,
     audioBuffer = null,
   } = job.payload || {}
+  const allowFallback = job.payload?.allowFallback === true
+  const apiKey = job.payload?.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || null
   if (!callId || !tenantId) {
     throw new Error("Missing callId or tenantId in ai_call.process job payload.")
   }
@@ -235,7 +231,6 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
         audioBuffer,
         apiKey,
         httpClient,
-        allowFallback,
       })
 
       transcript.status = "COMPLETED"

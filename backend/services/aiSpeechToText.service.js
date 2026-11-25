@@ -16,7 +16,7 @@ const { sanitizeErrorMessage, resolveGeminiModel, makeHttpsRequest } = require("
  * - Header-based API key transport ('x-goog-api-key') with zero query param exposure
  * - Zero unsupported sampling parameters (no temperature, top_p, top_k, candidate_count)
  * - Safe error sanitization and timeout protection
- * - Deterministic fallback generator for offline testing and unconfigured environments
+ * - Strict live-only Gemini transcription (zero hardcoded or fabricated transcripts)
  */
 
 const SUPPORTED_AUDIO_MIMES = new Set([
@@ -137,64 +137,6 @@ async function fetchAudioBuffer({ call, timeoutMs = 30000 }) {
 }
 
 /**
- * Deterministic Fallback Transcription Generator.
- * Used for offline testing, mocked tests, or when external API credentials are unconfigured.
- */
-function generateDeterministicTranscript({ call, duration = 30 }) {
-  const callDuration = Math.max(duration, call?.recording?.duration || 30)
-  const direction = call?.direction === "OUTBOUND" ? "outbound" : "inbound"
-
-  const segments = [
-    {
-      speaker: "Agent",
-      startTime: 0,
-      endTime: Math.min(4, callDuration),
-      text: "Hello, good day! Thank you for calling Medical 365 sales support.",
-    },
-    {
-      speaker: "Customer",
-      startTime: Math.min(4.5, callDuration),
-      endTime: Math.min(14, callDuration),
-      text: "Yes hello, I saw your website and want to know about your Hospital Management Software (HMS), patient registration, and OPD IPD billing features.",
-    },
-    {
-      speaker: "Agent",
-      startTime: Math.min(14.5, callDuration),
-      endTime: Math.min(26, callDuration),
-      text: "Certainly! Medical 365 provides complete Hospital Management Software covering OPD, IPD, UHID, pharmacy, and hospital billing. Let me arrange a live hospital software demo and share our HMS software pricing.",
-    },
-    {
-      speaker: "Customer",
-      startTime: Math.min(26.5, callDuration),
-      endTime: Math.min(36, callDuration),
-      text: "That sounds good. Please send the HMS quotation and schedule the hospital software demo for our doctors tomorrow afternoon.",
-    },
-    {
-      speaker: "Agent",
-      startTime: Math.min(36.5, callDuration),
-      endTime: callDuration,
-      text: "Perfect, scheduling your Medical 365 hospital software demo right away. Have a wonderful day!",
-    },
-  ]
-
-  const transcriptText = segments.map((s) => `[${s.speaker}]: ${s.text}`).join("\n")
-
-  return {
-    provider: "deterministic-nlp",
-    model: "offline-rule-engine",
-    language: "en",
-    duration: callDuration,
-    transcriptText,
-    segments,
-    usage: {
-      audioDurationSeconds: callDuration,
-      inputTokens: null,
-      outputTokens: null,
-    },
-  }
-}
-
-/**
  * Transcribes audio via Google Gemini REST API.
  */
 async function transcribeAudioWithGemini({
@@ -219,7 +161,8 @@ RULES:
 1. Support Hindi, English, and mixed Hinglish. Transcribe what was said accurately without replacing vernacular terms.
 2. Accurately identify speakers as "Agent" or "Customer". If uncertain, label as "unknown". Do not fabricate identities.
 3. Provide realistic start and end timestamps in seconds.
-4. Output MUST be valid JSON adhering strictly to this schema:
+4. If the audio is completely silent, empty, or contains no intelligible speech, return segments: [] and transcriptText: '' — NEVER invent or fabricate dialogue.
+5. Output MUST be valid JSON adhering strictly to this schema:
 {
   "language": "hi | en | hi-en | other",
   "duration": <number of seconds>,
@@ -293,7 +236,8 @@ RULES:
       })).filter((s) => s.text.length > 0)
     : []
 
-  const transcriptText = parsed.transcriptText || segments.map((s) => `[${s.speaker}]: ${s.text}`).join("\n")
+  const trimmedParsedText = typeof parsed.transcriptText === "string" ? parsed.transcriptText.trim() : ""
+  const transcriptText = trimmedParsedText || segments.map((s) => `[${s.speaker}]: ${s.text}`).join("\n")
   const usageMetadata = response?.usageMetadata || {}
 
   return {
@@ -313,7 +257,7 @@ RULES:
 
 /**
  * High-level orchestration for Call Speech-to-Text.
- * Handles audio retrieval, validation, Gemini STT execution, and deterministic fallback.
+ * Handles audio retrieval, validation, and strict live Gemini STT execution.
  */
 async function processSpeechToText({
   call,
@@ -321,14 +265,15 @@ async function processSpeechToText({
   mimeType = null,
   apiKey = null,
   httpClient = makeHttpsRequest,
-  allowFallback = false,
 }) {
   if (!call) {
     throw new Error("Call record is required for speech-to-text processing.")
   }
 
   const effectiveKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY
-  const hasLiveKey = Boolean(effectiveKey && effectiveKey.trim())
+  if (!effectiveKey || typeof effectiveKey !== "string" || !effectiveKey.trim()) {
+    throw new Error("Speech-to-text requires GEMINI_API_KEY / GOOGLE_AI_API_KEY; fake fallback transcripts are disabled.")
+  }
 
   let buffer = audioBuffer
   let cleanMime = mimeType
@@ -342,38 +287,27 @@ async function processSpeechToText({
 
   const callDuration = call.recording?.duration || 0
 
-  // If live API key is present, invoke Gemini API
-  if (hasLiveKey) {
-    try {
-      console.log(`ℹ️ Invoking Gemini STT for call ${call._id} (${buffer.length} bytes audio)...`)
-      return await transcribeAudioWithGemini({
-        audioBuffer: buffer,
-        mimeType: cleanMime || "audio/mp3",
-        duration: callDuration,
-        apiKey: effectiveKey,
-        httpClient,
-      })
-    } catch (err) {
-      console.warn(`⚠️ Gemini STT failed for call ${call._id}:`, sanitizeErrorMessage(err.message))
-      if (!allowFallback) {
-        throw err
-      }
-    }
+  console.log(`ℹ️ Invoking Gemini STT for call ${call._id} (${buffer.length} bytes audio)...`)
+  const sttResult = await transcribeAudioWithGemini({
+    audioBuffer: buffer,
+    mimeType: cleanMime || "audio/mp3",
+    duration: callDuration,
+    apiKey: effectiveKey,
+    httpClient,
+  })
+
+  const hasTranscriptText = Boolean(sttResult?.transcriptText && sttResult.transcriptText.trim())
+  const hasSegments = Array.isArray(sttResult?.segments) && sttResult.segments.length > 0
+  if (!hasTranscriptText || !hasSegments) {
+    throw new Error("No intelligible speech detected in recording (silent or empty audio).")
   }
 
-  // Fallback to deterministic transcription if allowed
-  if (allowFallback) {
-    console.log(`ℹ️ Using deterministic fallback transcription for call ${call._id}...`)
-    return generateDeterministicTranscript({ call, duration: callDuration })
-  }
-
-  throw new Error("BLOCKED — API credentials unavailable for speech-to-text and fallback disabled.")
+  return sttResult
 }
 
 module.exports = {
   fetchAudioBuffer,
   transcribeAudioWithGemini,
-  generateDeterministicTranscript,
   processSpeechToText,
   SUPPORTED_AUDIO_MIMES,
   MAX_INLINE_AUDIO_BYTES,

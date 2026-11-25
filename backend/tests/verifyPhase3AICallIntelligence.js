@@ -25,7 +25,7 @@ const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
 const BusinessProduct = require("../models/BusinessProduct")
 const { getJwtSecret } = require("../middleware/authMiddleware")
 
-const { processSpeechToText, transcribeAudioWithGemini, generateDeterministicTranscript } = require("../services/aiSpeechToText.service")
+const { processSpeechToText, transcribeAudioWithGemini } = require("../services/aiSpeechToText.service")
 const { matchApprovedTopicsForCall } = require("../services/aiTopicMatcher.service")
 const { processCallAnalysis, generateDeterministicCallAnalysis } = require("../services/aiCallAnalysis.service")
 const { recordUsage, getTenantUsageStats } = require("../services/aiUsageService")
@@ -356,9 +356,15 @@ async function runTests() {
     const hasUnsupportedSampling = "temperature" in sttGenConfig || "top_p" in sttGenConfig || "top_k" in sttGenConfig || "candidate_count" in sttGenConfig
     record("STT: Unsupported Gemini 3.8 sampling parameters are strictly absent", !hasUnsupportedSampling)
 
-    // Deterministic fallback STT
-    const fallbackSTT = generateDeterministicTranscript({ call: testCallA1, duration: 45 })
-    record("STT: Deterministic fallback generates valid speaker segments", fallbackSTT.segments.length >= 3 && fallbackSTT.provider === "deterministic-nlp")
+    // Live STT orchestration via processSpeechToText (mocked Gemini transport, zero fake fallback)
+    const pipelineSTT = await processSpeechToText({
+      call: testCallA1,
+      audioBuffer: dummyAudioBuffer,
+      mimeType: "audio/wav",
+      apiKey: "test-ai-key-phase3",
+      httpClient: mockSTTHttpClient,
+    })
+    record("STT: processSpeechToText returns live Gemini segments cleanly", pipelineSTT.segments.length === 2 && pipelineSTT.provider === "gemini")
 
     // ---------------------------------------------------------
     // Suite 3: AITranscript Data Model, Segments & Versioning
