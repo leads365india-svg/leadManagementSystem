@@ -454,6 +454,22 @@ const tenantContextMiddleware = async (req, res, next) => {
   })
 }
 
+/**
+ * Applies active workspace filter onto explicit query objects when a controller bypasses
+ * or supplements tenantIsolationPlugin (ensuring single_workspace mode cannot be bypassed).
+ */
+const applyWorkspaceScope = (query = {}, reqOrContext = null) => {
+  const ctx = getTenantContext() || (reqOrContext && reqOrContext.tenantContext ? reqOrContext.tenantContext : reqOrContext)
+  if (!ctx || !query || typeof query !== "object") return query
+
+  if (ctx.mode === "single_workspace" && ctx.workspaceId) {
+    query.workspaceId = ctx.workspaceId
+  } else if (ctx.mode === "unassigned_review" && query.workspaceId === undefined && !query.$or) {
+    query.$or = [{ workspaceId: null }, { workspaceId: { $exists: false } }]
+  }
+  return query
+}
+
 module.exports = {
   tenantStorage,
   runWithTenantContext,
@@ -462,4 +478,5 @@ module.exports = {
   tenantContextMiddleware,
   getAccountWorkspaceModeCached,
   invalidateAccountWorkspaceModeCache,
+  applyWorkspaceScope,
 }

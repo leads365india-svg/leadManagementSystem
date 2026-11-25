@@ -3,7 +3,7 @@ const multer = require("multer")
 const Brochure = require("../models/Brochure")
 const { uploadTenantBrochure } = require("../services/quotationBrochure.service")
 const { getDocumentBuffer } = require("../services/documentStorage.service")
-const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { getEffectiveTenant, applyWorkspaceScope } = require("../middleware/tenantContext")
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -76,17 +76,20 @@ async function listBrochuresHandler(req, res) {
       return res.status(401).json({ success: false, error: "Authentication required" })
     }
 
-    const filter = { tenantId }
+    const filter = {}
+    if (!isSuperAdmin || tenantId) {
+      filter.tenantId = tenantId
+    }
     if (activeOnly === "true") {
       filter.isActive = true
     }
     if (productId && mongoose.Types.ObjectId.isValid(productId)) {
       filter.productId = new mongoose.Types.ObjectId(productId)
     }
+    applyWorkspaceScope(filter, req)
 
     const brochures = await Brochure.find(filter)
       .sort({ isDefault: -1, createdAt: -1 })
-      .setOptions({ skipTenantFilter: true })
       .lean()
 
     return res.status(200).json({
@@ -112,8 +115,13 @@ async function toggleBrochureStatusHandler(req, res) {
       return res.status(401).json({ success: false, error: "Authentication required" })
     }
 
-    const brochure = await Brochure.findOne({ _id: id, tenantId })
-      .setOptions({ skipTenantFilter: true })
+    const query = { _id: id }
+    if (!isSuperAdmin || tenantId) {
+      query.tenantId = tenantId
+    }
+    applyWorkspaceScope(query, req)
+
+    const brochure = await Brochure.findOne(query)
 
     if (!brochure) {
       return res.status(404).json({ success: false, error: "Brochure not found" })
@@ -125,9 +133,9 @@ async function toggleBrochureStatusHandler(req, res) {
 
     if (isDefault === true) {
       await Brochure.updateMany(
-        { tenantId, isDefault: true },
+        { tenantId: brochure.tenantId, isDefault: true },
         { $set: { isDefault: false } }
-      ).setOptions({ skipTenantFilter: true })
+      )
       brochure.isDefault = true
     } else if (isDefault === false) {
       brochure.isDefault = false
@@ -158,14 +166,19 @@ async function downloadBrochureHandler(req, res) {
       return res.status(401).json({ success: false, error: "Authentication required" })
     }
 
-    const brochure = await Brochure.findOne({ _id: id, tenantId })
-      .setOptions({ skipTenantFilter: true })
+    const query = { _id: id }
+    if (!isSuperAdmin || tenantId) {
+      query.tenantId = tenantId
+    }
+    applyWorkspaceScope(query, req)
+
+    const brochure = await Brochure.findOne(query)
 
     if (!brochure) {
       return res.status(404).json({ success: false, error: "Brochure not found" })
     }
 
-    const doc = await getDocumentBuffer({ fileId: brochure.fileId, tenantId })
+    const doc = await getDocumentBuffer({ fileId: brochure.fileId, tenantId: brochure.tenantId })
 
     res.setHeader("Content-Type", "application/pdf")
     res.setHeader("Content-Disposition", `inline; filename="${brochure.originalName}"`)

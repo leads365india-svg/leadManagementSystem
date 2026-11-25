@@ -760,7 +760,8 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
   const trimmedCallId = (callId || "").toString().trim()
   const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
 
-  // 1. Fetch Call with tenant isolation (support clientCallId UUID or _id)
+  // 1. Fetch Call with tenant & workspace isolation (support clientCallId UUID or _id)
+  const { applyWorkspaceScope } = require("../middleware/tenantContext")
   const isSuperAdmin = user && user.role === "super_admin"
   const callQuery = {
     $or: [
@@ -769,11 +770,14 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
     ]
   }
   if (!isSuperAdmin) {
+    if (!tenantId) {
+      return res.status(401).json({ success: false, error: "Tenant context required", code: "TENANT_REQUIRED" })
+    }
     callQuery.tenantId = tenantId
   }
+  applyWorkspaceScope(callQuery)
 
   const call = await Call.findOne(callQuery)
-    .setOptions({ skipTenantFilter: true })
 
   if (!call) {
     return res.status(404).json({
@@ -878,11 +882,58 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
   }
 
 
-  // 5b. GridFS file selection (MP3 vs original source)
+  // 5b. GridFS file selection (MP3 vs original source) with safe legacy fallback when metadata.tenantId is missing
   const toGridFsId = (id) => {
     if (!id) return null
     if (id instanceof mongoose.Types.ObjectId) return id
     return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null
+  }
+
+  const resolveOwnedRecordingFile = async (targetFileId) => {
+    if (!targetFileId) return null
+    const tagged = await bucket.find({ _id: targetFileId, "metadata.tenantId": effectiveTenantId }).next()
+    if (tagged) return tagged
+
+    const untagged = await bucket.find({ _id: targetFileId }).next()
+    if (!untagged) return null
+
+    if (untagged.metadata?.tenantId) {
+      if (String(untagged.metadata.tenantId).trim() !== String(effectiveTenantId).trim()) {
+        console.warn(`[RecordingStorage Security] Blocked cross-tenant GridFS recording ${targetFileId}: file tenant=${untagged.metadata.tenantId}, caller=${effectiveTenantId}`)
+        return null
+      }
+      return untagged
+    }
+
+    // Legacy file missing metadata.tenantId: verify unambiguous ownership via parent Call records
+    const matchingCalls = await Call.find({
+      $or: [
+        { "recording.fileId": targetFileId },
+        { "recording.mp3FileId": targetFileId },
+        { "metadata.fileId": targetFileId.toString() },
+      ],
+    })
+      .setOptions({ skipTenantFilter: true })
+      .select("_id tenantId workspaceId")
+      .lean()
+
+    if (!matchingCalls || matchingCalls.length === 0) {
+      console.warn(`[RecordingStorage Security] Orphaned legacy GridFS recording ${targetFileId} (missing metadata.tenantId and no parent Call). Failing closed.`)
+      return null
+    }
+    const ownerTenants = [...new Set(matchingCalls.map((c) => String(c.tenantId || "").trim()).filter(Boolean))]
+    if (ownerTenants.length !== 1 || ownerTenants[0] !== String(effectiveTenantId).trim()) {
+      console.warn(`[RecordingStorage Security] Ambiguous/foreign legacy GridFS recording ${targetFileId}. Failing closed.`)
+      return null
+    }
+    if (call.workspaceId) {
+      const wsMismatch = matchingCalls.some((c) => c.workspaceId && String(c.workspaceId) !== String(call.workspaceId))
+      if (wsMismatch) {
+        console.warn(`[RecordingStorage Security] Workspace mismatch on legacy GridFS recording ${targetFileId}. Failing closed.`)
+        return null
+      }
+    }
+    return untagged
   }
 
   const origFileId = toGridFsId(call.recording?.fileId)
@@ -891,7 +942,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
   if (wantsOriginal && origFileId) {
     // Client explicitly asked for original unconverted format (e.g. download)
     try {
-      fileToStream = await bucket.find({ _id: origFileId, "metadata.tenantId": effectiveTenantId }).next()
+      fileToStream = await resolveOwnedRecordingFile(origFileId)
       if (fileToStream) {
         mimeType = fileToStream.contentType || fileToStream.metadata?.mimeType || "audio/m4a"
       }
@@ -899,15 +950,15 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
   } else if (mp3FileId) {
     // Converted MP3 is available
     try {
-      fileToStream = await bucket.find({ _id: mp3FileId, "metadata.tenantId": effectiveTenantId }).next()
-      mimeType = "audio/mpeg"
+      fileToStream = await resolveOwnedRecordingFile(mp3FileId)
+      if (fileToStream) mimeType = "audio/mpeg"
     } catch (_) {}
   }
 
   // If MP3 file not found or not yet converted, check original file in GridFS
   if (!fileToStream && origFileId) {
     try {
-      const origFile = await bucket.find({ _id: origFileId, "metadata.tenantId": effectiveTenantId }).next()
+      const origFile = await resolveOwnedRecordingFile(origFileId)
       if (origFile && origFile.length > 0) {
         // Verify genuine MP3 format before assuming no conversion is needed
         const isKnownNonMp3 = ["wav", "amr", "webm", "opus", "pcm_mulaw", "pcm_s16le"].includes(call.recording?.codec) ||
@@ -940,7 +991,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
             // Re-fetch converted MP3
             const updatedMp3Id = toGridFsId(call.recording?.mp3FileId)
             if (updatedMp3Id) {
-              convertedMp3 = await bucket.find({ _id: updatedMp3Id, "metadata.tenantId": effectiveTenantId }).next()
+              convertedMp3 = await resolveOwnedRecordingFile(updatedMp3Id)
             }
           } catch (convErr) {
             console.warn(`[RecordingStorage] On-the-fly conversion notice for call ${call._id}:`, convErr.message)
@@ -971,7 +1022,7 @@ async function streamPlayback({ callId, tenantId, user, rangeHeader, res, query 
       // If the selected file (e.g. mp3) is missing chunks, attempt fallback to original file if it has chunks
       const alternateId = fileToStream._id.toString() === mp3FileId?.toString() ? origFileId : mp3FileId
       if (alternateId) {
-        const altFile = await bucket.find({ _id: alternateId, "metadata.tenantId": effectiveTenantId }).next()
+        const altFile = await resolveOwnedRecordingFile(alternateId)
         if (altFile && altFile.length > 0) {
           const altChunkDoc = await chunksColl.findOne({ files_id: altFile._id }, { projection: { _id: 1 } })
           if (altChunkDoc) {
@@ -1150,42 +1201,54 @@ async function purgeExpiredRecordings({ tenantId = null, retentionDays = DEFAULT
   let purgedCount = 0
   const purgedFileIds = []
 
+  const { runWithTenantContext } = require("../middleware/tenantContext")
   for (const call of expiredCalls) {
-    const fileId = call.recording?.fileId
-    const mp3FileId = call.recording?.mp3FileId
+    if (!call.tenantId) continue
+    await runWithTenantContext(
+      {
+        tenantId: call.tenantId,
+        workspaceId: call.workspaceId || null,
+        mode: call.workspaceId ? "single_workspace" : "standalone",
+        isBackgroundJob: true,
+      },
+      async () => {
+        const fileId = call.recording?.fileId
+        const mp3FileId = call.recording?.mp3FileId
 
-    if (fileId) {
-      try {
-        await bucket.delete(fileId)
-        purgedFileIds.push(fileId.toString())
-      } catch (err) {
-        console.warn(`[Purge] Could not delete original GridFS file ${fileId}:`, err.message)
+        if (fileId) {
+          try {
+            await bucket.delete(fileId)
+            purgedFileIds.push(fileId.toString())
+          } catch (err) {
+            console.warn(`[Purge] Could not delete original GridFS file ${fileId}:`, err.message)
+          }
+        }
+
+        if (mp3FileId && mp3FileId.toString() !== fileId?.toString()) {
+          try {
+            await bucket.delete(mp3FileId)
+            purgedFileIds.push(mp3FileId.toString())
+          } catch (err) {
+            console.warn(`[Purge] Could not delete converted MP3 GridFS file ${mp3FileId}:`, err.message)
+          }
+        }
+
+        call.hasRecording = false
+        call.recording = {
+          fileId: null,
+          mp3FileId: null,
+          sizeBytes: 0,
+          mp3SizeBytes: 0,
+          sha256: "",
+          mp3Sha256: "",
+          status: "expired",
+          conversionStatus: "not_needed",
+          expiresAt: null,
+        }
+        await call.save()
+        purgedCount++
       }
-    }
-
-    if (mp3FileId && mp3FileId.toString() !== fileId?.toString()) {
-      try {
-        await bucket.delete(mp3FileId)
-        purgedFileIds.push(mp3FileId.toString())
-      } catch (err) {
-        console.warn(`[Purge] Could not delete converted MP3 GridFS file ${mp3FileId}:`, err.message)
-      }
-    }
-
-    call.hasRecording = false
-    call.recording = {
-      fileId: null,
-      mp3FileId: null,
-      sizeBytes: 0,
-      mp3SizeBytes: 0,
-      sha256: "",
-      mp3Sha256: "",
-      status: "expired",
-      conversionStatus: "not_needed",
-      expiresAt: null,
-    }
-    await call.save()
-    purgedCount++
+    )
   }
 
   return {

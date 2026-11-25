@@ -247,7 +247,12 @@ class InboundCallRouter {
     const callSid = event.callSid
     if (!callSid) return null
 
-    const session = this.activeCallSessions.get(callSid) || {
+    const existing = this.activeCallSessions.get(callSid)
+    if (existing && existing.tenantId && event.tenantId && existing.tenantId !== event.tenantId) {
+      throw new Error(`Cross-tenant telephony lifecycle event rejected for callSid '${callSid}'`)
+    }
+
+    const session = existing || {
       callSid,
       tenantId: event.tenantId || null,
       provider: event.provider || "mock",

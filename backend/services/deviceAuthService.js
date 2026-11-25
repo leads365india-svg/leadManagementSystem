@@ -163,6 +163,7 @@ async function loginDevice({
     deviceId: device._id.toString(),
     deviceUuid: cleanDeviceUuid,
     tokenType: "device_refresh",
+    tokenVersion: user.tokenVersion || 0,
     nonce: crypto.randomBytes(16).toString("hex"),
   }
 
@@ -256,8 +257,8 @@ async function refreshDeviceToken({ refreshToken, deviceUuid = null }) {
     throw err
   }
 
-  // 2. Immediate revocation check
-  if (device.status === "revoked") {
+  // 2. Immediate revocation check (case-insensitive because Device pre-save uppercases to REVOKED)
+  if (String(device.status || "").toUpperCase() === "REVOKED") {
     const err = new Error("Device access has been revoked by an administrator")
     err.status = 403
     err.statusCode = 403
@@ -284,7 +285,7 @@ async function refreshDeviceToken({ refreshToken, deviceUuid = null }) {
     throw err
   }
 
-  // 4. Verify user active status
+  // 4. Verify user active status, tokenVersion, and active tenant account
   const user = await User.findOne({ _id: userId, tenantId }).setOptions({ skipTenantFilter: true })
   if (!user || user.status === "suspended" || user.isActive === false) {
     const err = new Error("User account is inactive or not found")
@@ -292,6 +293,30 @@ async function refreshDeviceToken({ refreshToken, deviceUuid = null }) {
     err.statusCode = 403
     err.code = "USER_INACTIVE"
     throw err
+  }
+
+  if (
+    decoded.tokenVersion !== undefined &&
+    user.tokenVersion !== undefined &&
+    decoded.tokenVersion !== user.tokenVersion
+  ) {
+    const err = new Error("Refresh token invalidated due to credential rotation")
+    err.status = 401
+    err.statusCode = 401
+    err.code = "REFRESH_TOKEN_INVALIDATED"
+    throw err
+  }
+
+  const Account = require("../models/Account")
+  if (tenantId) {
+    const account = await Account.findOne({ accountId: tenantId }).lean()
+    if (account && account.status === "suspended") {
+      const err = new Error("Agency account is suspended")
+      err.status = 403
+      err.statusCode = 403
+      err.code = "ACCOUNT_SUSPENDED"
+      throw err
+    }
   }
 
   // 5. Rotate Token Pair
@@ -317,6 +342,7 @@ async function refreshDeviceToken({ refreshToken, deviceUuid = null }) {
     deviceId: device._id.toString(),
     deviceUuid: device.deviceUuid,
     tokenType: "device_refresh",
+    tokenVersion: user.tokenVersion || 0,
     nonce: crypto.randomBytes(16).toString("hex"),
   }
 

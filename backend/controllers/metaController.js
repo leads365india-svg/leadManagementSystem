@@ -81,22 +81,20 @@ const handleMetaWebhookNotification = async (req, res) => {
     process.env.META_APP_SECRET ||
     ""
 
-  // 3. Cryptographically verify X-Hub-Signature-256
-  // (In test environments without appSecret configured, verify if signature check is bypassed or provided)
-  if (appSecret) {
-    const rawBody = req.rawBody || JSON.stringify(body)
-    const isAuthentic = metaService.verifyWebhookSignature(rawBody, signature, appSecret)
-    if (!isAuthentic) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden: Invalid X-Hub-Signature-256",
-      })
-    }
-  } else if (signature) {
-    // If signature provided but appSecret missing in environment
+  // 3. Fail closed unless Meta App Secret is configured AND X-Hub-Signature-256 validates cryptographically
+  if (!appSecret) {
     return res.status(403).json({
       success: false,
-      error: "Forbidden: Signature provided but Meta App Secret is not configured in CRM",
+      error: "Forbidden: Meta App Secret is not configured in CRM; webhook signature cannot be verified",
+    })
+  }
+
+  const rawBody = req.rawBody || JSON.stringify(body)
+  const isAuthentic = metaService.verifyWebhookSignature(rawBody, signature, appSecret)
+  if (!isAuthentic) {
+    return res.status(403).json({
+      success: false,
+      error: "Forbidden: Invalid or missing X-Hub-Signature-256",
     })
   }
 

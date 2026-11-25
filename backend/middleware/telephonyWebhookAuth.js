@@ -1,12 +1,16 @@
+const mongoose = require("mongoose")
 const { getTelephonyAdapter } = require("../services/telephony/telephonyAdapterFactory")
 const { inboundCallRouter } = require("../services/telephony/inboundCallRouter.service")
 const telephonyConfigService = require("../services/telephony/telephonyConfig.service")
+const { TenantBusinessProfile } = require("../models/TenantBusinessProfile")
+const Call = require("../models/Call")
 
 /**
  * Telephony Webhook Signature & Security Middleware
  * 
- * Verifies carrier cryptographic webhook signatures (Twilio HMAC-SHA1, Exotel token/HMAC, Mock HMAC-SHA256).
- * Fails closed if signature does not match or if called number is unknown.
+ * Verifies carrier cryptographic webhook signatures (Twilio HMAC-SHA1, Exotel token/HMAC, Mock HMAC-SHA256)
+ * for BOTH inbound calls and status/recording lifecycle callbacks.
+ * Fails closed if tenant/credentials cannot be verified or signature does not match.
  */
 async function telephonyWebhookAuth(req, res, next) {
   try {
@@ -34,9 +38,57 @@ async function telephonyWebhookAuth(req, res, next) {
       })
     }
 
-    // 2. Extract Phone Numbers to Identify Owning Tenant
+    // 2. Identify Owning Tenant via called/forwarded number (inbound) OR CallSid (status/recording)
     const parsedEvent = adapter.parseInboundCallWebhook(req.body || {})
-    const tenantProfile = await inboundCallRouter.resolveTenantByNumber(parsedEvent.to, parsedEvent.forwardedFrom)
+    let tenantProfile = await inboundCallRouter.resolveTenantByNumber(parsedEvent.to, parsedEvent.forwardedFrom)
+
+    const callSid =
+      parsedEvent.callSid ||
+      req.body?.CallSid ||
+      req.body?.callSid ||
+      req.body?.Sid ||
+      req.body?.Call?.Sid ||
+      null
+
+    if ((!tenantProfile || !tenantProfile.tenantId) && callSid) {
+      const activeSession = inboundCallRouter.activeCallSessions.get(callSid)
+      let resolvedTenantId = activeSession?.tenantId || null
+
+      if (!resolvedTenantId && mongoose.connection?.readyState === 1) {
+        const callDoc = await Call.findOne({
+          $or: [
+            { clientCallId: callSid },
+            { "metadata.callSid": callSid },
+            ...(mongoose.Types.ObjectId.isValid(callSid) ? [{ _id: callSid }] : []),
+          ],
+        })
+          .setOptions({ skipTenantFilter: true })
+          .select("tenantId workspaceId")
+          .lean()
+        if (callDoc?.tenantId) {
+          resolvedTenantId = callDoc.tenantId
+        }
+      }
+
+      if (resolvedTenantId) {
+        if (mongoose.connection?.readyState === 1) {
+          tenantProfile = await TenantBusinessProfile.findOne({ tenantId: resolvedTenantId })
+            .setOptions({ skipTenantFilter: true })
+            .lean()
+        }
+        if (!tenantProfile) {
+          tenantProfile = { tenantId: resolvedTenantId }
+        }
+      }
+    }
+
+    // Fail closed for real providers if tenant could not be resolved from verified number or CallSid
+    if (provider !== "mock" && (!tenantProfile || !tenantProfile.tenantId)) {
+      return res.status(401).json({
+        success: false,
+        error: "Telephony webhook authentication failed: unable to resolve verified tenant",
+      })
+    }
 
     // 3. Resolve Decrypted Credentials
     let authToken = ""
@@ -55,6 +107,13 @@ async function telephonyWebhookAuth(req, res, next) {
       } catch (err) {
         console.error("⚠️ Failed to decrypt provider credentials during webhook auth:", err.message)
       }
+    }
+
+    if (!authToken) {
+      return res.status(401).json({
+        success: false,
+        error: "Telephony webhook authentication failed: missing provider credentials",
+      })
     }
 
     // 4. Validate Webhook Cryptographic Signature
@@ -82,6 +141,7 @@ async function telephonyWebhookAuth(req, res, next) {
       adapter,
       parsedEvent,
       tenantProfile,
+      callSid,
     }
 
     next()

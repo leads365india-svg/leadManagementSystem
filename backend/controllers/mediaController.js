@@ -201,17 +201,19 @@ async function getMediaDetails(req, res) {
     const tenantId = req.tenantId || req.user?.tenantId
     const isSuperAdmin = req.user?.role === "super_admin"
 
+    const { applyWorkspaceScope } = require("../middleware/tenantContext")
     const query = {
       $or: [
         { fileId: mediaId },
         ...(mongoose.Types.ObjectId.isValid(mediaId) ? [{ _id: mediaId }] : []),
       ],
     }
-    if (!isSuperAdmin) {
+    if (!isSuperAdmin || tenantId) {
       query.tenantId = tenantId
     }
+    applyWorkspaceScope(query, req)
 
-    const media = await MediaFile.findOne(query).setOptions({ skipTenantFilter: true }).lean()
+    const media = await MediaFile.findOne(query).lean()
     if (!media) {
       return res.status(404).json({
         success: false,
@@ -243,17 +245,19 @@ async function getMediaSignedUrl(req, res) {
     const tenantId = req.tenantId || req.user?.tenantId
     const isSuperAdmin = req.user?.role === "super_admin"
 
+    const { applyWorkspaceScope } = require("../middleware/tenantContext")
     const query = {
       $or: [
         { fileId: mediaId },
         ...(mongoose.Types.ObjectId.isValid(mediaId) ? [{ _id: mediaId }] : []),
       ],
     }
-    if (!isSuperAdmin) {
+    if (!isSuperAdmin || tenantId) {
       query.tenantId = tenantId
     }
+    applyWorkspaceScope(query, req)
 
-    const media = await MediaFile.findOne(query).setOptions({ skipTenantFilter: true }).lean()
+    const media = await MediaFile.findOne(query).lean()
     if (!media) {
       return res.status(404).json({
         success: false,
@@ -300,17 +304,19 @@ async function deleteMedia(req, res) {
     const tenantId = req.tenantId || req.user?.tenantId
     const isSuperAdmin = req.user?.role === "super_admin"
 
+    const { applyWorkspaceScope } = require("../middleware/tenantContext")
     const query = {
       $or: [
         { fileId: mediaId },
         ...(mongoose.Types.ObjectId.isValid(mediaId) ? [{ _id: mediaId }] : []),
       ],
     }
-    if (!isSuperAdmin) {
+    if (!isSuperAdmin || tenantId) {
       query.tenantId = tenantId
     }
+    applyWorkspaceScope(query, req)
 
-    const media = await MediaFile.findOne(query).setOptions({ skipTenantFilter: true })
+    const media = await MediaFile.findOne(query)
     if (!media) {
       return res.status(404).json({
         success: false,
@@ -328,7 +334,7 @@ async function deleteMedia(req, res) {
       }
     }
 
-    await MediaFile.deleteOne({ _id: media._id }).setOptions({ skipTenantFilter: true })
+    await MediaFile.deleteOne({ _id: media._id, tenantId: media.tenantId })
 
     // Audit deletion
     if (audit && typeof audit.log === "function") {

@@ -36,28 +36,27 @@ const handleWhatsAppWebhookNotification = async (req, res) => {
   const body = req.body || {}
   const signature = req.headers["x-hub-signature-256"]
 
-  // 1. Verify cryptographic signature if App Secret is configured
+  // 1. Fail closed unless App Secret is configured AND X-Hub-Signature-256 validates cryptographically
   try {
     const globalConfig = await whatsappService.getGlobalConfig()
-    if (globalConfig.appSecret) {
-      const rawBody = req.rawBody || JSON.stringify(body)
-      const isAuthentic = whatsappService.verifyWebhookSignature(
-        rawBody,
-        signature,
-        globalConfig.appSecret
-      )
-
-      if (!isAuthentic) {
-        return res.status(403).json({
-          success: false,
-          error: "Forbidden: Invalid X-Hub-Signature-256 HMAC signature",
-        })
-      }
-    } else if (signature && process.env.NODE_ENV === "production") {
-      // Signature sent by Meta but App Secret not configured in production CRM
+    if (!globalConfig.appSecret) {
       return res.status(403).json({
         success: false,
-        error: "Forbidden: Signature present but WA_APP_SECRET is not configured",
+        error: "Forbidden: WhatsApp App Secret is not configured; webhook signature cannot be verified",
+      })
+    }
+
+    const rawBody = req.rawBody || JSON.stringify(body)
+    const isAuthentic = whatsappService.verifyWebhookSignature(
+      rawBody,
+      signature,
+      globalConfig.appSecret
+    )
+
+    if (!isAuthentic) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden: Invalid or missing X-Hub-Signature-256 HMAC signature",
       })
     }
   } catch (sigErr) {

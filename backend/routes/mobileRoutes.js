@@ -20,6 +20,7 @@ const {
   mobileDiagnostics,
 } = mobileController
 const { authenticate } = require("../middleware/authMiddleware")
+const { authenticateRecordingUpload } = require("../middleware/recordingAuthMiddleware")
 const {
   authenticateDevice,
   checkAppVersion,
@@ -31,19 +32,25 @@ const router = Router()
 // App version check across mobile endpoints
 router.use(checkAppVersion)
 
-// Hybrid mobile auth middleware: accepts either device_access token or standard mobile agent token
+// Hybrid mobile auth middleware: routes device_access tokens to authenticateDevice (revocation + workspace checks)
+// and standard user tokens to authenticate.
 const authenticateAnyMobile = (req, res, next) => {
   const authHeader = req.headers.authorization
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    // If standard authenticate succeeds, proceed
-    authenticate(req, res, (err) => {
-      if (!err && req.user) return next()
-      // Fallback to authenticateDevice
-      authenticateDevice(req, res, next)
-    })
-  } else {
-    authenticate(req, res, next)
+    const token = authHeader.split(" ")[1]?.trim()
+    try {
+      const jwt = require("jsonwebtoken")
+      const { getJwtSecret } = require("../middleware/authMiddleware")
+      const decoded = jwt.verify(token, getJwtSecret())
+      if (decoded && decoded.tokenType === "device_access") {
+        return authenticateDevice(req, res, next)
+      }
+    } catch (_) {
+      // Let standard authenticate handle invalid/expired tokens consistently
+    }
+    return authenticate(req, res, next)
   }
+  return authenticate(req, res, next)
 }
 
 // ----------------------------------------------------
@@ -96,7 +103,7 @@ router.get("/status", authenticateAnyMobile, (req, res, next) => {
 // ----------------------------------------------------
 // Phase 5: Lead Delta Sync
 // ----------------------------------------------------
-router.get("/leads/sync", authenticate, syncMobileLeads)
+router.get("/leads/sync", authenticateAnyMobile, syncMobileLeads)
 router.get("/leads", authenticateAnyMobile, (req, res, next) => {
   if (req.device && typeof mobileController.syncLeads === "function") {
     return mobileController.syncLeads(req, res, next)
@@ -113,8 +120,8 @@ router.post("/calls", authenticateAnyMobile, (req, res, next) => {
   }
   return reportMobileCall(req, res, next)
 })
-router.patch("/calls/:callId/link-lead", authenticate, linkCallToLead)
-router.get("/calls", authenticate, getMobileCalls)
+router.patch("/calls/:callId/link-lead", authenticateAnyMobile, linkCallToLead)
+router.get("/calls", authenticateAnyMobile, getMobileCalls)
 
 // Phase 15: Recording Ticket
 router.post("/calls/:id/recording-ticket", authenticateAnyMobile, (req, res, next) => {
@@ -127,8 +134,8 @@ router.post("/calls/:id/recording-ticket", authenticateAnyMobile, (req, res, nex
 // ----------------------------------------------------
 // Phase 8: Call Recording Streaming Upload & Playback
 // ----------------------------------------------------
-router.put("/calls/:callId/recording", authenticate, uploadMobileRecording)
-router.get("/calls/:callId/recording", authenticate, streamCallRecording)
+router.put("/calls/:callId/recording", authenticateRecordingUpload, uploadMobileRecording)
+router.get("/calls/:callId/recording", authenticateAnyMobile, streamCallRecording)
 
 // ----------------------------------------------------
 // Phase 9: Agency Privacy, Consent & DNR Policy

@@ -112,7 +112,7 @@ const getJwtSecret = () => {
   return (secret && secret.trim()) || "leadflow-dev-secret-key-min32-chars-for-local-only"
 }
 
-// Extract candidate JWT tokens from cookies or Authorization header
+// Extract candidate JWT tokens from Authorization header, cookies, or query
 const extractCandidateTokens = (req) => {
   const isSuperAdminRoute =
     Boolean(req.originalUrl && req.originalUrl.includes("/super-admin")) ||
@@ -121,6 +121,13 @@ const extractCandidateTokens = (req) => {
     req.headers?.["x-auth-portal"] === "super-admin"
 
   const tokens = []
+  const authHeader = req.headers?.authorization
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const bearer = authHeader.split(" ")[1]?.trim()
+    if (bearer && bearer !== "null" && bearer !== "undefined") {
+      tokens.push(bearer)
+    }
+  }
   if (req.cookies) {
     if (isSuperAdminRoute) {
       if (req.cookies.superadmin_token) {
@@ -136,17 +143,13 @@ const extractCandidateTokens = (req) => {
       }
     }
   }
-  const authHeader = req.headers?.authorization
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    tokens.push(authHeader.split(" ")[1])
-  }
   if (req.query && req.query.token) {
     tokens.push(req.query.token)
   }
-  return tokens
+  return [...new Set(tokens.filter(Boolean))]
 }
 
-// Extract JWT token from cookie or Authorization header (primary)
+// Extract JWT token from Authorization header or cookie (primary)
 const extractToken = (req) => {
   const tokens = extractCandidateTokens(req)
   return tokens.length > 0 ? tokens[0] : null
@@ -174,6 +177,27 @@ const authenticate = async (req, res, next) => {
       } catch (err) {
         lastError = err
       }
+    }
+
+    // Fail closed if explicit Bearer token and client_token cookie are both valid yet belong to different tenants
+    const authHeaderVal = req.headers?.authorization
+    const bearerTok = authHeaderVal && authHeaderVal.startsWith("Bearer ") ? authHeaderVal.split(" ")[1]?.trim() : null
+    const cookieClientTok = req.cookies?.client_token
+    if (decoded && bearerTok && cookieClientTok && bearerTok !== cookieClientTok && decoded.role !== "super_admin") {
+      try {
+        const cookieDecoded = jwt.verify(cookieClientTok, getJwtSecret())
+        if (
+          cookieDecoded &&
+          cookieDecoded.role !== "super_admin" &&
+          String(cookieDecoded.tenantId || "") !== String(decoded.tenantId || "")
+        ) {
+          return res.status(403).json({
+            success: false,
+            error: "Cross-tenant session conflict between Authorization token and cookie. Please log in again.",
+            code: "CROSS_TENANT_SESSION_MISMATCH",
+          })
+        }
+      } catch (_) {}
     }
 
     if (!decoded) {
@@ -272,6 +296,25 @@ const authenticate = async (req, res, next) => {
         req.tenantAccount = account
       }
     } else {
+      // Non-super-admin users are strictly bound to their DB-verified user.tenantId.
+      // Reject any stale or spoofed x-tenant-id / active_tenant_id overrides that disagree.
+      const headerTenant =
+        typeof req.headers?.["x-tenant-id"] === "string" && req.headers["x-tenant-id"].trim()
+          ? req.headers["x-tenant-id"].trim()
+          : null
+      const cookieTenant =
+        typeof req.cookies?.active_tenant_id === "string" && req.cookies.active_tenant_id.trim()
+          ? req.cookies.active_tenant_id.trim()
+          : null
+      if ((headerTenant && headerTenant !== user.tenantId) || (cookieTenant && cookieTenant !== user.tenantId)) {
+        return res.status(403).json({
+          success: false,
+          error: "Cross-tenant access denied: Request tenant context does not match your authenticated session.",
+          code: "CROSS_TENANT_SESSION_MISMATCH",
+          requestedTenantId: headerTenant || cookieTenant,
+          sessionTenantId: user.tenantId || null,
+        })
+      }
       if (user.tenantId) {
         req.tenantId = user.tenantId
       }

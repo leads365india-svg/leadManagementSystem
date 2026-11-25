@@ -8,6 +8,16 @@ const BusinessProduct = require("../models/BusinessProduct")
 const { storeDocument, getDocumentBuffer, deleteDocument } = require("./documentStorage.service")
 const { sendEmail, getTenantEmailTransporter } = require("./emailProvider.service")
 const { getTenantProductKnowledge } = require("./tenantProductKnowledge.service")
+const { getTenantContext } = require("../middleware/tenantContext")
+
+function applyStrictWorkspaceFilter(query, explicitWorkspaceId = null) {
+  const ctx = getTenantContext()
+  const wsId = explicitWorkspaceId || (ctx?.mode === "single_workspace" ? ctx.workspaceId : null)
+  if (wsId) {
+    query.workspaceId = wsId
+  }
+  return query
+}
 
 /**
  * Quotation & Brochure Management Service - Phases 1, 2, 4
@@ -26,7 +36,7 @@ const activeDeleteLocks = new Set()
 /**
  * Uploads a quotation document linked to a specific lead and tenant.
  */
-async function uploadLeadQuotation({ leadId, buffer, originalName, user, tenantId, notes = "" }) {
+async function uploadLeadQuotation({ leadId, buffer, originalName, user, tenantId, workspaceId = null, notes = "" }) {
   if (!leadId || !tenantId) {
     const err = new Error("leadId and tenantId are required")
     err.statusCode = 400
@@ -34,7 +44,7 @@ async function uploadLeadQuotation({ leadId, buffer, originalName, user, tenantI
   }
 
   const cleanTenantId = String(tenantId).trim()
-  const lead = await Lead.findOne({ _id: leadId, tenantId: cleanTenantId })
+  const lead = await Lead.findOne(applyStrictWorkspaceFilter({ _id: leadId, tenantId: cleanTenantId }, workspaceId))
     .setOptions({ skipTenantFilter: true })
 
   if (!lead) {
@@ -124,6 +134,7 @@ async function sendQuotationEmail({
   body,
   user,
   tenantId,
+  workspaceId = null,
   idempotencyKey = null,
 }) {
   if (!quotationId || !leadId || !tenantId) {
@@ -148,8 +159,8 @@ async function sendQuotationEmail({
   try {
     // 1. Fetch Lead & Quotation
     const [lead, quotation] = await Promise.all([
-      Lead.findOne({ _id: leadId, tenantId: cleanTenantId }).setOptions({ skipTenantFilter: true }),
-      Quotation.findOne({ _id: quotationId, leadId, tenantId: cleanTenantId }).setOptions({ skipTenantFilter: true }),
+      Lead.findOne(applyStrictWorkspaceFilter({ _id: leadId, tenantId: cleanTenantId }, workspaceId)).setOptions({ skipTenantFilter: true }),
+      Quotation.findOne(applyStrictWorkspaceFilter({ _id: quotationId, leadId, tenantId: cleanTenantId }, workspaceId)).setOptions({ skipTenantFilter: true }),
     ])
 
     if (!lead) {
@@ -582,7 +593,7 @@ async function getLeadCommunicationHistory(leadId, tenantId) {
  * - For unsent/draft quotations: permanently removes MongoDB record and GridFS file.
  * - For already-sent quotations: marks as voided/archived to preserve compliance and audit history.
  */
-async function deleteLeadQuotation({ quotationId, user, tenantId, isSuperAdmin = false }) {
+async function deleteLeadQuotation({ quotationId, user, tenantId, workspaceId = null, isSuperAdmin = false }) {
   if (!quotationId) {
     const err = new Error("quotationId is required")
     err.statusCode = 400
@@ -602,11 +613,12 @@ async function deleteLeadQuotation({ quotationId, user, tenantId, isSuperAdmin =
   activeDeleteLocks.add(lockKey)
 
   try {
-    // 1. Query quotation ensuring tenant boundary
+    // 1. Query quotation ensuring tenant and workspace boundary
     const query = { _id: quotationId }
     if (!isSuperAdmin || cleanTenantId) {
       query.tenantId = cleanTenantId
     }
+    applyStrictWorkspaceFilter(query, workspaceId)
 
     const quotation = await Quotation.findOne(query).setOptions({ skipTenantFilter: true })
     if (!quotation) {

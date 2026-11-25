@@ -195,6 +195,28 @@ function extractPhoneFromJid(jid, altJid) {
   return normalizePhoneE164(`+${digits}`, "+91") || `+${digits}`
 }
 
+async function resolveSessionWorkspaceId(tenantId, sessionDoc) {
+  if (sessionDoc?.workspaceId) {
+    return sessionDoc.workspaceId
+  }
+  try {
+    const mongoose = require("mongoose")
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) return null
+    const Account = mongoose.models.Account || require("../models/Account")
+    const account = await Account.findOne({ accountId: tenantId }).select("workspaceModeEnabled").lean()
+    if (!account || !account.workspaceModeEnabled) return null
+    const Workspace = mongoose.models.Workspace || require("../models/Workspace")
+    const defaultWs = await Workspace.findOne({ tenantId, status: "active" })
+      .sort({ isDefault: -1, createdAt: 1 })
+      .setOptions({ skipTenantFilter: true })
+      .select("_id")
+      .lean()
+    return defaultWs?._id || null
+  } catch (_) {
+    return null
+  }
+}
+
 /**
  * Handles incoming and phone-sent messages (upsert event)
  */
@@ -252,124 +274,144 @@ async function handleMessagesUpsert(tenantId, messages, sessionDoc) {
         ? new Date(Number(msg.messageTimestamp) * 1000)
         : new Date()
 
-      // 1. Check if an active Lead already exists in this tenant
-      let lead = await Lead.findOne({
-        tenantId,
-        $or: [
-          { phoneNormalized: { $in: phoneVariants } },
-          { phone: { $in: phoneVariants } },
-        ],
-        deletedAt: null,
-      }).setOptions({ skipTenantFilter: true })
+      const targetWorkspaceId = await resolveSessionWorkspaceId(tenantId, sessionDoc)
+      const { runWithTenantContext } = require("../middleware/tenantContext")
 
-      if (lead) {
-        // IF Lead EXISTS: ALWAYS save message and link to that Lead (even if in TenantPhoneContact)
-        lead.lastContactedAt = new Date()
-        await lead.save({ skipTenantFilter: true })
-      } else {
-        // IF Lead DOES NOT exist:
-        // 1. Check WhatsAppSuppressedNumber: if present -> IGNORE (do not auto-create Lead)
-        const isSuppressed = await WhatsAppSuppressedNumber.findOne({
-          tenantId,
-          normalizedPhone: { $in: phoneVariants },
-        }).setOptions({ skipTenantFilter: true }).lean()
-
-        if (isSuppressed) {
-          continue
-        }
-
-        // 2. Check TenantPhoneContact (synced from Android app): if present -> IGNORE (saved contact)
-        const isPhoneContact = await TenantPhoneContact.findOne({
-          tenantId,
-          normalizedPhone: { $in: phoneVariants },
-        }).setOptions({ skipTenantFilter: true }).lean()
-
-        if (isPhoneContact) {
-          continue
-        }
-
-        // 3. Otherwise (unknown unsaved number) -> Create new Lead (source: 'WhatsApp')
-        const callerName = msg.pushName || `WhatsApp Lead (${last10Digits.slice(-4)})`
-        lead = new Lead({
-          name: callerName,
-          phone: normalizedPeerPhone,
-          phoneNormalized: normalizedPeerPhone,
-          tenantId,
-          source: "WhatsApp",
-          status: "New",
-        })
-        await lead.save({ skipTenantFilter: true })
-
-        // Re-link any historical messages unlinked from deleted leads
-        try {
-          await WhatsAppMessage.updateMany(
-            {
-              tenantId,
-              leadId: null,
-              normalizedPhone: { $in: phoneVariants },
-            },
-            {
-              $set: {
-                leadId: lead._id,
-                normalizedPhone: normalizedPeerPhone,
-              },
-            }
-          ).setOptions({ skipTenantFilter: true })
-        } catch (_) {}
-      }
-
-      // Upsert into WhatsAppMessage with tenantId and externalMessageId idempotency
-      const messageDoc = await WhatsAppMessage.findOneAndUpdate(
-        { tenantId, externalMessageId },
+      await runWithTenantContext(
         {
-          $setOnInsert: {
-            tenantId,
-            leadId: lead ? lead._id : null,
-            normalizedPhone: normalizedPeerPhone,
-            phoneNumberId: connectedPhone || "qr-sync",
-            externalMessageId,
-            direction,
-            senderPhone,
-            recipientPhone,
-            messageType,
-            body: messageBody,
-            status: direction === "outbound" ? "sent" : "received",
-            timestamp,
-            rawPayload: {
-              key: msg.key,
-              pushName: msg.pushName,
-              messageTimestamp: msg.messageTimestamp,
-            },
-          },
+          tenantId,
+          workspaceId: targetWorkspaceId,
+          mode: targetWorkspaceId ? "single_workspace" : "standalone",
+          isSuperAdmin: false,
         },
-        { upsert: true, new: true }
-      ).setOptions({ skipTenantFilter: true })
-
-      // Record Activity Timeline event for lead if lead exists
-      if (lead) {
-        try {
-          await activity.record({
+        async () => {
+          // 1. Check if an active Lead already exists in this tenant/workspace
+          let lead = await Lead.findOne({
             tenantId,
-            leadId: lead._id,
-            type: direction === "inbound" ? "whatsapp.message_received" : "whatsapp.message_sent",
-            actor: {
-              name: direction === "inbound" ? (msg.pushName || "WhatsApp Customer") : "WhatsApp Phone Sync",
-              role: "system",
+            ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+            $or: [
+              { phoneNormalized: { $in: phoneVariants } },
+              { phone: { $in: phoneVariants } },
+            ],
+            deletedAt: null,
+          }).setOptions({ skipTenantFilter: true })
+
+          if (lead) {
+            lead.lastContactedAt = new Date()
+            if (targetWorkspaceId && !lead.workspaceId) {
+              lead.workspaceId = targetWorkspaceId
+            }
+            await lead.save({ skipTenantFilter: true })
+          } else {
+            // 1. Check WhatsAppSuppressedNumber: if present -> IGNORE (do not auto-create Lead)
+            const isSuppressed = await WhatsAppSuppressedNumber.findOne({
+              tenantId,
+              normalizedPhone: { $in: phoneVariants },
+            }).setOptions({ skipTenantFilter: true }).lean()
+
+            if (isSuppressed) {
+              return
+            }
+
+            // 2. Check TenantPhoneContact (synced from Android app): if present -> IGNORE (saved contact)
+            const isPhoneContact = await TenantPhoneContact.findOne({
+              tenantId,
+              normalizedPhone: { $in: phoneVariants },
+            }).setOptions({ skipTenantFilter: true }).lean()
+
+            if (isPhoneContact) {
+              return
+            }
+
+            // 3. Otherwise (unknown unsaved number) -> Create new Lead with verified tenantId + workspaceId
+            const callerName = msg.pushName || `WhatsApp Lead (${last10Digits.slice(-4)})`
+            lead = new Lead({
+              name: callerName,
+              phone: normalizedPeerPhone,
+              phoneNormalized: normalizedPeerPhone,
+              tenantId,
+              ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+              source: "WhatsApp",
+              status: "New",
+            })
+            await lead.save({ skipTenantFilter: true })
+
+            // Re-link any historical messages unlinked from deleted leads in this tenant/workspace
+            try {
+              await WhatsAppMessage.updateMany(
+                {
+                  tenantId,
+                  ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+                  leadId: null,
+                  normalizedPhone: { $in: phoneVariants },
+                },
+                {
+                  $set: {
+                    leadId: lead._id,
+                    normalizedPhone: normalizedPeerPhone,
+                    ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+                  },
+                }
+              ).setOptions({ skipTenantFilter: true })
+            } catch (_) {}
+          }
+
+          // Upsert into WhatsAppMessage with tenantId, workspaceId, and externalMessageId idempotency
+          await WhatsAppMessage.findOneAndUpdate(
+            { tenantId, externalMessageId },
+            {
+              $setOnInsert: {
+                tenantId,
+                ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+                leadId: lead ? lead._id : null,
+                normalizedPhone: normalizedPeerPhone,
+                phoneNumberId: connectedPhone || "qr-sync",
+                externalMessageId,
+                direction,
+                senderPhone,
+                recipientPhone,
+                messageType,
+                body: messageBody,
+                status: direction === "outbound" ? "sent" : "received",
+                timestamp,
+                rawPayload: {
+                  key: msg.key,
+                  pushName: msg.pushName,
+                  messageTimestamp: msg.messageTimestamp,
+                },
+              },
             },
-            payload: {
-              externalMessageId,
-              direction,
-              body: messageBody.length > 100 ? `${messageBody.slice(0, 97)}...` : messageBody,
-              messageType,
-              peerPhone: normalizedPeerPhone,
-              timestamp,
-              syncType: "baileys_qr",
-            },
-          })
-        } catch (actErr) {
-          // Non-blocking activity recording
+            { upsert: true, new: true }
+          ).setOptions({ skipTenantFilter: true })
+
+          // Record Activity Timeline event for lead if lead exists
+          if (lead) {
+            try {
+              await activity.record({
+                tenantId,
+                workspaceId: targetWorkspaceId || lead.workspaceId || null,
+                leadId: lead._id,
+                type: direction === "inbound" ? "whatsapp.message_received" : "whatsapp.message_sent",
+                actor: {
+                  name: direction === "inbound" ? (msg.pushName || "WhatsApp Customer") : "WhatsApp Phone Sync",
+                  role: "system",
+                },
+                payload: {
+                  externalMessageId,
+                  direction,
+                  body: messageBody.length > 100 ? `${messageBody.slice(0, 97)}...` : messageBody,
+                  messageType,
+                  peerPhone: normalizedPeerPhone,
+                  timestamp,
+                  syncType: "baileys_qr",
+                },
+              })
+            } catch (actErr) {
+              // Non-blocking activity recording
+            }
+          }
         }
-      }
+      )
     } catch (msgErr) {
       console.warn(`[WhatsAppQR] Error processing message for tenant ${tenantId}:`, msgErr.message)
     }
@@ -403,14 +445,18 @@ async function startSession(tenantId, options = {}) {
     clearTimeout(existing.reconnectTimer)
   }
 
-  // Ensure WhatsAppQrSession document exists in connecting state
+  // Ensure WhatsAppQrSession document exists in connecting state with optional workspace binding
+  const updateFields = {
+    status: "connecting",
+    lastError: null,
+  }
+  if (options.workspaceId) {
+    updateFields.workspaceId = options.workspaceId
+  }
   let sessionDoc = await WhatsAppQrSession.findOneAndUpdate(
     { tenantId: cleanTenantId },
     {
-      $set: {
-        status: "connecting",
-        lastError: null,
-      },
+      $set: updateFields,
     },
     { upsert: true, new: true }
   ).setOptions({ skipTenantFilter: true })

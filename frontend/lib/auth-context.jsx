@@ -292,14 +292,15 @@ export function AuthProvider({ children }) {
         const isEnabled = Boolean(res.workspaceModeEnabled)
         setIsMultiWorkspaceEnabled(isEnabled)
         const rawList = Array.isArray(res.data) ? res.data : []
-        // Enforce tenant boundary on client cache too
-        const wsList = effectiveTenantId
+        // Enforce tenant boundary and exclude any system-managed workspaces on client cache too
+        const wsList = (effectiveTenantId
           ? rawList.filter((w) => !w.tenantId || String(w.tenantId) === String(effectiveTenantId))
           : rawList
+        ).filter((w) => !w.isSystemManaged)
         setWorkspaces(wsList)
 
+        const isOrgAdmin = effectiveUser.role === "account_admin" || effectiveUser.role === "super_admin"
         if (isEnabled && wsList.length > 0) {
-          const isOrgAdmin = effectiveUser.role === "account_admin" || effectiveUser.role === "super_admin"
           let storedWs = null
           if (typeof window !== "undefined" && effectiveTenantId) {
             const wsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
@@ -336,6 +337,9 @@ export function AuthProvider({ children }) {
           if (selected) {
             setActiveWorkspace(selected, effectiveTenantId)
           }
+        } else if (isEnabled && isOrgAdmin) {
+          // Multi-workspace enabled with 0 user-created projects: default Org Admin to consolidated All Projects
+          setActiveWorkspace("all", effectiveTenantId)
         } else {
           setActiveWorkspace(null, effectiveTenantId)
         }
@@ -475,6 +479,9 @@ export function AuthProvider({ children }) {
               : (userData.tenantId || "")
 
           // Non-super-admin must never retain stale leadflow_active_tenant from prior sessions
+          if (userData.role) {
+            localStorage.setItem("leadflow_user_role", userData.role)
+          }
           if (userData.role !== "super_admin") {
             localStorage.removeItem("leadflow_active_tenant")
             setActiveTenantState(null)
@@ -615,6 +622,8 @@ export function AuthProvider({ children }) {
         localStorage.removeItem("leadflow_active_workspace_tenant")
         localStorage.removeItem("leadflow_session_tenant")
         localStorage.removeItem("leadflow_token")
+        localStorage.removeItem("token")
+        localStorage.removeItem("leadflow_user_role")
         try {
           Object.keys(localStorage)
             .filter((k) => k.startsWith("leadflow_active_workspace:"))

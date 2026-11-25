@@ -8,7 +8,7 @@ const {
   deleteLeadQuotation,
 } = require("../services/quotationBrochure.service")
 const { getDocumentBuffer } = require("../services/documentStorage.service")
-const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { getEffectiveTenant, applyWorkspaceScope } = require("../middleware/tenantContext")
 
 // Configure multer memory storage for PDF upload (max 25MB)
 const upload = multer({
@@ -78,10 +78,20 @@ async function sendQuotationHandler(req, res) {
       return res.status(401).json({ success: false, error: "Authentication required" })
     }
 
-    // Resolve quotation first if leadId wasn't passed in body
-    const quotation = await Quotation.findOne({ _id: quotationId }).setOptions({ skipTenantFilter: true })
+    // Resolve quotation strictly scoped to caller tenant & workspace
+    const quotationQuery = { _id: quotationId }
+    if (!isSuperAdmin || tenantId) {
+      quotationQuery.tenantId = tenantId
+    }
+    applyWorkspaceScope(quotationQuery, req)
+
+    const quotation = await Quotation.findOne(quotationQuery)
     if (!quotation) {
       return res.status(404).json({ success: false, error: "Quotation document not found" })
+    }
+
+    if (!isSuperAdmin && quotation.tenantId !== tenantId) {
+      return res.status(403).json({ success: false, error: "Access denied. Cross-tenant quotation access is prohibited." })
     }
 
     const effectiveTenant = tenantId || quotation.tenantId
@@ -136,10 +146,10 @@ async function listLeadQuotationsHandler(req, res) {
     if (!isSuperAdmin || tenantId) {
       query.tenantId = tenantId
     }
+    applyWorkspaceScope(query, req)
 
     const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
-      .setOptions({ skipTenantFilter: true })
       .lean()
 
     return res.status(200).json({
@@ -169,15 +179,20 @@ async function downloadQuotationHandler(req, res) {
     if (!isSuperAdmin || tenantId) {
       query.tenantId = tenantId
     }
+    applyWorkspaceScope(query, req)
 
     const quotation = await Quotation.findOne(query)
-      .setOptions({ skipTenantFilter: true })
 
     if (!quotation) {
       return res.status(404).json({ success: false, error: "Quotation not found" })
     }
 
-    const doc = await getDocumentBuffer({ fileId: quotation.fileId, tenantId: quotation.tenantId })
+    const eff = getEffectiveTenant(req)
+    const doc = await getDocumentBuffer({
+      fileId: quotation.fileId,
+      tenantId: quotation.tenantId,
+      workspaceId: eff.mode === "single_workspace" ? eff.workspaceId : null,
+    })
 
     res.setHeader("Content-Type", "application/pdf")
     res.setHeader("Content-Disposition", `inline; filename="${quotation.originalName}"`)

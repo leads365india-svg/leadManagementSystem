@@ -1,5 +1,6 @@
 const mongoose = require("mongoose")
 const crypto = require("crypto")
+const { getTenantContext } = require("../middleware/tenantContext")
 
 /**
  * Document Storage Service - Phase 1 & 2: Quotations & Brochures
@@ -112,9 +113,99 @@ async function storeDocument({ buffer, originalName, tenantId, category = "quota
 }
 
 /**
- * Reads a PDF document from GridFS ensuring strict tenant ownership.
+ * Verifies ownership of a GridFS document in crm_documents.files.
+ * For legacy files missing metadata.tenantId, resolves ownership strictly and unambiguously
+ * via parent Quotation or Brochure records (never from fileId alone and without rewriting GridFS).
  */
-async function getDocumentBuffer({ fileId, tenantId }) {
+async function verifyDocumentOwnership({ fileDoc, objId, tenantId, workspaceId = null, action = "access" }) {
+  const cleanTenantId = String(tenantId || "").trim()
+  if (!cleanTenantId) {
+    const err = new Error("Access denied. Authenticated tenantId is required.")
+    err.statusCode = 403
+    throw err
+  }
+
+  const ctx = getTenantContext()
+  const effectiveWorkspaceId = workspaceId || (ctx?.mode === "single_workspace" ? ctx.workspaceId : null)
+
+  // Fast path: metadata.tenantId exists on GridFS file
+  if (fileDoc.metadata?.tenantId) {
+    if (String(fileDoc.metadata.tenantId).trim() !== cleanTenantId) {
+      const err = new Error(`Access denied. Cross-tenant document ${action} is prohibited.`)
+      err.statusCode = 403
+      throw err
+    }
+    if (
+      effectiveWorkspaceId &&
+      fileDoc.metadata?.workspaceId &&
+      String(fileDoc.metadata.workspaceId).trim() !== String(effectiveWorkspaceId).trim()
+    ) {
+      const err = new Error(`Access denied. Cross-workspace document ${action} is prohibited.`)
+      err.statusCode = 403
+      throw err
+    }
+    return { source: "gridfs_metadata", tenantId: cleanTenantId }
+  }
+
+  // Legacy path: metadata.tenantId missing -> resolve unambiguously via parent Quotation or Brochure
+  const Quotation = mongoose.models.Quotation || require("../models/Quotation")
+  const Brochure = mongoose.models.Brochure || require("../models/Brochure")
+
+  const fileIdStr = objId.toString()
+  const [matchingQuotations, matchingBrochures] = await Promise.all([
+    Quotation.find({ $or: [{ fileId: objId }, { fileId: fileIdStr }] })
+      .setOptions({ skipTenantFilter: true })
+      .select("_id tenantId workspaceId")
+      .lean(),
+    Brochure.find({ $or: [{ fileId: objId }, { fileId: fileIdStr }] })
+      .setOptions({ skipTenantFilter: true })
+      .select("_id tenantId workspaceId")
+      .lean(),
+  ])
+
+  const parents = [...matchingQuotations, ...matchingBrochures]
+  if (parents.length === 0) {
+    console.warn(`[DocumentStorage Security] Orphaned legacy GridFS file ${fileIdStr} (missing metadata.tenantId and no parent Quotation/Brochure). Failing closed.`)
+    const err = new Error(`Access denied. Legacy document ${action} failed closed: unowned GridFS file ${fileIdStr}.`)
+    err.statusCode = 403
+    err.code = "LEGACY_GRIDFS_UNOWNED"
+    throw err
+  }
+
+  const uniqueTenants = [...new Set(parents.map((p) => String(p.tenantId || "").trim()).filter(Boolean))]
+  if (uniqueTenants.length !== 1 || uniqueTenants[0] !== cleanTenantId) {
+    console.warn(
+      `[DocumentStorage Security] Ambiguous or cross-tenant legacy GridFS file ${fileIdStr}: parentTenants=[${uniqueTenants.join(",")}], caller=${cleanTenantId}. Failing closed.`
+    )
+    const err = new Error(`Access denied. Legacy document ${action} failed closed due to ambiguous or cross-tenant parent ownership.`)
+    err.statusCode = 403
+    err.code = "LEGACY_GRIDFS_AMBIGUOUS"
+    throw err
+  }
+
+  if (effectiveWorkspaceId) {
+    const cleanWs = String(effectiveWorkspaceId).trim()
+    const parentWorkspaces = parents.map((p) => (p.workspaceId ? String(p.workspaceId).trim() : null))
+    const hasExplicitMismatch = parentWorkspaces.some((ws) => ws && ws !== cleanWs)
+    const hasAnyMatchingWs = parentWorkspaces.some((ws) => ws === cleanWs)
+    if (hasExplicitMismatch || !hasAnyMatchingWs) {
+      console.warn(
+        `[DocumentStorage Security] Workspace boundary blocked legacy GridFS file ${fileIdStr}: parentWorkspaces=[${parentWorkspaces.join(",")}], callerWs=${cleanWs}.`
+      )
+      const err = new Error(`Access denied. Cross-workspace legacy document ${action} is prohibited.`)
+      err.statusCode = 403
+      err.code = "LEGACY_GRIDFS_WORKSPACE_MISMATCH"
+      throw err
+    }
+  }
+
+  return { source: "legacy_parent_record", tenantId: cleanTenantId }
+}
+
+/**
+ * Reads a PDF document from GridFS ensuring strict tenant & workspace ownership.
+ */
+async function getDocumentBuffer({ fileId, tenantId, workspaceId = null }) {
   if (!fileId || !tenantId) {
     const err = new Error("fileId and tenantId are required")
     err.statusCode = 400
@@ -131,11 +222,7 @@ async function getDocumentBuffer({ fileId, tenantId }) {
     throw err
   }
 
-  if (fileDoc.metadata?.tenantId && fileDoc.metadata.tenantId !== String(tenantId).trim()) {
-    const err = new Error("Access denied. Cross-tenant document access is prohibited.")
-    err.statusCode = 403
-    throw err
-  }
+  await verifyDocumentOwnership({ fileDoc, objId, tenantId, workspaceId, action: "access" })
 
   const bucket = getDocumentBucket()
   const downloadStream = bucket.openDownloadStream(objId)
@@ -159,9 +246,9 @@ async function getDocumentBuffer({ fileId, tenantId }) {
 }
 
 /**
- * Deletes a PDF document from GridFS ensuring tenant ownership.
+ * Deletes a PDF document from GridFS ensuring tenant & workspace ownership.
  */
-async function deleteDocument({ fileId, tenantId }) {
+async function deleteDocument({ fileId, tenantId, workspaceId = null }) {
   if (!fileId || !tenantId) return false
 
   const objId = new mongoose.Types.ObjectId(fileId)
@@ -170,11 +257,7 @@ async function deleteDocument({ fileId, tenantId }) {
 
   if (!fileDoc) return true
 
-  if (fileDoc.metadata?.tenantId && fileDoc.metadata.tenantId !== String(tenantId).trim()) {
-    const err = new Error("Access denied. Cannot delete another tenant's document.")
-    err.statusCode = 403
-    throw err
-  }
+  await verifyDocumentOwnership({ fileDoc, objId, tenantId, workspaceId, action: "delete" })
 
   const bucket = getDocumentBucket()
   await bucket.delete(objId)

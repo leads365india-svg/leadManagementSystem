@@ -3,7 +3,7 @@ const Device = require("../models/Device")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const { getJwtSecret } = require("./authMiddleware")
-const { runWithTenantContext } = require("./tenantContext")
+const { tenantContextMiddleware } = require("./tenantContext")
 
 /**
  * Leads-365 CRM - Mobile Device Authentication & Versioning Middleware (Phase 15)
@@ -111,7 +111,7 @@ const authenticateDevice = async (req, res, next) => {
       })
     }
 
-    if (device.status === "revoked") {
+    if (String(device.status || "").toUpperCase() === "REVOKED") {
       return res.status(403).json({
         success: false,
         code: "DEVICE_REVOKED",
@@ -129,6 +129,18 @@ const authenticateDevice = async (req, res, next) => {
       })
     }
 
+    if (
+      decoded.tokenVersion !== undefined &&
+      user.tokenVersion !== undefined &&
+      decoded.tokenVersion !== user.tokenVersion
+    ) {
+      return res.status(401).json({
+        success: false,
+        code: "TOKEN_REVOKED",
+        error: "Device session has been invalidated. Please log in again.",
+      })
+    }
+
     if (user.status === "suspended" || user.isActive === false) {
       return res.status(403).json({
         success: false,
@@ -138,6 +150,14 @@ const authenticateDevice = async (req, res, next) => {
     }
 
     // 3. Verify Tenant Account Status
+    if (!user.tenantId && user.role !== "super_admin") {
+      return res.status(401).json({
+        success: false,
+        code: "TENANT_REQUIRED",
+        error: "Authenticated mobile user has no associated tenantId",
+      })
+    }
+
     if (user.tenantId && user.role !== "super_admin") {
       const account = await Account.findOne({ accountId: user.tenantId }).lean()
       if (account && account.status === "suspended") {
@@ -152,14 +172,57 @@ const authenticateDevice = async (req, res, next) => {
     // Update last seen timestamp asynchronously
     Device.updateOne({ _id: device._id }, { $set: { lastSeenAt: new Date() } }).exec().catch(() => {})
 
-    req.user = user
+    req.user = {
+      _id: user._id,
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      tenantId: user.tenantId,
+      status: user.status,
+      isActive: user.isActive,
+    }
     req.device = device
     req.tenantId = user.tenantId
 
-    // Run downstream handlers inside ambient tenant context
-    runWithTenantContext(user.tenantId, () => {
-      next()
-    })
+    // Enforce workspace binding: client-supplied workspace IDs must not override device binding
+    // and must always be validated against parent tenant + WorkspaceMembership via tenantContextMiddleware.
+    const headerWorkspaceId =
+      typeof req.headers["x-workspace-id"] === "string" && req.headers["x-workspace-id"].trim()
+        ? req.headers["x-workspace-id"].trim()
+        : null
+    const bodyWorkspaceId =
+      (req.body && typeof req.body.workspace_id === "string" ? req.body.workspace_id.trim() : null) ||
+      (req.body && typeof req.body.workspaceId === "string" ? req.body.workspaceId.trim() : null) ||
+      null
+
+    if (headerWorkspaceId && bodyWorkspaceId && headerWorkspaceId !== bodyWorkspaceId) {
+      return res.status(403).json({
+        success: false,
+        code: "WORKSPACE_MISMATCH",
+        error: "Access denied: Conflicting workspace identifiers supplied in header and body.",
+      })
+    }
+
+    const deviceBoundWorkspaceId = device.workspaceId
+      ? device.workspaceId.toString()
+      : (decoded.workspaceId ? String(decoded.workspaceId).trim() : null)
+    const clientRequestedWorkspaceId = headerWorkspaceId || bodyWorkspaceId
+
+    if (deviceBoundWorkspaceId && clientRequestedWorkspaceId && deviceBoundWorkspaceId !== clientRequestedWorkspaceId) {
+      return res.status(403).json({
+        success: false,
+        code: "DEVICE_WORKSPACE_MISMATCH",
+        error: "Access denied: Device is bound to a different workspace.",
+      })
+    }
+
+    if (!req.headers["x-workspace-id"] && (deviceBoundWorkspaceId || bodyWorkspaceId)) {
+      req.headers["x-workspace-id"] = deviceBoundWorkspaceId || bodyWorkspaceId
+    }
+
+    // Enforce full workspace context and WorkspaceMembership validation via tenantContextMiddleware
+    return tenantContextMiddleware(req, res, next)
   } catch (err) {
     console.error("[DeviceAuthMiddleware Error]:", err)
     return res.status(500).json({

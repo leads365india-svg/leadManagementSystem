@@ -89,9 +89,10 @@ export default function WorkspacesClient() {
 
       if (wsRes?.success) {
         const rawList = Array.isArray(wsRes.data) ? wsRes.data : []
-        const scopedList = currentTenantId
+        const scopedList = (currentTenantId
           ? rawList.filter((w) => !w.tenantId || String(w.tenantId) === String(currentTenantId))
           : rawList
+        ).filter((w) => !w.isSystemManaged)
         setWorkspaces(scopedList)
         setIsModeEnabled(Boolean(wsRes.workspaceModeEnabled))
       } else {
@@ -142,7 +143,7 @@ export default function WorkspacesClient() {
       slug: "",
       description: "",
       primaryColor: "#4f46e5",
-      isDefault: workspaces.length === 0,
+      isDefault: false,
       status: "active",
     })
     setShowCreateModal(true)
@@ -190,6 +191,11 @@ export default function WorkspacesClient() {
       }
 
       if (res.success) {
+        if (!editingWorkspace && currentTenantId && res.data?.tenantId && String(res.data.tenantId) !== String(currentTenantId)) {
+          toast.error("Security warning: Created workspace tenant mismatch detected. Reloading session.")
+          await loadData()
+          return
+        }
         toast.success(editingWorkspace ? "Workspace updated" : "Workspace created")
         setShowCreateModal(false)
         setEditingWorkspace(null)
@@ -513,6 +519,15 @@ export default function WorkspacesClient() {
               Configured Workspaces ({workspaces.length})
             </h2>
           </div>
+
+          {workspaces.length === 0 && (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center space-y-2">
+              <p className="text-sm font-semibold text-slate-800">No manually created projects yet</p>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                All existing organization leads and calls remain available in <strong>All Projects</strong>. Create a workspace only when you want a dedicated project partition.
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {workspaces.map((ws) => (

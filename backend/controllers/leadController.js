@@ -1360,6 +1360,7 @@ const getLeadCalls = async (req, res) => {
     const phoneCandidates = [lead.phone, lead.phoneNormalized].filter(
       (p) => typeof p === "string" && p.trim().length > 0
     )
+    const { applyWorkspaceScope } = require("../middleware/tenantContext")
     const callQuery = {
       $or: [
         { leadId: id },
@@ -1372,11 +1373,13 @@ const getLeadCalls = async (req, res) => {
           : []),
       ],
     }
-    if (lead.tenantId && req.user.role !== "super_admin") {
+    if (lead.tenantId) {
       callQuery.tenantId = lead.tenantId
+    } else if (req.user.role !== "super_admin") {
+      callQuery.tenantId = req.user.tenantId
     }
+    applyWorkspaceScope(callQuery, req)
     const calls = await Call.find(callQuery)
-      .setOptions({ skipTenantFilter: true })
       .sort({ startTimeMs: -1, createdAt: -1 })
       .lean()
 

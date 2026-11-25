@@ -37,7 +37,8 @@ const getPlatformBaseUrl = () => {
 
 // Generate the authoritative access URL for a workspace
 const buildWorkspaceAccessUrl = (orgSlug, ws) => {
-  if (ws && ws.customDomain && (ws.domainStatus === "verified" || ws.domainStatus === "active")) {
+  if (!ws || ws.isSystemManaged) return null
+  if (ws.customDomain && (ws.domainStatus === "verified" || ws.domainStatus === "active")) {
     return `https://${ws.customDomain}/portal/login`
   }
   const base = getPlatformBaseUrl()
@@ -72,6 +73,30 @@ const resolveVerifiedTenantId = (req) => {
         isSuperAdmin: false,
       }
     }
+
+    // Reject any client-supplied tenant overrides (headers, cookies, body, query) that do not match user.tenantId
+    const claimedTenants = [
+      req.headers?.["x-tenant-id"],
+      req.cookies?.active_tenant_id,
+      req.body?.tenantId,
+      req.body?.accountId,
+      req.query?.tenantId,
+      req.query?.accountId,
+    ]
+      .filter((v) => typeof v === "string" && v.trim())
+      .map((v) => v.trim())
+
+    const mismatched = claimedTenants.find((claimed) => claimed !== userTenantId)
+    if (mismatched) {
+      return {
+        error: "Cross-tenant access denied: Client-supplied tenant does not match authenticated user session.",
+        code: "CROSS_TENANT_SESSION_MISMATCH",
+        status: 403,
+        tenantId: null,
+        isSuperAdmin: false,
+      }
+    }
+
     return { tenantId: userTenantId, isSuperAdmin: false }
   }
 
@@ -114,6 +139,7 @@ const listWorkspaces = async (req, res) => {
       workspaces = await Workspace.find({
         tenantId,
         status: { $ne: "archived" },
+        isSystemManaged: { $ne: true },
       })
         .sort({ isDefault: -1, createdAt: 1 })
         .lean()
@@ -129,6 +155,7 @@ const listWorkspaces = async (req, res) => {
         _id: { $in: allowedIds },
         tenantId,
         status: "active",
+        isSystemManaged: { $ne: true },
       })
         .sort({ isDefault: -1, createdAt: 1 })
         .lean()
@@ -141,8 +168,8 @@ const listWorkspaces = async (req, res) => {
       }))
     }
 
-    // Defense-in-depth: strictly ensure every workspace document belongs to verified tenantId
-    const isolatedWorkspaces = workspaces.filter((w) => String(w.tenantId) === String(tenantId))
+    // Defense-in-depth: strictly ensure every workspace document belongs to verified tenantId and exclude system-managed records
+    const isolatedWorkspaces = workspaces.filter((w) => String(w.tenantId) === String(tenantId) && !w.isSystemManaged)
 
     // Include account-level workspaceModeEnabled flag and slug
     const account = await Account.findOne({ accountId: tenantId }).select("workspaceModeEnabled slug companyName accountId").lean()
@@ -231,6 +258,7 @@ const createWorkspace = async (req, res) => {
       description: description ? String(description).trim() : "",
       branding: branding || {},
       isDefault: Boolean(isDefault),
+      isSystemManaged: false,
       settings: settings || {},
       status: "active",
     })
@@ -805,33 +833,8 @@ const toggleWorkspaceMode = async (req, res) => {
     account.workspaceModeEnabled = enabled
     await account.save()
 
-    // If enabling for the first time and no workspaces exist, create default workspace
-    if (enabled) {
-      const existingCount = await Workspace.countDocuments({ tenantId, status: "active" })
-      if (existingCount === 0) {
-        const defaultWs = new Workspace({
-          tenantId,
-          name: account.companyName || "Primary Workspace",
-          slug: "primary",
-          description: "Default operational workspace",
-          isDefault: true,
-          status: "active",
-        })
-        await defaultWs.save()
-
-        // Enroll admin
-        await WorkspaceMembership.create({
-          tenantId,
-          workspaceId: defaultWs._id,
-          userId: req.user.id || req.user._id,
-          role: "workspace_admin",
-          permissions: ["*"],
-          status: "active",
-        })
-      }
-    }
-
-    // Invalidate in-memory tenant context cache immediately
+    // Never automatically create a visible default/primary workspace when enabling multi-workspace mode.
+    // Organizations start with All Projects (consolidated tenant data) and only see explicitly created workspaces.
     invalidateAccountWorkspaceModeCache(tenantId)
 
     return res.status(200).json({
@@ -1129,10 +1132,11 @@ const getMasterDashboard = async (req, res) => {
     const startOfDay = new Date()
     startOfDay.setHours(0, 0, 0, 0)
 
-    // 1. Fetch all active or configured workspaces in this tenant
+    // 1. Fetch all active or configured user-created workspaces in this tenant (exclude system-managed defaults)
     const workspaces = await Workspace.find({
       tenantId,
       status: { $ne: "archived" },
+      isSystemManaged: { $ne: true },
     })
       .sort({ isDefault: -1, createdAt: 1 })
       .lean()

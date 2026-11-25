@@ -138,13 +138,15 @@ const handleInboundCallWebhook = async (req, res) => {
  */
 const handleCallStatusWebhook = async (req, res) => {
   try {
-    const provider = req.params.provider || req.body?.provider || "mock"
-    const callSid = req.body?.CallSid || req.body?.callSid
+    const provider = req.telephony?.provider || req.params.provider || req.body?.provider || "mock"
+    const callSid = req.telephony?.callSid || req.body?.CallSid || req.body?.callSid
     const status = req.body?.CallStatus || req.body?.status || req.body?.event
+    const tenantId = req.telephony?.tenantProfile?.tenantId || null
 
     if (callSid) {
       inboundCallRouter.handleLifecycleEvent({
         callSid,
+        tenantId,
         provider,
         status,
         durationSeconds: Number(req.body?.CallDuration || req.body?.duration || 0),
@@ -167,12 +169,14 @@ const handleCallStatusWebhook = async (req, res) => {
  */
 const handleRecordingStatusWebhook = async (req, res) => {
   try {
-    const provider = req.params.provider || req.body?.provider || "mock"
-    const adapter = getTelephonyAdapter(provider)
+    const provider = req.telephony?.provider || req.params.provider || req.body?.provider || "mock"
+    const adapter = req.telephony?.adapter || getTelephonyAdapter(provider)
     const recordingEvent = adapter.parseRecordingWebhook(req.body || {})
+    const tenantId = req.telephony?.tenantProfile?.tenantId || null
 
     inboundCallRouter.handleLifecycleEvent({
       callSid: recordingEvent.callSid,
+      tenantId,
       provider,
       status: "recording_completed",
       recordingUrl: recordingEvent.recordingUrl,

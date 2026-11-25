@@ -14,6 +14,12 @@ const whatsAppQrSessionSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       enum: ["disconnected", "qr_ready", "connecting", "connected"],

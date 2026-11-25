@@ -126,9 +126,10 @@ export default function ClientPortalDashboard() {
   }, [activeWorkspace])
 
   useEffect(() => {
-    if (isMultiWorkspaceEnabled && !activeWorkspace) return
+    const isAdmin = (user?.role || authUser?.role) === "account_admin" || (user?.role || authUser?.role) === "super_admin"
+    if (isMultiWorkspaceEnabled && !activeWorkspace && !isAdmin && workspaces && workspaces.length > 0) return
     loadData()
-  }, [loadData, isMultiWorkspaceEnabled, activeWorkspace])
+  }, [loadData, isMultiWorkspaceEnabled, activeWorkspace, user, authUser, workspaces])
 
   useEffect(() => {
     const handleWorkspaceChange = () => {

@@ -25,12 +25,12 @@ router.put("/config", authenticate, requireAccountAdmin, updateTelephonyConfig)
 router.post("/webhook/inbound", telephonyWebhookAuth, handleInboundCallWebhook)
 router.post("/webhook/inbound/:provider", telephonyWebhookAuth, handleInboundCallWebhook)
 
-// --- Call Status Callbacks ---
-router.post("/webhook/status", handleCallStatusWebhook)
-router.post("/webhook/status/:provider", handleCallStatusWebhook)
+// --- Call Status Callbacks (Guarded by Carrier Signature Auth) ---
+router.post("/webhook/status", telephonyWebhookAuth, handleCallStatusWebhook)
+router.post("/webhook/status/:provider", telephonyWebhookAuth, handleCallStatusWebhook)
 
-// --- Call Recording Callbacks ---
-router.post("/webhook/recording", handleRecordingStatusWebhook)
-router.post("/webhook/recording/:provider", handleRecordingStatusWebhook)
+// --- Call Recording Callbacks (Guarded by Carrier Signature Auth) ---
+router.post("/webhook/recording", telephonyWebhookAuth, handleRecordingStatusWebhook)
+router.post("/webhook/recording/:provider", telephonyWebhookAuth, handleRecordingStatusWebhook)
 
 module.exports = router

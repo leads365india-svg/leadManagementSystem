@@ -32,11 +32,17 @@ class ApiClient {
         const currentHost = window.location?.hostname || ""
         const sessionTenant = localStorage.getItem("leadflow_session_tenant") || ""
 
-        // Attach active tenant ID header on administrative / non-white-label platforms only
+        // Attach active tenant ID header on administrative / non-white-label platforms ONLY for super_admin sessions
         if (!precomputedHeaders["x-tenant-id"] && !precomputedHeaders["X-Tenant-Id"] && !isWhiteLabelDomain(currentHost)) {
           const activeTenant = localStorage.getItem("leadflow_active_tenant")
+          const storedRole = localStorage.getItem("leadflow_user_role") || ""
           if (activeTenant && activeTenant.trim()) {
-            precomputedHeaders["x-tenant-id"] = activeTenant.trim()
+            if (!storedRole || storedRole === "super_admin") {
+              precomputedHeaders["x-tenant-id"] = activeTenant.trim()
+            } else {
+              // Non-super-admin must never send stale x-tenant-id overrides
+              localStorage.removeItem("leadflow_active_tenant")
+            }
           }
         }
 
@@ -321,6 +327,19 @@ class ApiClient {
 
   // --- Authentication Endpoints ---
   async login(credentials) {
+    this.inFlightRequests.clear()
+    if (typeof window !== "undefined") {
+      try {
+        // Always wipe stale token/tenant/workspace headers before logging into a new session
+        localStorage.removeItem("token")
+        localStorage.removeItem("leadflow_token")
+        localStorage.removeItem("leadflow_active_tenant")
+        localStorage.removeItem("leadflow_session_tenant")
+        localStorage.removeItem("leadflow_active_workspace")
+        localStorage.removeItem("leadflow_active_workspace_tenant")
+        localStorage.removeItem("leadflow_user_role")
+      } catch (_) {}
+    }
     const res = await this.request("/auth/login", {
       method: "POST",
       body: JSON.stringify(credentials),
@@ -328,15 +347,25 @@ class ApiClient {
     if (res?.data?.token && typeof window !== "undefined") {
       try {
         localStorage.setItem("leadflow_token", res.data.token)
+        if (res?.data?.user?.role) {
+          localStorage.setItem("leadflow_user_role", res.data.user.role)
+        }
       } catch (_) {}
     }
     return res
   }
 
   async logout() {
+    this.inFlightRequests.clear()
     try {
       if (typeof window !== "undefined") {
         localStorage.removeItem("leadflow_token")
+        localStorage.removeItem("token")
+        localStorage.removeItem("leadflow_active_tenant")
+        localStorage.removeItem("leadflow_session_tenant")
+        localStorage.removeItem("leadflow_active_workspace")
+        localStorage.removeItem("leadflow_active_workspace_tenant")
+        localStorage.removeItem("leadflow_user_role")
       }
     } catch (_) {}
     return this.request("/auth/logout", {

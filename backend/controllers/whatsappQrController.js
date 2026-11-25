@@ -48,7 +48,8 @@ const connectQrSession = async (req, res) => {
       })
     }
 
-    const sessionData = await whatsappQrService.startSession(tenantId)
+    const workspaceId = req.tenantContext?.mode === "single_workspace" ? req.tenantContext.workspaceId : null
+    const sessionData = await whatsappQrService.startSession(tenantId, { workspaceId })
 
     // Audit log
     try {
@@ -128,8 +129,8 @@ const disconnectQrSession = async (req, res) => {
  */
 const syncContacts = async (req, res) => {
   try {
-    const { tenantId: effectiveTenantId } = getEffectiveTenant(req)
-    const tenantId = effectiveTenantId || req.tenantId || req.body?.tenantId
+    const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+    const tenantId = isSuperAdmin ? (effectiveTenantId || req.tenantId || req.body?.tenantId) : (effectiveTenantId || req.tenantId)
     if (!tenantId) {
       return res.status(400).json({
         success: false,

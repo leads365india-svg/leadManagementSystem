@@ -312,7 +312,7 @@ async function reportMobileCall({ tenantId, agentId, deviceId, callData = {} }) 
  * Pre-flight verification for audio recording upload ticket (Phase 15 / 16 integration).
  * Verifies call exists, belongs to agent, is linked to a lead, and DNR is not active.
  */
-async function issueRecordingTicket({ tenantId, agentId, callId }) {
+async function issueRecordingTicket({ tenantId, agentId, callId, deviceId = null, tokenVersion = undefined, workspaceId = null }) {
   if (!callId) {
     const err = new Error("Missing callId")
     err.statusCode = 400
@@ -330,15 +330,18 @@ async function issueRecordingTicket({ tenantId, agentId, callId }) {
   if (tenantId) {
     callQuery.tenantId = tenantId
   }
+  if (workspaceId) {
+    callQuery.workspaceId = workspaceId
+  }
   if (agentId) {
     callQuery.agentId = agentId
   }
 
-  let call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
-  // If not found with agentId, try without agentId (e.g. tenant-wide match or reassigned)
+  let call = await Call.findOne(callQuery)
+  // If not found with agentId, try without agentId (e.g. tenant-wide match or reassigned) while still respecting ambient tenant/workspace scope
   if (!call && agentId) {
     delete callQuery.agentId
-    call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
+    call = await Call.findOne(callQuery)
   }
 
   if (!call) {
@@ -377,14 +380,19 @@ async function issueRecordingTicket({ tenantId, agentId, callId }) {
 
   // Issue short-lived recording upload ticket (valid for 15-30 minutes)
   const jwtSecret = getJwtSecret()
+  const ticketPayload = {
+    callId: call._id.toString(),
+    leadId: call.leadId.toString(),
+    tenantId: call.tenantId || tenantId,
+    workspaceId: call.workspaceId ? call.workspaceId.toString() : (workspaceId || null),
+    agentId: agentId.toString(),
+    purpose: "recording_upload",
+  }
+  if (deviceId) ticketPayload.deviceId = deviceId.toString()
+  if (tokenVersion !== undefined) ticketPayload.tokenVersion = tokenVersion
+
   const ticketToken = jwt.sign(
-    {
-      callId: call._id.toString(),
-      leadId: call.leadId.toString(),
-      tenantId,
-      agentId: agentId.toString(),
-      purpose: "recording_upload",
-    },
+    ticketPayload,
     jwtSecret,
     {
       subject: "recording_upload_ticket",

@@ -61,16 +61,35 @@ const login = async (req, res) => {
 
     let user = null
 
-    // 1. If target tenant is supplied (e.g. from portal URL or custom domain), prioritize tenant-scoped user query
+    // 1. If target tenant is supplied (e.g. from portal URL or custom domain), enforce tenant-scoped user lookup
     if (cleanTenantId) {
       user = await User.findOne({
         email: normalizedIdentifier,
         tenantId: cleanTenantId,
       }).select("+password")
+
+      // Fail closed on explicit tenant mismatch unless authenticating on Super Admin portal
+      if (!user && !isSuperAdminIdentifier) {
+        const otherTenantUser = await User.findOne({ email: normalizedIdentifier }).select("_id role tenantId").lean()
+        if (otherTenantUser && otherTenantUser.role !== "super_admin") {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied: This account does not belong to the specified organization or portal.",
+            code: "CROSS_TENANT_LOGIN_MISMATCH",
+          })
+        }
+        if (otherTenantUser && otherTenantUser.role === "super_admin") {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied: Super Admin credentials cannot be used for tenant portal login.",
+            code: "SUPER_ADMIN_PORTAL_MISMATCH",
+          })
+        }
+      }
     }
 
-    // 2. Global lookup by email
-    if (!user) {
+    // 2. Global lookup by email only when no explicit tenant was constrained (or for super admin check)
+    if (!user && (!cleanTenantId || isSuperAdminIdentifier)) {
       user = await User.findOne({ email: normalizedIdentifier }).select("+password")
     }
 
@@ -327,6 +346,7 @@ const login = async (req, res) => {
           tenantId: targetTenantId,
           slug: cleanWs,
           status: { $ne: "archived" },
+          isSystemManaged: { $ne: true },
         })
           .setOptions({ skipTenantFilter: true })
           .lean()
@@ -381,6 +401,7 @@ const login = async (req, res) => {
             _id: activeMemberships[0].workspaceId,
             tenantId: user.tenantId,
             status: "active",
+            isSystemManaged: { $ne: true },
           })
             .setOptions({ skipTenantFilter: true })
             .select("name slug")
@@ -710,6 +731,7 @@ const getTenantInfo = async (req, res) => {
         tenantId: account.accountId,
         slug: rawWs.toLowerCase(),
         status: { $ne: "archived" },
+        isSystemManaged: { $ne: true },
       })
         .setOptions({ skipTenantFilter: true })
         .lean()

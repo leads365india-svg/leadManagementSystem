@@ -376,48 +376,65 @@ async function completeCallbackTask({
     throw new Error(`FollowUp '${followUpId}' not found`)
   }
 
-  followUp.status = "completed"
-  followUp.completedAt = new Date()
-  followUp.completedBy = user?.name || user?.email || "User"
-  followUp.completionNotes = typeof completionNotes === "string" ? completionNotes.trim() : ""
-  await followUp.save()
-
-  // Recalculate lead nextFollowUpDate
-  if (followUp.leadId) {
-    const remainingPending = await FollowUp.findOne({
+  const { runWithTenantContext } = require("../middleware/tenantContext")
+  await runWithTenantContext(
+    {
       tenantId: followUp.tenantId,
-      leadId: followUp.leadId,
-      status: { $in: ["pending", "due"] },
-      deletedAt: null,
-    }).sort({ scheduledAt: 1 }).setOptions({ skipTenantFilter: true })
+      workspaceId: followUp.workspaceId || null,
+      mode: followUp.workspaceId ? "single_workspace" : "standalone",
+      isSuperAdmin: false,
+      isBackgroundJob: true,
+    },
+    async () => {
+      followUp.status = "completed"
+      followUp.completedAt = new Date()
+      followUp.completedBy = user?.name || user?.email || "User"
+      followUp.completionNotes = typeof completionNotes === "string" ? completionNotes.trim() : ""
+      await followUp.save()
 
-    const updateFields = remainingPending
-      ? { nextFollowUpDate: remainingPending.scheduledAt, followUpStatus: remainingPending.status === "due" ? "due" : "scheduled" }
-      : { nextFollowUpDate: null, followUpStatus: "completed" }
+      // Recalculate lead nextFollowUpDate strictly within the follow-up's tenant/workspace
+      if (followUp.leadId) {
+        const remainingPending = await FollowUp.findOne({
+          tenantId: followUp.tenantId,
+          leadId: followUp.leadId,
+          status: { $in: ["pending", "due"] },
+          deletedAt: null,
+        })
+          .sort({ scheduledAt: 1 })
+          .setOptions({ skipTenantFilter: true })
 
-    await Lead.findByIdAndUpdate(followUp.leadId, updateFields).catch(() => {})
+        const updateFields = remainingPending
+          ? { nextFollowUpDate: remainingPending.scheduledAt, followUpStatus: remainingPending.status === "due" ? "due" : "scheduled" }
+          : { nextFollowUpDate: null, followUpStatus: "completed" }
 
-    // Record discrete activity
-    try {
-      await activity.record({
-        tenantId: followUp.tenantId,
-        leadId: followUp.leadId,
-        type: "lead.followup_completed",
-        actor: {
-          name: user?.name || "User",
-          role: user?.role || "user",
-          email: user?.email || "",
-          id: user?._id || user?.id || null,
-        },
-        payload: {
-          followUpId: followUp._id.toString(),
-          title: followUp.title,
-          completionNotes: followUp.completionNotes,
-          completedAt: followUp.completedAt,
-        },
-      })
-    } catch (_) {}
-  }
+        await Lead.findOneAndUpdate(
+          { _id: followUp.leadId, tenantId: followUp.tenantId },
+          updateFields
+        ).catch(() => {})
+
+        // Record discrete activity
+        try {
+          await activity.record({
+            tenantId: followUp.tenantId,
+            leadId: followUp.leadId,
+            type: "lead.followup_completed",
+            actor: {
+              name: user?.name || "User",
+              role: user?.role || "user",
+              email: user?.email || "",
+              id: user?._id || user?.id || null,
+            },
+            payload: {
+              followUpId: followUp._id.toString(),
+              title: followUp.title,
+              completionNotes: followUp.completionNotes,
+              completedAt: followUp.completedAt,
+            },
+          })
+        } catch (_) {}
+      }
+    }
+  )
 
   return {
     success: true,
@@ -468,9 +485,10 @@ async function checkAndDispatchDueReminders() {
   let dueNowCount = 0
   let overdueCount = 0
 
+  const { runWithTenantContext } = require("../middleware/tenantContext")
+
   try {
     // 1. Scan for 5-minute pre-reminders
-    // Status pending, scheduledAt/callbackAt <= now + 5 mins, > now, reminderSentAt is null
     const upcomingTasks = await FollowUp.find({
       status: "pending",
       deletedAt: null,
@@ -482,24 +500,36 @@ async function checkAndDispatchDueReminders() {
     }).populate("leadId").setOptions({ skipTenantFilter: true })
 
     for (const task of upcomingTasks) {
-      task.reminderSentAt = new Date()
-      await task.save()
-
-      const agentId = await resolveFollowUpAgentId(task)
-      if (agentId) {
-        await pushNotificationService.sendCallbackReminderNotification({
-          followUp: task,
-          lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
-          agentId: String(agentId),
+      if (!task.tenantId || task.tenantId === "__system__") continue
+      const wsId = task.workspaceId || task.leadId?.workspaceId || null
+      await runWithTenantContext(
+        {
           tenantId: task.tenantId,
-          reminderType: "5_MINUTES_BEFORE",
-        }).catch(() => {})
-      }
-      reminder5MinCount++
+          workspaceId: wsId,
+          mode: wsId ? "single_workspace" : "standalone",
+          isSuperAdmin: false,
+          isBackgroundJob: true,
+        },
+        async () => {
+          task.reminderSentAt = new Date()
+          await task.save()
+
+          const agentId = await resolveFollowUpAgentId(task)
+          if (agentId) {
+            await pushNotificationService.sendCallbackReminderNotification({
+              followUp: task,
+              lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
+              agentId: String(agentId),
+              tenantId: task.tenantId,
+              reminderType: "5_MINUTES_BEFORE",
+            }).catch(() => {})
+          }
+          reminder5MinCount++
+        }
+      )
     }
 
     // 2. Scan for Due-Now reminders
-    // Status pending or due, scheduledAt/callbackAt <= now, >= oneDayAgo, dueNotificationSentAt is null
     const dueTasks = await FollowUp.find({
       status: { $in: ["pending", "due"] },
       deletedAt: null,
@@ -511,30 +541,45 @@ async function checkAndDispatchDueReminders() {
     }).populate("leadId").setOptions({ skipTenantFilter: true })
 
     for (const task of dueTasks) {
-      task.status = "due"
-      task.dueNotificationSentAt = new Date()
-      await task.save()
-
-      // Update lead followUpStatus
-      if (task.leadId?._id) {
-        await Lead.findByIdAndUpdate(task.leadId._id, { followUpStatus: "due" }).catch(() => {})
-      }
-
-      const agentId = await resolveFollowUpAgentId(task)
-      if (agentId) {
-        await pushNotificationService.sendCallbackReminderNotification({
-          followUp: task,
-          lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
-          agentId: String(agentId),
+      if (!task.tenantId || task.tenantId === "__system__") continue
+      const wsId = task.workspaceId || task.leadId?.workspaceId || null
+      await runWithTenantContext(
+        {
           tenantId: task.tenantId,
-          reminderType: "DUE_NOW",
-        }).catch(() => {})
-      }
-      dueNowCount++
+          workspaceId: wsId,
+          mode: wsId ? "single_workspace" : "standalone",
+          isSuperAdmin: false,
+          isBackgroundJob: true,
+        },
+        async () => {
+          task.status = "due"
+          task.dueNotificationSentAt = new Date()
+          await task.save()
+
+          // Update lead followUpStatus strictly inside the record's verified tenant & workspace
+          if (task.leadId?._id) {
+            await Lead.findOneAndUpdate(
+              { _id: task.leadId._id, tenantId: task.tenantId },
+              { followUpStatus: "due" }
+            ).catch(() => {})
+          }
+
+          const agentId = await resolveFollowUpAgentId(task)
+          if (agentId) {
+            await pushNotificationService.sendCallbackReminderNotification({
+              followUp: task,
+              lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
+              agentId: String(agentId),
+              tenantId: task.tenantId,
+              reminderType: "DUE_NOW",
+            }).catch(() => {})
+          }
+          dueNowCount++
+        }
+      )
     }
 
     // 3. Scan for Overdue reminders
-    // Status pending or due, scheduledAt/callbackAt <= tenMinutesAgo, >= oneDayAgo, overdueNotificationSentAt is null
     const overdueTasks = await FollowUp.find({
       status: { $in: ["pending", "due"] },
       deletedAt: null,
@@ -546,20 +591,33 @@ async function checkAndDispatchDueReminders() {
     }).populate("leadId").setOptions({ skipTenantFilter: true })
 
     for (const task of overdueTasks) {
-      task.overdueNotificationSentAt = new Date()
-      await task.save()
-
-      const agentId = await resolveFollowUpAgentId(task)
-      if (agentId) {
-        await pushNotificationService.sendCallbackReminderNotification({
-          followUp: task,
-          lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
-          agentId: String(agentId),
+      if (!task.tenantId || task.tenantId === "__system__") continue
+      const wsId = task.workspaceId || task.leadId?.workspaceId || null
+      await runWithTenantContext(
+        {
           tenantId: task.tenantId,
-          reminderType: "OVERDUE",
-        }).catch(() => {})
-      }
-      overdueCount++
+          workspaceId: wsId,
+          mode: wsId ? "single_workspace" : "standalone",
+          isSuperAdmin: false,
+          isBackgroundJob: true,
+        },
+        async () => {
+          task.overdueNotificationSentAt = new Date()
+          await task.save()
+
+          const agentId = await resolveFollowUpAgentId(task)
+          if (agentId) {
+            await pushNotificationService.sendCallbackReminderNotification({
+              followUp: task,
+              lead: task.leadId || { name: task.customerName, phone: task.customerPhone },
+              agentId: String(agentId),
+              tenantId: task.tenantId,
+              reminderType: "OVERDUE",
+            }).catch(() => {})
+          }
+          overdueCount++
+        }
+      )
     }
   } catch (err) {
     console.error("[AICallbackScheduling] Error in checkAndDispatchDueReminders:", err.message)

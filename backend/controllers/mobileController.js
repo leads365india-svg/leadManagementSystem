@@ -11,6 +11,7 @@ const User = require("../models/User")
 const Account = require("../models/Account")
 const Device = require("../models/Device")
 const { getJwtSecret } = require("../middleware/authMiddleware")
+const { getEffectiveTenant, applyWorkspaceScope } = require("../middleware/tenantContext")
 
 // Mask sensitive phone number for server-side logging
 const maskPhone = (phone) => {
@@ -49,11 +50,21 @@ const syncMobileLeads = async (req, res) => {
 
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500)
 
-    // Build lead query strictly scoped to tenant and agent assignment
-    const leadQuery = { isTest: { $ne: true } }
-    if (user.role !== "super_admin" && tenantId) {
-      leadQuery.tenantId = tenantId
+    // Build lead query strictly scoped to tenant, workspace, and agent assignment
+    const { tenantId: effectiveTenant } = getEffectiveTenant(req)
+    const scopedTenantId = effectiveTenant || tenantId
+    if (!scopedTenantId && user.role !== "super_admin") {
+      return res.status(401).json({
+        success: false,
+        error: "Tenant context required to sync leads.",
+      })
     }
+
+    const leadQuery = { isTest: { $ne: true } }
+    if (scopedTenantId) {
+      leadQuery.tenantId = scopedTenantId
+    }
+    applyWorkspaceScope(leadQuery, req)
 
     if (!isTenantAdmin) {
       // Regular agent: only retrieve leads assigned to their user ID or agent name
@@ -256,16 +267,20 @@ const reportMobileCall = async (req, res) => {
         })
       }
 
-      // 2. Query existing leads in caller's tenant
-      const matchingLeads = await Lead.find({
-        tenantId: targetTenantId,
-        deletedAt: null,
-        $or: [
-          { phoneNormalized: normPhone },
-          { phone: phone_number.trim() },
-          { "metadata.normalizedPhone": normPhone },
-        ],
-      }).setOptions({ skipTenantFilter: true })
+      // 2. Query existing leads in caller's tenant (and active workspace in strict mode)
+      const matchingLeadQuery = applyWorkspaceScope(
+        {
+          tenantId: targetTenantId,
+          deletedAt: null,
+          $or: [
+            { phoneNormalized: normPhone },
+            { phone: phone_number.trim() },
+            { "metadata.normalizedPhone": normPhone },
+          ],
+        },
+        req
+      )
+      const matchingLeads = await Lead.find(matchingLeadQuery).setOptions({ skipTenantFilter: true })
 
       if (matchingLeads.length === 1) {
         // Single unambiguous match: attach call to existing lead (preserve name, avoid duplicate)
@@ -391,15 +406,19 @@ const reportMobileCall = async (req, res) => {
       // 2. Identify existing CRM lead's workspace
       let leadWorkspaceId = lead?.workspaceId ? lead.workspaceId.toString() : null
       if (!leadWorkspaceId && (phone_number || normPhone)) {
-        const phoneMatch = await Lead.findOne({
-          tenantId: targetTenantId,
-          $or: [
-            { phoneNormalized: normPhone },
-            { phone: phone_number.trim() },
-            { "metadata.normalizedPhone": normPhone },
-          ],
-          deletedAt: null,
-        })
+        const phoneMatchQuery = applyWorkspaceScope(
+          {
+            tenantId: targetTenantId,
+            $or: [
+              { phoneNormalized: normPhone },
+              { phone: phone_number.trim() },
+              { "metadata.normalizedPhone": normPhone },
+            ],
+            deletedAt: null,
+          },
+          req
+        )
+        const phoneMatch = await Lead.findOne(phoneMatchQuery)
           .setOptions({ skipTenantFilter: true })
           .select("_id workspaceId")
           .lean()
@@ -423,6 +442,7 @@ const reportMobileCall = async (req, res) => {
           _id: { $in: agentMemberships.map((m) => m.workspaceId) },
           isDefault: true,
           status: "active",
+          isSystemManaged: { $ne: true },
         })
           .setOptions({ skipTenantFilter: true })
           .lean()
@@ -592,9 +612,19 @@ const reportMobileCall = async (req, res) => {
       await targetLead.save()
     }
 
-    // 2. Idempotency Check: if clientCallId already processed, update existing record (upsert)
-    const existingCall = await Call.findOne({ clientCallId: trimmedClientCallId }).setOptions({ skipTenantFilter: true })
+    // 2. Idempotency Check: enforce strict tenant boundary when resolving clientCallId
+    const existingCall = await Call.findOne({ clientCallId: trimmedClientCallId, tenantId: targetTenantId })
     if (existingCall) {
+      if (resolvedWorkspaceId && existingCall.workspaceId && existingCall.workspaceId.toString() !== resolvedWorkspaceId.toString()) {
+        const isAccountAdmin = user.role === "account_admin" || user.role === "super_admin"
+        if (!isAccountAdmin) {
+          return res.status(403).json({
+            success: false,
+            code: "FORBIDDEN_WORKSPACE_ACCESS",
+            error: "Access denied: Existing call belongs to a different workspace.",
+          })
+        }
+      }
       let isUpdated = false
       if (call_outcome && call_outcome !== "Connected" && existingCall.callOutcome !== call_outcome) {
         existingCall.callOutcome = call_outcome
@@ -665,6 +695,12 @@ const reportMobileCall = async (req, res) => {
       ],
       startTimeMs: { $gte: minTime, $lte: maxTime },
       callDirection: { $in: directionValues },
+    }
+    if (req.tenantContext?.mode === "single_workspace") {
+      const scopedWs = resolvedWorkspaceId || req.tenantContext.workspaceId
+      if (scopedWs) {
+        candidateQuery.workspaceId = scopedWs
+      }
     }
 
     const candidateCalls = await Call.find(candidateQuery).setOptions({ skipTenantFilter: true })
@@ -803,9 +839,15 @@ const getMobileCalls = async (req, res) => {
     }
 
     const query = {}
-    if (user.role !== "super_admin" && user.tenantId) {
+    if (user.role !== "super_admin") {
+      if (!user.tenantId) {
+        return res.status(401).json({ success: false, error: "Tenant context missing" })
+      }
       query.tenantId = user.tenantId
+    } else if (req.tenantId) {
+      query.tenantId = req.tenantId
     }
+    applyWorkspaceScope(query, req)
 
     const isTenantAdmin = user.role === "account_admin" || user.role === "super_admin"
     if (!isTenantAdmin) {
@@ -960,7 +1002,11 @@ const mobileLogin = async (req, res) => {
 
       const isAccountAdmin = user.role === "account_admin" || user.role === "super_admin"
       if (isAccountAdmin) {
-        const allWs = await Workspace.find({ tenantId: user.tenantId, status: "active" })
+        const allWs = await Workspace.find({
+          tenantId: user.tenantId,
+          status: "active",
+          isSystemManaged: { $ne: true },
+        })
           .setOptions({ skipTenantFilter: true })
           .sort({ isDefault: -1, name: 1 })
           .lean()
@@ -986,6 +1032,7 @@ const mobileLogin = async (req, res) => {
             _id: { $in: wsIds },
             tenantId: user.tenantId,
             status: "active",
+            isSystemManaged: { $ne: true },
           })
             .setOptions({ skipTenantFilter: true })
             .sort({ isDefault: -1, name: 1 })
@@ -1077,12 +1124,44 @@ const mobileRefreshToken = async (req, res) => {
       })
     }
 
+    if (decoded.type !== "refresh") {
+      return res.status(401).json({
+        success: false,
+        code: "INVALID_TOKEN_TYPE",
+        error: "Invalid token type. Expected refresh token.",
+      })
+    }
+
     const user = await User.findById(decoded.id)
-    if (!user || user.status === "suspended") {
+    if (!user || user.status === "suspended" || user.isActive === false) {
       return res.status(401).json({
         success: false,
         error: "User session revoked or suspended",
       })
+    }
+
+    if (
+      decoded.tokenVersion !== undefined &&
+      user.tokenVersion !== undefined &&
+      decoded.tokenVersion !== user.tokenVersion
+    ) {
+      return res.status(401).json({
+        success: false,
+        error: "Refresh token invalidated. Please log in again.",
+      })
+    }
+
+    if (decoded.deviceId) {
+      const device = await Device.findOne({ _id: decoded.deviceId, tenantId: user.tenantId })
+        .setOptions({ skipTenantFilter: true })
+        .lean()
+      if (!device || String(device.status || "").toUpperCase() === "REVOKED") {
+        return res.status(403).json({
+          success: false,
+          code: "DEVICE_REVOKED",
+          error: "Device session revoked by administrator.",
+        })
+      }
     }
 
     if (user.tenantId) {
@@ -1102,6 +1181,8 @@ const mobileRefreshToken = async (req, res) => {
         role: user.role,
         tenantId: user.tenantId,
         type: "access",
+        ...(user.tokenVersion !== undefined ? { tokenVersion: user.tokenVersion } : {}),
+        ...(decoded.deviceId ? { deviceId: decoded.deviceId } : {}),
       },
       secret,
       { expiresIn: "24h" }
@@ -1113,6 +1194,8 @@ const mobileRefreshToken = async (req, res) => {
         email: user.email,
         tenantId: user.tenantId,
         type: "refresh",
+        ...(user.tokenVersion !== undefined ? { tokenVersion: user.tokenVersion } : {}),
+        ...(decoded.deviceId ? { deviceId: decoded.deviceId } : {}),
       },
       secret,
       { expiresIn: "30d" }
@@ -1398,7 +1481,7 @@ const uploadMobileRecording = async (req, res) => {
       })
     }
 
-    // 1. Locate Call Record by clientCallId or _id
+    // 1. Locate Call Record by clientCallId or _id (strictly scoped by tenant & workspace)
     const trimmedCallId = callId.trim()
     const isObjectId = mongoose.Types.ObjectId.isValid(trimmedCallId)
     const callQuery = {
@@ -1407,7 +1490,11 @@ const uploadMobileRecording = async (req, res) => {
         ...(isObjectId ? [{ _id: trimmedCallId }] : [])
       ]
     }
-    let call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
+    if (user.role !== "super_admin") {
+      callQuery.tenantId = user.tenantId
+    }
+    applyWorkspaceScope(callQuery, req)
+    let call = await Call.findOne(callQuery)
 
     // Fallback reconciliation: If not found by ID, attempt candidate matching from headers
     if (!call && user?.tenantId) {
@@ -1418,7 +1505,7 @@ const uploadMobileRecording = async (req, res) => {
       if (phoneCandidate) {
         const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
         const normPhone = normalizePhoneE164(phoneCandidate, "+91") || phoneCandidate
-        const candidateCalls = await Call.find({
+        const candidateCalls = await Call.find(applyWorkspaceScope({
           tenantId: user.tenantId,
           agentId: user.id || user._id,
           $or: [
@@ -1426,7 +1513,7 @@ const uploadMobileRecording = async (req, res) => {
             { phoneNumber: phoneCandidate },
             { number: phoneCandidate },
           ],
-        }).sort({ startTimeMs: -1 }).limit(2).setOptions({ skipTenantFilter: true })
+        }, req)).sort({ startTimeMs: -1 }).limit(2)
 
         if (candidateCalls.length === 1) {
           call = candidateCalls[0]
@@ -1878,7 +1965,11 @@ const streamCallRecording = async (req, res) => {
         ...(isObjectId ? [{ _id: trimmedCallId }] : [])
       ]
     }
-    const call = await Call.findOne(callQuery).setOptions({ skipTenantFilter: true })
+    if (user.role !== "super_admin") {
+      callQuery.tenantId = user.tenantId
+    }
+    applyWorkspaceScope(callQuery, req)
+    const call = await Call.findOne(callQuery)
     if (!call) {
       return res.status(404).json({
         success: false,
@@ -2390,11 +2481,15 @@ async function getRecordingTicket(req, res) {
     const tenantId = req.tenantId || req.user?.tenantId || req.device?.tenantId
     const agentId = req.user?._id || req.user?.id || req.device?.userId
     const callId = req.params.id
+    const workspaceId = req.tenantContext?.mode === "single_workspace" ? req.tenantContext.workspaceId : null
 
     const result = await mobileSyncService.issueRecordingTicket({
       tenantId,
       agentId,
       callId,
+      deviceId: req.device?._id || null,
+      tokenVersion: req.user?.tokenVersion,
+      workspaceId,
     })
 
     return res.status(200).json({

@@ -55,6 +55,11 @@ const workspaceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isSystemManaged: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     status: {
       type: String,
       enum: ["active", "inactive", "archived"],

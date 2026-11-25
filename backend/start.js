@@ -337,11 +337,12 @@ const {
   streamRecordingByPath,
 } = require("./controllers/mobileController")
 const { authenticate } = require("./middleware/authMiddleware")
+const { authenticateRecordingUpload } = require("./middleware/recordingAuthMiddleware")
 
 // Strictly authenticated recording access — prevents unauthenticated streaming or cross-tenant exposure
 app.get("/uploads/recordings/:tenantId/:fileName", checkDbConnection, authenticate, streamRecordingByPath)
 app.get("/api/calls/:callId/recording", checkDbConnection, authenticate, streamCallRecording)
-app.put("/api/calls/:callId/recording", checkDbConnection, authenticate, uploadMobileRecording)
+app.put("/api/calls/:callId/recording", checkDbConnection, authenticateRecordingUpload, uploadMobileRecording)
 app.post("/api/auth/refresh", mobileRefreshToken)
 
 app.use("/api/calls", callRoutes)

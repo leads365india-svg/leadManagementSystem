@@ -38,6 +38,12 @@ const whatsAppMessageSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true,
+    },
     leadId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Lead",
@@ -143,6 +149,7 @@ whatsAppMessageSchema.index({ tenantId: 1, leadId: 1, timestamp: 1 })
 
 // Fast peer phone chronological history lookups even when unlinked from lead
 whatsAppMessageSchema.index({ tenantId: 1, normalizedPhone: 1, timestamp: 1 })
+whatsAppMessageSchema.index({ tenantId: 1, workspaceId: 1, timestamp: -1 })
 
 // Delivery receipts and status updates
 whatsAppMessageSchema.index({ tenantId: 1, externalMessageId: 1, status: 1 })

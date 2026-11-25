@@ -7,7 +7,7 @@ const { AICallAnalysis } = require("../models/AICallAnalysis")
 const { AIUsageLedger } = require("../models/AIUsageLedger")
 const { enqueueCallIntelligenceJob, processCallIntelligenceJob } = require("../services/aiCallProcessingPipeline")
 const { getTenantUsageStats } = require("../services/aiUsageService")
-const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { getEffectiveTenant, applyWorkspaceScope } = require("../middleware/tenantContext")
 const audit = require("../services/auditService")
 
 /**
@@ -62,7 +62,8 @@ async function triggerCallAnalysis(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const call = await Call.findOne({ _id: callId, tenantId }).setOptions({ skipTenantFilter: true })
+    const callFilter = applyWorkspaceScope({ _id: callId, tenantId }, req)
+    const call = await Call.findOne(callFilter)
     if (!call) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
@@ -124,21 +125,18 @@ async function getCallStatus(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const call = await Call.findOne({ _id: callId, tenantId })
+    const call = await Call.findOne(applyWorkspaceScope({ _id: callId, tenantId }, req))
       .populate("agentId", "name email")
       .populate("leadId", "name phone email")
-      .setOptions({ skipTenantFilter: true })
     if (!call) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
 
     const [latestTranscript, latestAnalysis] = await Promise.all([
-      AITranscript.findOne({ tenantId, callId: call._id })
-        .sort({ version: -1 })
-        .setOptions({ skipTenantFilter: true }),
-      AICallAnalysis.findOne({ tenantId, callId: call._id, deletedAt: null })
-        .sort({ analysisVersion: -1 })
-        .setOptions({ skipTenantFilter: true }),
+      AITranscript.findOne(applyWorkspaceScope({ tenantId, callId: call._id }, req))
+        .sort({ version: -1 }),
+      AICallAnalysis.findOne(applyWorkspaceScope({ tenantId, callId: call._id, deletedAt: null }, req))
+        .sort({ analysisVersion: -1 }),
     ])
 
     const hasRecording = Boolean(
@@ -242,9 +240,8 @@ async function getCallTranscript(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const transcript = await AITranscript.findOne({ tenantId, callId })
+    const transcript = await AITranscript.findOne(applyWorkspaceScope({ tenantId, callId }, req))
       .sort({ version: -1 })
-      .setOptions({ skipTenantFilter: true })
 
     if (!transcript) {
       return res.status(404).json({ success: false, message: "Transcript not found for this call" })
@@ -277,10 +274,9 @@ async function getCallAnalysis(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const analysis = await AICallAnalysis.findOne({ tenantId, callId, deletedAt: null })
+    const analysis = await AICallAnalysis.findOne(applyWorkspaceScope({ tenantId, callId, deletedAt: null }, req))
       .sort({ analysisVersion: -1 })
       .populate("topicMatches.topicId", "name category primaryKeywords")
-      .setOptions({ skipTenantFilter: true })
 
     if (!analysis) {
       return res.status(404).json({ success: false, message: "Analysis report not found for this call" })
@@ -313,7 +309,8 @@ async function reprocessCall(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const call = await Call.findOne({ _id: callId, tenantId }).setOptions({ skipTenantFilter: true })
+    const callFilter = applyWorkspaceScope({ _id: callId, tenantId }, req)
+    const call = await Call.findOne(callFilter)
     if (!call) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
@@ -426,6 +423,7 @@ async function listAnalyzedCalls(req, res) {
     }
 
     // Parallel fetch: calls with recordings and total count
+    applyWorkspaceScope(callFilter, req)
     const [calls, total] = await Promise.all([
       Call.find(callFilter)
         .populate("leadId", "name phone email")
@@ -433,23 +431,21 @@ async function listAnalyzedCalls(req, res) {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
-        .lean()
-        .setOptions({ skipTenantFilter: true }),
-      Call.countDocuments(callFilter).setOptions({ skipTenantFilter: true }),
+        .lean(),
+      Call.countDocuments(callFilter),
     ])
 
     const callIds = calls.map((c) => c._id)
 
     // Fetch corresponding latest analyses for these calls (excluding soft-deleted)
-    const analyses = await AICallAnalysis.find({
+    const analyses = await AICallAnalysis.find(applyWorkspaceScope({
       tenantId,
       callId: { $in: callIds },
       deletedAt: null,
-    })
+    }, req))
       .populate("topicMatches.topicId", "name category primaryKeywords")
       .sort({ analysisVersion: -1 })
       .lean()
-      .setOptions({ skipTenantFilter: true })
 
     const analysisMap = new Map()
     for (const a of analyses) {
@@ -546,10 +542,13 @@ async function getDashboardMetrics(req, res) {
     }
 
     // Parallel fetch: Total recorded calls, analyses, and transcripts
+    applyWorkspaceScope(recordingQuery, req)
+    const analysisMetricQuery = applyWorkspaceScope({ tenantId, ...dateFilter, deletedAt: null }, req)
+    const transcriptMetricQuery = applyWorkspaceScope({ tenantId, ...dateFilter }, req)
     const [totalRecordedCalls, allAnalyses, allTranscripts] = await Promise.all([
-      Call.countDocuments(recordingQuery).setOptions({ skipTenantFilter: true }),
-      AICallAnalysis.find({ tenantId, ...dateFilter, deletedAt: null }).lean().setOptions({ skipTenantFilter: true }),
-      AITranscript.find({ tenantId, ...dateFilter }).select("duration status").lean().setOptions({ skipTenantFilter: true }),
+      Call.countDocuments(recordingQuery),
+      AICallAnalysis.find(analysisMetricQuery).lean(),
+      AITranscript.find(transcriptMetricQuery).select("duration status").lean(),
     ])
 
     let analyzedCount = 0
@@ -664,7 +663,8 @@ async function getLinkedFollowUps(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId format" })
     }
 
-    const call = await Call.findOne({ _id: callId, tenantId }).setOptions({ skipTenantFilter: true })
+    const callFilter = applyWorkspaceScope({ _id: callId, tenantId }, req)
+    const call = await Call.findOne(callFilter)
     if (!call) {
       return res.status(404).json({ success: false, message: "Call not found" })
     }
@@ -743,8 +743,8 @@ async function deleteCallAnalysis(req, res) {
       return res.status(400).json({ success: false, message: "Invalid callId or reportId format" })
     }
 
-    // Tenant-isolated lookup: try finding Call first, or find AICallAnalysis directly
-    let call = await Call.findOne({ _id: targetId, tenantId }).setOptions({ skipTenantFilter: true })
+    // Tenant- & workspace-isolated lookup: try finding Call first, or find AICallAnalysis directly
+    let call = await Call.findOne(applyWorkspaceScope({ _id: targetId, tenantId }, req))
     let analysis = null
 
     if (call) {
@@ -752,32 +752,31 @@ async function deleteCallAnalysis(req, res) {
       const specificReportId =
         req.body?.reportId || req.body?.analysisId || req.query?.reportId || req.query?.analysisId
       if (specificReportId && mongoose.Types.ObjectId.isValid(specificReportId)) {
-        analysis = await AICallAnalysis.findOne({
+        analysis = await AICallAnalysis.findOne(applyWorkspaceScope({
           _id: specificReportId,
           tenantId,
           callId: call._id,
           deletedAt: null,
-        }).setOptions({ skipTenantFilter: true })
+        }, req))
       }
       if (!analysis) {
-        analysis = await AICallAnalysis.findOne({
+        analysis = await AICallAnalysis.findOne(applyWorkspaceScope({
           tenantId,
           callId: call._id,
           deletedAt: null,
-        })
+        }, req))
           .sort({ analysisVersion: -1 })
-          .setOptions({ skipTenantFilter: true })
       }
     } else {
       // targetId was not a Call ID; check if it is an AICallAnalysis ID directly
-      analysis = await AICallAnalysis.findOne({
+      analysis = await AICallAnalysis.findOne(applyWorkspaceScope({
         _id: targetId,
         tenantId,
         deletedAt: null,
-      }).setOptions({ skipTenantFilter: true })
+      }, req))
 
       if (analysis && analysis.callId) {
-        call = await Call.findOne({ _id: analysis.callId, tenantId }).setOptions({ skipTenantFilter: true })
+        call = await Call.findOne(applyWorkspaceScope({ _id: analysis.callId, tenantId }, req))
       }
     }
 
@@ -867,7 +866,7 @@ async function deleteCallAnalysis(req, res) {
     const leadId = call?.leadId?._id || call?.leadId
     if (leadId) {
       try {
-        const lead = await Lead.findById(leadId).setOptions({ skipTenantFilter: true })
+        const lead = await Lead.findOne({ _id: leadId, tenantId })
         if (lead && lead.metadata) {
           // If lead's current AI metrics reference this deleted report, reset them
           if (String(lead.metadata.aiAnalysisId) === String(analysis._id)) {
