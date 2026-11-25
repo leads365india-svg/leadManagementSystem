@@ -85,6 +85,7 @@ function CallReportsClient() {
   const [statusFilter, setStatusFilter] = useState("all")
   const [dispositionFilter, setDispositionFilter] = useState("all")
   const [recordingFilter, setRecordingFilter] = useState("all") // "all" | "stored" | "missing" | "expired" | "skipped_dnr"
+  const [sourceFilter, setSourceFilter] = useState("all")
   const [activePlayingCall, setActivePlayingCall] = useState(null)
   const [dateRange, setDateRange] = useState("all")
   const [page, setPage] = useState(1)
@@ -141,6 +142,7 @@ function CallReportsClient() {
       if (directionFilter !== "all") query.direction = directionFilter
       if (statusFilter !== "all") query.status = statusFilter
       if (dispositionFilter !== "all") query.disposition = dispositionFilter
+      if (sourceFilter !== "all") query.source = sourceFilter
       if (recordingFilter === "stored") query.hasRecording = "true"
       else if (recordingFilter === "missing") query.missingRecording = "true"
       else if (recordingFilter === "expired") query.recordingStatus = "expired"
@@ -161,7 +163,7 @@ function CallReportsClient() {
     } finally {
       setLoadingCalls(false)
     }
-  }, [page, directionFilter, statusFilter, dispositionFilter, recordingFilter, dateQueryParams])
+  }, [page, directionFilter, statusFilter, dispositionFilter, recordingFilter, sourceFilter, dateQueryParams])
 
   // Fetch Metrics
   const fetchMetrics = useCallback(async () => {
@@ -557,6 +559,20 @@ function CallReportsClient() {
                   <option value="skipped_dnr">Skipped (DNR)</option>
                   <option value="expired">Purged (30d)</option>
                 </select>
+
+                {/* Source Filter */}
+                <select
+                  value={sourceFilter}
+                  onChange={(e) => setSourceFilter(e.target.value)}
+                  className="text-xs font-medium rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="all">All Sources</option>
+                  <option value="whatsapp_voip">WhatsApp VoIP</option>
+                  <option value="android_sync">SIM / Mobile</option>
+                  <option value="twilio">Twilio</option>
+                  <option value="exotel">Exotel</option>
+                  <option value="manual">Manual</option>
+                </select>
               </div>
             </div>
           </div>
@@ -602,16 +618,23 @@ function CallReportsClient() {
                         <tr key={call._id || call.id} className="hover:bg-slate-50/60 transition-colors">
                           {/* Direction */}
                           <td className="px-5 py-4 whitespace-nowrap">
-                            <span
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                                isOutbound
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
-                                  : "bg-blue-50 text-blue-700 border border-blue-200/60"
-                              }`}
-                            >
-                              {isOutbound ? <PhoneOutgoing className="w-3.5 h-3.5" /> : <PhoneIncoming className="w-3.5 h-3.5" />}
-                              <span className="capitalize">{call.direction}</span>
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                                  isOutbound
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
+                                    : "bg-blue-50 text-blue-700 border border-blue-200/60"
+                                }`}
+                              >
+                                {isOutbound ? <PhoneOutgoing className="w-3.5 h-3.5" /> : <PhoneIncoming className="w-3.5 h-3.5" />}
+                                <span className="capitalize">{call.direction}</span>
+                              </span>
+                              {call.source === "whatsapp_voip" && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  WhatsApp
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* Phone & Lead */}

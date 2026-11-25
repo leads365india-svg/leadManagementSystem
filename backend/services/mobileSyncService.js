@@ -233,7 +233,7 @@ async function reportMobileCall({ tenantId, agentId, deviceId, callData = {} }) 
     status,
     disposition,
     notes,
-    source: "android_sync",
+    source: callData.source === "whatsapp_voip" ? "whatsapp_voip" : "android_sync",
     startedAt,
     endedAt,
     recording,

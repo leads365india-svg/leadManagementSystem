@@ -238,7 +238,7 @@ const callSchema = new mongoose.Schema(
     },
     source: {
       type: String,
-      enum: ["android_sync", "manual", "exotel", "twilio", "mobile"],
+      enum: ["android_sync", "whatsapp_voip", "manual", "exotel", "twilio", "mobile"],
       default: "manual",
     },
     hasRecording: {

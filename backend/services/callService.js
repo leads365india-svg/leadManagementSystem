@@ -440,6 +440,10 @@ async function listCalls(query = {}, user = null, explicitTenantId = null) {
   if (query.disposition) {
     filter.disposition = query.disposition
   }
+  const allowedSources = ["android_sync", "whatsapp_voip", "manual", "exotel", "twilio", "mobile"]
+  if (query.source && allowedSources.includes(query.source)) {
+    filter.source = query.source
+  }
   if (query.startDate || query.endDate) {
     filter.startedAt = {}
     if (query.startDate) filter.startedAt.$gte = new Date(query.startDate)

@@ -7,11 +7,15 @@ const Lead = require("../models/Lead")
 const Call = require("../models/Call")
 const FollowUp = require("../models/FollowUp")
 const MobileSyncTombstone = require("../models/MobileSyncTombstone")
+const TenantPhoneContact = require("../models/TenantPhoneContact")
 const User = require("../models/User")
 const Account = require("../models/Account")
 const Device = require("../models/Device")
 const { getJwtSecret } = require("../middleware/authMiddleware")
 const { getEffectiveTenant, applyWorkspaceScope } = require("../middleware/tenantContext")
+
+// Escape special characters before compiling user-supplied regex patterns
+const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 // Mask sensitive phone number for server-side logging
 const maskPhone = (phone) => {
@@ -168,7 +172,13 @@ const reportMobileCall = async (req, res) => {
       sim_id,
       auto_create_lead,
       call_type,
+      source,
+      call_channel,
+      contact_name,
+      source_app,
     } = req.body
+
+    const isWhatsAppVoip = source === "whatsapp_voip" || call_channel === "WHATSAPP_VOIP"
 
     // 1. Validate required fields
     if (!client_call_id || typeof client_call_id !== "string" || !client_call_id.trim()) {
@@ -178,11 +188,58 @@ const reportMobileCall = async (req, res) => {
       })
     }
 
-    if (!phone_number || typeof phone_number !== "string" || !phone_number.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: "phone_number is required",
-      })
+    const rawPhoneStr = typeof phone_number === "string" ? phone_number.trim() : ""
+    const rawContactName = typeof contact_name === "string" ? String(contact_name).trim() : ""
+    const rawPhoneDigits = rawPhoneStr.replace(/\D/g, "")
+
+    let effectivePhone = rawPhoneStr
+    let contactMatchedLead = null
+    let hasValidResolvedPhone = rawPhoneDigits.length >= 7
+
+    if (!isWhatsAppVoip) {
+      if (!rawPhoneStr) {
+        return res.status(400).json({
+          success: false,
+          error: "phone_number is required",
+        })
+      }
+    } else {
+      if (!rawPhoneStr && !rawContactName) {
+        return res.status(400).json({
+          success: false,
+          error: "phone_number or contact_name is required",
+        })
+      }
+
+      if (rawPhoneDigits.length < 7 && rawContactName) {
+        const exactNameRegex = new RegExp("^" + escapeRegex(rawContactName) + "$", "i")
+        const contactMatch = await TenantPhoneContact.findOne({
+          tenantId: targetTenantId,
+          name: exactNameRegex,
+        })
+          .setOptions({ skipTenantFilter: true })
+          .lean()
+
+        if (contactMatch?.normalizedPhone) {
+          effectivePhone = contactMatch.normalizedPhone
+          hasValidResolvedPhone = effectivePhone.replace(/\D/g, "").length >= 7
+        } else {
+          contactMatchedLead = await Lead.findOne({
+            tenantId: targetTenantId,
+            name: exactNameRegex,
+            deletedAt: null,
+          }).setOptions({ skipTenantFilter: true })
+
+          const leadPhone = contactMatchedLead ? (contactMatchedLead.phoneNormalized || contactMatchedLead.phone) : ""
+          if (leadPhone) {
+            effectivePhone = leadPhone
+            hasValidResolvedPhone = effectivePhone.replace(/\D/g, "").length >= 7
+          } else {
+            effectivePhone = rawContactName
+            hasValidResolvedPhone = false
+          }
+        }
+      }
     }
 
     if (!start_time_ms || typeof start_time_ms !== "number") {
@@ -193,7 +250,10 @@ const reportMobileCall = async (req, res) => {
     }
 
     const { normalizePhoneE164 } = require("../utils/phoneNormalizer")
-    const normPhone = normalizePhoneE164(phone_number.trim(), "+91") || phone_number.trim()
+    const effectiveDigits = effectivePhone.replace(/\D/g, "")
+    const normPhone = effectiveDigits.length >= 5
+      ? (normalizePhoneE164(effectivePhone, "+91") || effectivePhone)
+      : effectivePhone
 
     // 1b. Fetch trusted tenant-level configuration from Account metadata
     const tenantAccount = targetTenantId
@@ -232,9 +292,10 @@ const reportMobileCall = async (req, res) => {
     const isOutgoingDirection = call_direction === "OUTGOING" || call_direction === "outbound"
     const isAnsweredCall = !isMissedOrRejected && typeof duration_seconds === "number" && duration_seconds >= configuredMinDuration
     const callerDigits = (normPhone || "").replace(/\D/g, "")
-    const isValidCallerId = callerDigits.length >= 7 &&
-      !phone_number.toLowerCase().includes("unknown") &&
-      !phone_number.toLowerCase().includes("private")
+    const isValidCallerId = hasValidResolvedPhone &&
+      callerDigits.length >= 7 &&
+      !effectivePhone.toLowerCase().includes("unknown") &&
+      !effectivePhone.toLowerCase().includes("private")
 
     const clientRequestedAutoLead = Boolean(auto_create_lead || (lead_id && String(lead_id).startsWith("lead_auto_")))
 
@@ -252,7 +313,7 @@ const reportMobileCall = async (req, res) => {
       const dnrMatch = await Lead.findOne({
         tenantId: targetTenantId,
         $or: [
-          { phone: phone_number.trim() },
+          { phone: effectivePhone },
           { phoneNormalized: normPhone },
           { "metadata.normalizedPhone": normPhone },
         ],
@@ -274,7 +335,7 @@ const reportMobileCall = async (req, res) => {
           deletedAt: null,
           $or: [
             { phoneNormalized: normPhone },
-            { phone: phone_number.trim() },
+            { phone: effectivePhone },
             { "metadata.normalizedPhone": normPhone },
           ],
         },
@@ -298,7 +359,7 @@ const reportMobileCall = async (req, res) => {
           source: isMissedOrRejected ? "Missed Call" : "Incoming Call",
           payload: {
             name: `Unknown Caller - ${normPhone}`,
-            phone: phone_number.trim(),
+            phone: effectivePhone,
             status: "New",
             ownerId: user.id || user._id,
             assignedStaffId: (user.id || user._id)?.toString(),
@@ -309,7 +370,7 @@ const reportMobileCall = async (req, res) => {
             metadata: {
               captureSource: "ANDROID_AUTO_CALL_CAPTURE",
               autoCaptured: true,
-              initialPhone: phone_number.trim(),
+              initialPhone: effectivePhone,
               capturedAt: Date.now(),
               reportedByDeviceId: sim_id || null,
             },
@@ -372,17 +433,28 @@ const reportMobileCall = async (req, res) => {
         })
       }
     } else {
-      // Check if this incoming number is in tenant DNR list
+      // Check if this incoming number or contact-matched lead is in tenant DNR list
       const dnrMatch = await Lead.findOne({
         tenantId: user.tenantId,
-        $or: [{ phone: phone_number.trim() }, { "metadata.normalizedPhone": phone_number.trim() }],
+        $or: [{ phone: effectivePhone }, { "metadata.normalizedPhone": normPhone }],
         "metadata.isDoNotRecord": true,
       }).lean()
-      if (dnrMatch) {
+      if (dnrMatch || contactMatchedLead?.metadata?.isDoNotRecord === true) {
         return res.status(400).json({
           success: false,
           error: "Call reporting rejected: Phone number is marked Do-Not-Record (DNR).",
         })
+      }
+      if (contactMatchedLead) {
+        const wsMatchesScope =
+          req.tenantContext?.mode !== "single_workspace" ||
+          !contactMatchedLead.workspaceId ||
+          !req.tenantContext.workspaceId ||
+          contactMatchedLead.workspaceId.toString() === req.tenantContext.workspaceId.toString()
+        if (wsMatchesScope) {
+          lead = contactMatchedLead
+          isUnlinkedCall = false
+        }
       }
     }
 
@@ -405,13 +477,13 @@ const reportMobileCall = async (req, res) => {
 
       // 2. Identify existing CRM lead's workspace
       let leadWorkspaceId = lead?.workspaceId ? lead.workspaceId.toString() : null
-      if (!leadWorkspaceId && (phone_number || normPhone)) {
+      if (!leadWorkspaceId && (effectivePhone || normPhone)) {
         const phoneMatchQuery = applyWorkspaceScope(
           {
             tenantId: targetTenantId,
             $or: [
               { phoneNormalized: normPhone },
-              { phone: phone_number.trim() },
+              { phone: effectivePhone },
               { "metadata.normalizedPhone": normPhone },
             ],
             deletedAt: null,
@@ -690,8 +762,8 @@ const reportMobileCall = async (req, res) => {
       clientCallId: null,
       $or: [
         { phoneNormalized: normPhone },
-        { phoneNumber: phone_number.trim() },
-        { number: phone_number.trim() },
+        { phoneNumber: effectivePhone },
+        { number: effectivePhone },
       ],
       startTimeMs: { $gte: minTime, $lte: maxTime },
       callDirection: { $in: directionValues },
@@ -767,7 +839,7 @@ const reportMobileCall = async (req, res) => {
       tenantId: targetTenantId,
       agentId: user.id,
       agentName: user.name || "Agent",
-      phoneNumber: phone_number.trim(),
+      phoneNumber: effectivePhone,
       callDirection: resolvedCallDirection,
       startTimeMs: start_time_ms,
       durationSeconds: duration_seconds || 0,
@@ -775,11 +847,14 @@ const reportMobileCall = async (req, res) => {
       notes: notes ? notes.trim() : (isUnlinkedCall ? (isMissedOrRejected ? "Unlinked Missed Call" : "Unlinked Call (Website Call attribution unverified)") : ""),
       nextFollowUpAt: next_followup_at || null,
       simId: sim_id ? sim_id.trim() : null,
+      source: isWhatsAppVoip ? "whatsapp_voip" : "android_sync",
       metadata: {
         reportedVia: "android_app",
         reportedAt: Date.now(),
         isUnlinked: !lead,
         attribution: isUnlinkedCall ? "unverified" : "lead",
+        sourceApp: source_app || null,
+        contactName: contact_name ? String(contact_name).trim() : null,
         workspaceConflict: workspaceConflict || undefined,
       },
     })
