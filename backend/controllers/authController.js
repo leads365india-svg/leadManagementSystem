@@ -477,8 +477,13 @@ const login = async (req, res) => {
     })
     } else {
       res.cookie("client_token", token, cookieOptions)
-      // Clear any prior Super Admin session to prevent identity leakage
+      // Clear any prior Super Admin session or tenant-switch cookie to prevent identity/tenant leakage
       res.clearCookie("superadmin_token", clearOptions)
+      res.clearCookie("active_tenant_id", {
+        path: "/",
+        sameSite: isProduction ? "none" : "lax",
+        secure: isProduction,
+      })
     }
 
     const { resolveUserPermissions } = require("../middleware/authMiddleware")

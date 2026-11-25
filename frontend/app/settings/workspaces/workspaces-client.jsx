@@ -76,8 +76,9 @@ export default function WorkspacesClient() {
   const [togglingMode, setTogglingMode] = useState(false)
 
   const isOrgAdmin = user?.role === "account_admin" || user?.role === "super_admin"
+  const currentTenantId = user?.effectiveTenantId || user?.tenantId || null
 
-  // Fetch workspaces & staff
+  // Fetch workspaces & staff scoped to the currently authenticated tenant
   const loadData = useCallback(async () => {
     try {
       setRefreshing(true)
@@ -87,8 +88,14 @@ export default function WorkspacesClient() {
       ])
 
       if (wsRes?.success) {
-        setWorkspaces(wsRes.data || [])
+        const rawList = Array.isArray(wsRes.data) ? wsRes.data : []
+        const scopedList = currentTenantId
+          ? rawList.filter((w) => !w.tenantId || String(w.tenantId) === String(currentTenantId))
+          : rawList
+        setWorkspaces(scopedList)
         setIsModeEnabled(Boolean(wsRes.workspaceModeEnabled))
+      } else {
+        setWorkspaces([])
       }
       if (staffRes?.success && staffRes.data) {
         const staff = Array.isArray(staffRes.data) ? staffRes.data : staffRes.data.staff || []
@@ -101,9 +108,10 @@ export default function WorkspacesClient() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [currentTenantId])
 
   useEffect(() => {
+    setWorkspaces([])
     loadData()
   }, [loadData])
 

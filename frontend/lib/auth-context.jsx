@@ -178,26 +178,51 @@ export function AuthProvider({ children }) {
     userRef.current = user
   }, [user])
 
-  // Hydrate client-only persisted values after initial SSR mount
+  const lastWorkspaceTenantRef = useRef(null)
+
+  // Hydrate client-only persisted values after initial SSR mount (tenant-namespaced)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const storedTenant = localStorage.getItem("leadflow_active_tenant")
       if (storedTenant) {
         setActiveTenantState(storedTenant)
       }
-      const storedWs = localStorage.getItem("leadflow_active_workspace")
-      if (storedWs) {
-        setActiveWorkspaceState(storedWs)
+      const sessionTenant = localStorage.getItem("leadflow_session_tenant") || ""
+      const wsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
+      if (sessionTenant && (!wsTenant || wsTenant === sessionTenant)) {
+        const namespacedWs =
+          localStorage.getItem(`leadflow_active_workspace:${sessionTenant}`) ||
+          localStorage.getItem("leadflow_active_workspace")
+        if (namespacedWs) {
+          setActiveWorkspaceState(namespacedWs)
+        }
+      } else if (wsTenant && sessionTenant && wsTenant !== sessionTenant) {
+        localStorage.removeItem("leadflow_active_workspace")
+        localStorage.removeItem("leadflow_active_workspace_tenant")
       }
     }
   }, [])
 
-  const setActiveWorkspace = useCallback((wsId) => {
+  const setActiveWorkspace = useCallback((wsId, explicitTenantId = null) => {
     if (typeof window !== "undefined") {
+      const targetTenant =
+        explicitTenantId ||
+        userRef.current?.effectiveTenantId ||
+        userRef.current?.tenantId ||
+        localStorage.getItem("leadflow_session_tenant") ||
+        ""
       if (wsId) {
         localStorage.setItem("leadflow_active_workspace", wsId)
+        if (targetTenant) {
+          localStorage.setItem("leadflow_active_workspace_tenant", targetTenant)
+          localStorage.setItem(`leadflow_active_workspace:${targetTenant}`, wsId)
+        }
       } else {
         localStorage.removeItem("leadflow_active_workspace")
+        localStorage.removeItem("leadflow_active_workspace_tenant")
+        if (targetTenant) {
+          localStorage.removeItem(`leadflow_active_workspace:${targetTenant}`)
+        }
       }
     }
     setActiveWorkspaceState(wsId || null)
@@ -206,7 +231,7 @@ export function AuthProvider({ children }) {
   const isReloadingWorkspacesRef = useRef(false)
   const lastReloadWorkspacesTsRef = useRef(0)
 
-  const reloadWorkspaces = useCallback(async (targetUser = null) => {
+  const reloadWorkspaces = useCallback(async (targetUser = null, force = false) => {
     // If on a login page or super-admin management console and not authenticating, skip
     if (typeof window !== "undefined" && !targetUser) {
       const pathname = window.location.pathname || ""
@@ -227,6 +252,7 @@ export function AuthProvider({ children }) {
     }
 
     // Platform Super Admin does not operate on tenant workspaces unless actively inspecting a tenant inside /portal
+    let effectiveTenantId = effectiveUser.tenantId || null
     if (effectiveUser.role === "super_admin") {
       const pathname = typeof window !== "undefined" ? window.location.pathname || "" : ""
       const activeTenant = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_tenant") : null
@@ -236,16 +262,28 @@ export function AuthProvider({ children }) {
         setActiveWorkspace(null)
         return []
       }
+      effectiveTenantId = activeTenant
     }
 
-    // In-flight deduplication and throttle: prevent duplicate network requests
-    if (isReloadingWorkspacesRef.current) return []
-    if (Date.now() - lastReloadWorkspacesTsRef.current < 1500) return []
+    const tenantChanged = lastWorkspaceTenantRef.current !== effectiveTenantId
+    if (tenantChanged) {
+      // Immediately clear previous tenant workspaces before fetching new tenant
+      setWorkspaces([])
+      if (!effectiveUser.targetWorkspace?.id) {
+        setActiveWorkspaceState(null)
+      }
+      lastReloadWorkspacesTsRef.current = 0
+    }
+
+    // In-flight deduplication and throttle: prevent duplicate network requests for the same tenant
+    if (isReloadingWorkspacesRef.current && !force && !tenantChanged) return []
+    if (!force && !tenantChanged && Date.now() - lastReloadWorkspacesTsRef.current < 1500) return []
     isReloadingWorkspacesRef.current = true
     lastReloadWorkspacesTsRef.current = Date.now()
+    lastWorkspaceTenantRef.current = effectiveTenantId
 
     try {
-      const res = await apiClient.getWorkspaces()
+      const res = await apiClient.getWorkspaces({ force: Boolean(targetUser || force) })
       if (res?.status === 429 || res?.isRateLimit) {
         console.warn("Workspaces request throttled by rate limit")
         return []
@@ -253,12 +291,22 @@ export function AuthProvider({ children }) {
       if (res && res.success) {
         const isEnabled = Boolean(res.workspaceModeEnabled)
         setIsMultiWorkspaceEnabled(isEnabled)
-        const wsList = Array.isArray(res.data) ? res.data : []
+        const rawList = Array.isArray(res.data) ? res.data : []
+        // Enforce tenant boundary on client cache too
+        const wsList = effectiveTenantId
+          ? rawList.filter((w) => !w.tenantId || String(w.tenantId) === String(effectiveTenantId))
+          : rawList
         setWorkspaces(wsList)
 
         if (isEnabled && wsList.length > 0) {
           const isOrgAdmin = effectiveUser.role === "account_admin" || effectiveUser.role === "super_admin"
-          const storedWs = typeof window !== "undefined" ? localStorage.getItem("leadflow_active_workspace") : null
+          let storedWs = null
+          if (typeof window !== "undefined" && effectiveTenantId) {
+            const wsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
+            storedWs =
+              localStorage.getItem(`leadflow_active_workspace:${effectiveTenantId}`) ||
+              (wsTenant === effectiveTenantId ? localStorage.getItem("leadflow_active_workspace") : null)
+          }
 
           let selected = null
           const targetWsId = effectiveUser.targetWorkspace?.id
@@ -286,10 +334,10 @@ export function AuthProvider({ children }) {
           }
 
           if (selected) {
-            setActiveWorkspace(selected)
+            setActiveWorkspace(selected, effectiveTenantId)
           }
         } else {
-          setActiveWorkspace(null)
+          setActiveWorkspace(null, effectiveTenantId)
         }
         return wsList
       }
@@ -312,10 +360,17 @@ export function AuthProvider({ children }) {
     if (typeof window !== "undefined") {
       if (tenantId) {
         localStorage.setItem("leadflow_active_tenant", tenantId)
+        localStorage.setItem("leadflow_session_tenant", tenantId)
       } else {
         localStorage.removeItem("leadflow_active_tenant")
       }
+      localStorage.removeItem("leadflow_active_workspace")
+      localStorage.removeItem("leadflow_active_workspace_tenant")
     }
+    setWorkspaces([])
+    setIsMultiWorkspaceEnabled(false)
+    setActiveWorkspaceState(null)
+    lastWorkspaceTenantRef.current = null
     setActiveTenantState(tenantId || null)
   }, [])
 
@@ -413,6 +468,30 @@ export function AuthProvider({ children }) {
 
         setUser(userData)
         setStatus("authenticated")
+        if (typeof window !== "undefined") {
+          const effectiveSessionTenant =
+            userData.role === "super_admin"
+              ? (userData.account?.accountId || localStorage.getItem("leadflow_active_tenant") || "")
+              : (userData.tenantId || "")
+
+          // Non-super-admin must never retain stale leadflow_active_tenant from prior sessions
+          if (userData.role !== "super_admin") {
+            localStorage.removeItem("leadflow_active_tenant")
+            setActiveTenantState(null)
+          }
+
+          const prevWsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
+          if (prevWsTenant && effectiveSessionTenant && prevWsTenant !== effectiveSessionTenant) {
+            localStorage.removeItem("leadflow_active_workspace")
+            localStorage.removeItem("leadflow_active_workspace_tenant")
+            setActiveWorkspaceState(null)
+          }
+          if (effectiveSessionTenant) {
+            localStorage.setItem("leadflow_session_tenant", effectiveSessionTenant)
+          } else {
+            localStorage.removeItem("leadflow_session_tenant")
+          }
+        }
         const currentPath = typeof window !== "undefined" ? window.location.pathname || "" : ""
         if (userData.role !== "super_admin") {
           if (!currentPath.includes("/login") && !currentPath.startsWith("/super-admin")) {
@@ -460,11 +539,45 @@ export function AuthProvider({ children }) {
       const response = await apiClient.login(credentials)
       if (response.success && response.data?.user) {
         const authUser = response.data.user
-        if (authUser.targetWorkspace?.id) {
-          if (typeof window !== "undefined") {
-            localStorage.setItem("leadflow_active_workspace", authUser.targetWorkspace.id)
+        const effectiveSessionTenant =
+          authUser.role === "super_admin"
+            ? (authUser.account?.accountId || "")
+            : (authUser.tenantId || "")
+
+        if (typeof window !== "undefined") {
+          const prevSessionTenant = localStorage.getItem("leadflow_session_tenant") || ""
+          const prevWsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
+
+          // Non-super-admin must never retain leadflow_active_tenant header override
+          if (authUser.role !== "super_admin") {
+            localStorage.removeItem("leadflow_active_tenant")
+            setActiveTenantState(null)
           }
-          setActiveWorkspaceState(authUser.targetWorkspace.id)
+
+          // Clear stale cross-tenant workspace selection whenever tenant changes or no targetWorkspace is requested
+          if (
+            (prevSessionTenant && effectiveSessionTenant && prevSessionTenant !== effectiveSessionTenant) ||
+            (prevWsTenant && effectiveSessionTenant && prevWsTenant !== effectiveSessionTenant)
+          ) {
+            localStorage.removeItem("leadflow_active_workspace")
+            localStorage.removeItem("leadflow_active_workspace_tenant")
+            setWorkspaces([])
+            setActiveWorkspaceState(null)
+            lastWorkspaceTenantRef.current = null
+          }
+
+          if (effectiveSessionTenant) {
+            localStorage.setItem("leadflow_session_tenant", effectiveSessionTenant)
+          } else {
+            localStorage.removeItem("leadflow_session_tenant")
+          }
+        }
+
+        if (authUser.targetWorkspace?.id) {
+          setActiveWorkspace(authUser.targetWorkspace.id, effectiveSessionTenant || authUser.tenantId)
+        } else if (authUser.role === "account_admin" && credentials?.portal !== "super_admin") {
+          // Normal Org Admin login without ?workspace= parameter retains All Projects / Master Dashboard
+          setActiveWorkspace("all", effectiveSessionTenant || authUser.tenantId)
         }
         setUser(authUser)
         setStatus("authenticated")
@@ -472,7 +585,7 @@ export function AuthProvider({ children }) {
           authUser.role !== "super_admin" &&
           credentials?.portal !== "super_admin"
         ) {
-          await reloadWorkspaces(authUser)
+          await reloadWorkspaces(authUser, true)
         }
         return response
       } else {
@@ -485,7 +598,7 @@ export function AuthProvider({ children }) {
       setStatus("unauthenticated")
       throw err
     }
-  }, [reloadWorkspaces])
+  }, [reloadWorkspaces, setActiveWorkspace])
 
   const logout = useCallback(async (targetRoute) => {
     const roleAtLogout = user?.role
@@ -499,8 +612,16 @@ export function AuthProvider({ children }) {
       if (typeof window !== "undefined") {
         localStorage.removeItem("leadflow_active_tenant")
         localStorage.removeItem("leadflow_active_workspace")
+        localStorage.removeItem("leadflow_active_workspace_tenant")
+        localStorage.removeItem("leadflow_session_tenant")
         localStorage.removeItem("leadflow_token")
+        try {
+          Object.keys(localStorage)
+            .filter((k) => k.startsWith("leadflow_active_workspace:"))
+            .forEach((k) => localStorage.removeItem(k))
+        } catch (_) {}
       }
+      lastWorkspaceTenantRef.current = null
       setActiveTenantState(null)
       setActiveWorkspace(null)
       setWorkspaces([])

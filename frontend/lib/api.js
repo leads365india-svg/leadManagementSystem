@@ -21,8 +21,48 @@ class ApiClient {
 
     // Deduplicate simultaneous in-flight GET requests
     const isGet = method === "GET"
+
+    // Resolve tenant & workspace context headers BEFORE deduplicating GET requests
+    const precomputedHeaders = {
+      ...options.headers,
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const currentHost = window.location?.hostname || ""
+        const sessionTenant = localStorage.getItem("leadflow_session_tenant") || ""
+
+        // Attach active tenant ID header on administrative / non-white-label platforms only
+        if (!precomputedHeaders["x-tenant-id"] && !precomputedHeaders["X-Tenant-Id"] && !isWhiteLabelDomain(currentHost)) {
+          const activeTenant = localStorage.getItem("leadflow_active_tenant")
+          if (activeTenant && activeTenant.trim()) {
+            precomputedHeaders["x-tenant-id"] = activeTenant.trim()
+          }
+        }
+
+        // Attach active workspace header ONLY if it belongs to the current active session tenant
+        if (!precomputedHeaders["x-workspace-id"] && !precomputedHeaders["X-Workspace-Id"]) {
+          const activeWsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
+          const effectiveTenant = precomputedHeaders["x-tenant-id"] || sessionTenant
+          let activeWs = null
+          if (effectiveTenant && localStorage.getItem(`leadflow_active_workspace:${effectiveTenant}`)) {
+            activeWs = localStorage.getItem(`leadflow_active_workspace:${effectiveTenant}`)
+          } else if (!activeWsTenant || !effectiveTenant || activeWsTenant === effectiveTenant) {
+            activeWs = localStorage.getItem("leadflow_active_workspace")
+          } else {
+            // Clear stale cross-tenant workspace selection immediately
+            localStorage.removeItem("leadflow_active_workspace")
+            localStorage.removeItem("leadflow_active_workspace_tenant")
+          }
+          if (activeWs && activeWs.trim()) {
+            precomputedHeaders["x-workspace-id"] = activeWs.trim()
+          }
+        }
+      } catch (_) {}
+    }
+
     const reqKey = isGet
-      ? `${url}:${options.headers?.["x-tenant-id"] || ""}:${options.headers?.["x-workspace-id"] || ""}`
+      ? `${url}:${precomputedHeaders["x-tenant-id"] || ""}:${precomputedHeaders["x-workspace-id"] || ""}:${typeof window !== "undefined" ? localStorage.getItem("leadflow_session_tenant") || "" : ""}`
       : null
 
     if (isGet && this.inFlightRequests.has(reqKey)) {
@@ -34,7 +74,7 @@ class ApiClient {
       const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData
       const headers = {
         ...(isFormData ? {} : { "Content-Type": "application/json" }),
-        ...options.headers,
+        ...precomputedHeaders,
       }
 
       // Attach Authorization Bearer token as a reliable cross-origin fallback
@@ -47,20 +87,6 @@ class ApiClient {
         } catch (_) {}
       }
 
-      // Attach active tenant ID header on administrative / non-white-label platforms only
-      if (!headers["x-tenant-id"] && !headers["X-Tenant-Id"] && typeof window !== "undefined") {
-        try {
-          const currentHost = window.location?.hostname || ""
-          // On white-label domains, the hostname is the authoritative tenant boundary; do not leak stale localStorage active tenant
-          if (!isWhiteLabelDomain(currentHost)) {
-            const activeTenant = localStorage.getItem("leadflow_active_tenant")
-            if (activeTenant && activeTenant.trim()) {
-              headers["x-tenant-id"] = activeTenant.trim()
-            }
-          }
-        } catch (_) {}
-      }
-
       // Attach current portal domain header for white-label tenant boundary verification
       if (!headers["x-tenant-domain"] && typeof window !== "undefined" && window.location?.hostname) {
         headers["x-tenant-domain"] = window.location.hostname
@@ -69,16 +95,6 @@ class ApiClient {
       // Attach portal identifier header to prevent Safari Referer truncation from misidentifying Super Admin routes
       if (!headers["x-auth-portal"] && typeof window !== "undefined" && window.location?.pathname?.startsWith("/super-admin")) {
         headers["x-auth-portal"] = "super_admin"
-      }
-
-      // Attach active workspace header if multi-workspace is active in localStorage
-      if (!headers["x-workspace-id"] && !headers["X-Workspace-Id"] && typeof window !== "undefined") {
-        try {
-          const activeWs = localStorage.getItem("leadflow_active_workspace")
-          if (activeWs && activeWs.trim()) {
-            headers["x-workspace-id"] = activeWs.trim()
-          }
-        } catch (_) {}
       }
 
       const config = {
@@ -116,6 +132,10 @@ class ApiClient {
               try {
                 localStorage.removeItem("token")
                 localStorage.removeItem("leadflow_token")
+                localStorage.removeItem("leadflow_active_workspace")
+                localStorage.removeItem("leadflow_active_workspace_tenant")
+                localStorage.removeItem("leadflow_session_tenant")
+                localStorage.removeItem("leadflow_active_tenant")
               } catch (_) {}
               if (!isLoginPage) {
                 const redirectUrl = window.location.pathname.startsWith("/super-admin")
@@ -1623,8 +1643,8 @@ class ApiClient {
   }
 
   // --- Multi-Workspace & Project Administration Endpoints (Wave 1-3) ---
-  async getWorkspaces() {
-    if (typeof window !== "undefined") {
+  async getWorkspaces({ force = false } = {}) {
+    if (!force && typeof window !== "undefined") {
       const pathname = window.location.pathname || ""
       if (pathname.includes("/login") || pathname.startsWith("/super-admin")) {
         return { success: true, data: [], workspaceModeEnabled: false }

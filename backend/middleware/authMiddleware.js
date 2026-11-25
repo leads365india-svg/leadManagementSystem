@@ -298,14 +298,14 @@ const authenticate = async (req, res, next) => {
             req.tenantAccount = domainAccount
           }
         } else {
-          // For tenant users, session MUST strictly match the domain's tenant
-          if (user.tenantId && user.tenantId !== domainAccount.accountId) {
+          // For tenant users, session MUST strictly match the domain's tenant (reject missing tenantId too)
+          if (!user.tenantId || user.tenantId !== domainAccount.accountId) {
             return res.status(403).json({
               success: false,
               error: `Cross-tenant access denied: Your session does not belong to ${domainAccount.companyName}.`,
               code: "CROSS_TENANT_SESSION_MISMATCH",
               domainTenantId: domainAccount.accountId,
-              sessionTenantId: user.tenantId,
+              sessionTenantId: user.tenantId || null,
             })
           }
 

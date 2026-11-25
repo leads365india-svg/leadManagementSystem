@@ -10,7 +10,7 @@ const Call = require("../models/Call")
 const FollowUp = require("../models/FollowUp")
 const DomainMapping = require("../models/DomainMapping")
 const { Integration } = require("../models/Integration")
-const { invalidateAccountWorkspaceModeCache } = require("../middleware/tenantContext")
+const { invalidateAccountWorkspaceModeCache, getEffectiveTenant } = require("../middleware/tenantContext")
 const { invalidateCustomDomainCache, sanitizeHostname } = require("../utils/customDomainCache")
 const crypto = require("crypto")
 const dns = require("dns").promises
@@ -47,6 +47,38 @@ const buildWorkspaceAccessUrl = (orgSlug, ws) => {
 }
 
 /**
+ * Strictly resolve verified parent tenantId from authenticated server-side session/context.
+ * Never trusts arbitrary client-supplied tenantId overrides for non-super-admin users.
+ */
+const resolveVerifiedTenantId = (req) => {
+  const { tenantId: effectiveTenantId, isSuperAdmin } = getEffectiveTenant(req)
+
+  if (!isSuperAdmin) {
+    const userTenantId = req.user?.tenantId ? String(req.user.tenantId).trim() : null
+    if (!userTenantId) {
+      return {
+        error: "No tenant account assigned to user",
+        status: 403,
+        tenantId: null,
+        isSuperAdmin: false,
+      }
+    }
+    if (req.tenantId && String(req.tenantId).trim() !== userTenantId) {
+      return {
+        error: "Cross-tenant access denied: Session tenant mismatch.",
+        code: "CROSS_TENANT_SESSION_MISMATCH",
+        status: 403,
+        tenantId: null,
+        isSuperAdmin: false,
+      }
+    }
+    return { tenantId: userTenantId, isSuperAdmin: false }
+  }
+
+  return { tenantId: effectiveTenantId || null, isSuperAdmin: true }
+}
+
+/**
  * GET /api/workspaces
  * List workspaces accessible by the current user
  * - Org Admin / Super Admin: returns all active workspaces in the tenant
@@ -54,9 +86,18 @@ const buildWorkspaceAccessUrl = (orgSlug, ws) => {
  */
 const listWorkspaces = async (req, res) => {
   try {
-    const tenantId = req.tenantId || req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error,
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+
+    const { tenantId, isSuperAdmin } = resolvedTenant
     if (!tenantId) {
-      if (req.user?.role === "super_admin") {
+      if (isSuperAdmin) {
         return res.status(200).json({
           success: true,
           data: [],
@@ -100,15 +141,21 @@ const listWorkspaces = async (req, res) => {
       }))
     }
 
+    // Defense-in-depth: strictly ensure every workspace document belongs to verified tenantId
+    const isolatedWorkspaces = workspaces.filter((w) => String(w.tenantId) === String(tenantId))
+
     // Include account-level workspaceModeEnabled flag and slug
     const account = await Account.findOne({ accountId: tenantId }).select("workspaceModeEnabled slug companyName accountId").lean()
     const orgSlug = account?.slug || slugify(account?.companyName) || account?.accountId || tenantId
 
-    const enrichedWorkspaces = workspaces.map((w) => ({
+    const enrichedWorkspaces = isolatedWorkspaces.map((w) => ({
       ...w,
       accessUrl: buildWorkspaceAccessUrl(orgSlug, w),
     }))
 
+    if (typeof res.set === "function") {
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+    }
     return res.status(200).json({
       success: true,
       count: enrichedWorkspaces.length,
@@ -127,7 +174,18 @@ const listWorkspaces = async (req, res) => {
  */
 const createWorkspace = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error,
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
+    if (!tenantId) {
+      return res.status(403).json({ success: false, error: "Tenant context required to create workspace" })
+    }
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -223,7 +281,14 @@ const createWorkspace = async (req, res) => {
  */
 const getWorkspaceById = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+      })
+    }
+    const { tenantId } = resolvedTenant
     const { workspaceId } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(workspaceId)) {
@@ -276,7 +341,14 @@ const getWorkspaceById = async (req, res) => {
  */
 const updateWorkspace = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+      })
+    }
+    const { tenantId } = resolvedTenant
     const { workspaceId } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(workspaceId)) {
@@ -387,7 +459,14 @@ const updateWorkspace = async (req, res) => {
  */
 const archiveWorkspace = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -446,7 +525,15 @@ const archiveWorkspace = async (req, res) => {
  */
 const listMemberships = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const { workspaceId } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(workspaceId)) {
@@ -502,7 +589,15 @@ const listMemberships = async (req, res) => {
  */
 const addMembership = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const { workspaceId } = req.params
     const { userId, role, permissions } = req.body
 
@@ -576,7 +671,15 @@ const addMembership = async (req, res) => {
  */
 const removeMembership = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const { workspaceId, userId } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(workspaceId) || !mongoose.Types.ObjectId.isValid(userId)) {
@@ -625,7 +728,15 @@ const removeMembership = async (req, res) => {
  */
 const toggleWorkspaceMode = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -740,9 +851,17 @@ const toggleWorkspaceMode = async (req, res) => {
  */
 const listServiceCatalog = async (req, res) => {
   try {
-    const tenantId = req.tenantId || req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error,
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId, isSuperAdmin } = resolvedTenant
     if (!tenantId) {
-      if (req.user?.role === "super_admin") {
+      if (isSuperAdmin) {
         return res.status(200).json({
           success: true,
           data: [],
@@ -800,7 +919,15 @@ const listServiceCatalog = async (req, res) => {
  */
 const createServiceCatalogItem = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -980,7 +1107,15 @@ const getPublicServices = async (req, res) => {
  */
 const getMasterDashboard = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -1154,7 +1289,15 @@ const getMasterDashboard = async (req, res) => {
  */
 const getUnassignedQueue = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -1205,7 +1348,15 @@ const getUnassignedQueue = async (req, res) => {
  */
 const assignUnassignedItem = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin" || req.user?.role === "super_admin"
 
     if (!isOrgAdmin) {
@@ -1292,7 +1443,15 @@ const assignUnassignedItem = async (req, res) => {
  */
 const getWorkspaceDomain = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const { workspaceId } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(workspaceId)) {
@@ -1353,7 +1512,15 @@ const getWorkspaceDomain = async (req, res) => {
  */
 const setWorkspaceDomain = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin"
 
     if (!isOrgAdmin) {
@@ -1492,7 +1659,15 @@ const setWorkspaceDomain = async (req, res) => {
  */
 const verifyWorkspaceDomain = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin"
 
     if (!isOrgAdmin) {
@@ -1588,7 +1763,15 @@ const verifyWorkspaceDomain = async (req, res) => {
  */
 const removeWorkspaceDomain = async (req, res) => {
   try {
-    const tenantId = req.user?.tenantId
+    const resolvedTenant = resolveVerifiedTenantId(req)
+    if (resolvedTenant.error || !resolvedTenant.tenantId) {
+      return res.status(resolvedTenant.status || 403).json({
+        success: false,
+        error: resolvedTenant.error || "Tenant context required",
+        ...(resolvedTenant.code ? { code: resolvedTenant.code } : {}),
+      })
+    }
+    const { tenantId } = resolvedTenant
     const isOrgAdmin = req.user?.role === "account_admin"
 
     if (!isOrgAdmin) {

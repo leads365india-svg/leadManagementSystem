@@ -102,7 +102,7 @@ export default function PortalLoginClient({
     initialSearchParams?.workspace ||
     initialSearchParams?.ws ||
     ""
-  const { login, user: authUser, status: authStatus, setActiveWorkspace } = useAuth()
+  const { login, user: authUser, status: authStatus, setActiveWorkspace, reloadWorkspaces } = useAuth()
 
   // Determine candidate domain status synchronously to prevent flash of generic form
   const [effectiveHost] = useState(() => {
@@ -305,13 +305,34 @@ export default function PortalLoginClient({
         router.replace("/super-admin")
         return
       }
-      router.replace("/portal")
+
+      const redirectWithWorkspace = async () => {
+        if (workspaceParam && workspaceParam.trim() && typeof reloadWorkspaces === "function") {
+          try {
+            const wsList = await reloadWorkspaces(authUser, true)
+            const cleanWsSlug = workspaceParam.trim().toLowerCase()
+            const matched = Array.isArray(wsList)
+              ? wsList.find(
+                  (w) =>
+                    w.slug?.toLowerCase() === cleanWsSlug ||
+                    w._id?.toString() === workspaceParam.trim() ||
+                    w.id?.toString() === workspaceParam.trim()
+                )
+              : null
+            if (matched && typeof setActiveWorkspace === "function") {
+              setActiveWorkspace((matched._id || matched.id).toString(), authUser.tenantId)
+            }
+          } catch (_) {}
+        }
+        router.replace("/portal")
+      }
+      redirectWithWorkspace()
       return
     }
     if (authStatus === "unauthenticated") {
       setCheckingExistingSession(false)
     }
-  }, [authStatus, authUser, router, tenantParam])
+  }, [authStatus, authUser, router, tenantParam, workspaceParam, reloadWorkspaces, setActiveWorkspace])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -364,11 +385,10 @@ export default function PortalLoginClient({
         }
         if (response.data.user.targetWorkspace) {
           const targetWsId = response.data.user.targetWorkspace.id
-          if (typeof window !== "undefined") {
-            localStorage.setItem("leadflow_active_workspace", targetWsId)
-          }
           if (typeof setActiveWorkspace === "function") {
-            setActiveWorkspace(targetWsId)
+            setActiveWorkspace(targetWsId, response.data.user.tenantId)
+          } else if (typeof window !== "undefined") {
+            localStorage.setItem("leadflow_active_workspace", targetWsId)
           }
         }
         toast.success(`Welcome back, ${response.data.user.name}!`)

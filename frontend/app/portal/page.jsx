@@ -123,11 +123,12 @@ export default function ClientPortalDashboard() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [activeWorkspace])
 
   useEffect(() => {
+    if (isMultiWorkspaceEnabled && !activeWorkspace) return
     loadData()
-  }, [loadData])
+  }, [loadData, isMultiWorkspaceEnabled, activeWorkspace])
 
   useEffect(() => {
     const handleWorkspaceChange = () => {
@@ -166,6 +167,10 @@ export default function ClientPortalDashboard() {
   }
 
   const effectiveUser = user || authUser
+  const activeWorkspaceObj =
+    activeWorkspace && activeWorkspace !== "all" && Array.isArray(workspaces)
+      ? workspaces.find((w) => (w._id || w.id)?.toString() === activeWorkspace)
+      : null
   const companyName =
     (isWhiteLabel && (branding?.displayName || branding?.companyName)) ||
     effectiveUser?.account?.displayName ||
@@ -192,10 +197,15 @@ export default function ClientPortalDashboard() {
       {/* Top Welcome Bar */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-slate-900">
               Welcome back, {effectiveUser?.name || "Administrator"}!
             </h1>
+            {activeWorkspaceObj && (
+              <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Workspace: {activeWorkspaceObj.name}
+              </span>
+            )}
             {effectiveUser?.tenantId && (
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                 Tenant: {effectiveUser.tenantId}
@@ -203,8 +213,16 @@ export default function ClientPortalDashboard() {
             )}
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            CRM Dashboard for <strong>{companyName}</strong>. All data below is isolated strictly
-            to your organization.
+            {activeWorkspaceObj ? (
+              <>
+                Active workspace <strong>{activeWorkspaceObj.name}</strong> under organization <strong>{companyName}</strong>.
+              </>
+            ) : (
+              <>
+                CRM Dashboard for <strong>{companyName}</strong>. All data below is isolated strictly
+                to your organization.
+              </>
+            )}
           </p>
         </div>
 
