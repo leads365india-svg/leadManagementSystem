@@ -223,6 +223,19 @@ const reportMobileCall = async (req, res) => {
         if (contactMatch?.normalizedPhone) {
           effectivePhone = contactMatch.normalizedPhone
           hasValidResolvedPhone = effectivePhone.replace(/\D/g, "").length >= 7
+          if (hasValidResolvedPhone) {
+            const { normalizePhoneE164: normalizeForContact } = require("../utils/phoneNormalizer")
+            const resolvedNorm = normalizeForContact(effectivePhone, "+91") || effectivePhone
+            contactMatchedLead = await Lead.findOne({
+              tenantId: targetTenantId,
+              deletedAt: null,
+              $or: [
+                { phoneNormalized: resolvedNorm },
+                { phone: effectivePhone },
+                { "metadata.normalizedPhone": resolvedNorm },
+              ],
+            }).setOptions({ skipTenantFilter: true })
+          }
         } else {
           contactMatchedLead = await Lead.findOne({
             tenantId: targetTenantId,
@@ -936,15 +949,17 @@ const getMobileCalls = async (req, res) => {
 
     const formattedCalls = calls.map((c) => {
       const isCloud = c.source === "ai_receptionist" || Boolean(c.metadata?.aiReceptionist)
+      const isWhatsApp = c.source === "whatsapp_voip"
       const isRecReady = Boolean(c.hasRecording || (c.recording && (c.recording.status === "ready" || c.recording.status === "stored")))
       return ({
       ...c,
       id: c._id.toString(),
       clientCallId: c.clientCallId || c._id.toString(),
+      source: c.source || "manual",
       callOutcome: c.callOutcome || c.disposition || "Connected",
       outcome: c.callOutcome || c.disposition || "Connected",
       hasRecording: isRecReady,
-      recordingOrigin: isCloud ? "ai_receptionist" : "sim_call",
+      recordingOrigin: isWhatsApp ? "whatsapp_voip" : (isCloud ? "ai_receptionist" : "sim_call"),
       isCloudRecording: isCloud,
       recordingReady: isRecReady,
       remoteRecordingUrl: isRecReady ? `/api/mobile/v1/calls/${c._id}/recording` : null,

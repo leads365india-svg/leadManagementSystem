@@ -36,7 +36,9 @@ async function evaluateRecordingEligibility({ tenantId, lead = null, phoneNumber
   if (lead) {
     const isLeadDnr =
       lead.metadata?.doNotRecord === true ||
+      lead.metadata?.isDoNotRecord === true ||
       lead.doNotRecord === true ||
+      lead.isDoNotRecord === true ||
       (Array.isArray(lead.tags) && lead.tags.some((t) => String(t).toUpperCase() === "DNR"))
 
     if (isLeadDnr) {
@@ -52,11 +54,13 @@ async function evaluateRecordingEligibility({ tenantId, lead = null, phoneNumber
   const rawNum = phoneNumber || lead?.phone || lead?.phoneNormalized
   if (rawNum) {
     const norm = normalizePhoneE164(rawNum, "+91")
-    const dnrNumberMatch = await DnrRule.findOne({
-      tenantId,
-      type: "number",
-      valueNormalized: norm,
-    }).setOptions({ skipTenantFilter: true })
+    const dnrNumberMatch = norm
+      ? await DnrRule.findOne({
+          tenantId,
+          type: "number",
+          valueNormalized: norm,
+        }).setOptions({ skipTenantFilter: true })
+      : null
 
     if (dnrNumberMatch) {
       return {
