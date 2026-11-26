@@ -1,7 +1,6 @@
 "use client"
 
 import React, { useState, useEffect, useRef, useMemo } from "react"
-import { createPortal } from "react-dom"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
@@ -42,7 +41,8 @@ import {
   Minimize,
   LogOut,
   ChevronDown,
-  ChevronRight,
+  ChevronUp,
+  ChevronsUpDown,
   Menu,
   X,
   Plus,
@@ -348,28 +348,48 @@ const NAV_CATEGORIES = [
   },
 ]
 
+export function isCrmSidebarHiddenPath(pathname) {
+  if (!pathname) return false
+  return (
+    pathname === "/" ||
+    pathname.startsWith("/super-admin") ||
+    pathname.startsWith("/portal/login") ||
+    pathname === "/login"
+  )
+}
+
+export function CrmMainWrapper({ children }) {
+  const pathname = usePathname()
+  const hasSidebar = !isCrmSidebarHiddenPath(pathname)
+
+  return (
+    <main className={`flex-1 w-full max-w-full min-w-0 ${hasSidebar ? "lg:pl-[260px]" : ""}`}>
+      {children}
+    </main>
+  )
+}
+
 export default function Header() {
   const pathname = usePathname()
   const router = useRouter()
 
-  // State
-  const [activeDropdown, setActiveDropdown] = useState(null)
-  const [dropdownCoords, setDropdownCoords] = useState({ top: 0, left: 0 })
+  // Unified Sidebar Navigation State
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [expandedMobileCategory, setExpandedMobileCategory] = useState(null)
-  const [userDropdownOpen, setUserDropdownOpen] = useState(false)
-  const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false)
+  const [expandedCategory, setExpandedCategory] = useState(null)
+  const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [callbacksList, setCallbacksList] = useState([])
   const [callbackCounts, setCallbackCounts] = useState({ today: 0, overdue: 0, total: 0 })
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
-  const [mounted, setMounted] = useState(false)
-  const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false)
-  const workspaceDropdownRef = useRef(null)
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const workspaceRef = useRef(null)
+  const notificationsRef = useRef(null)
+  const profileRef = useRef(null)
+  const searchInputRef = useRef(null)
+  const lastAutoExpandedRef = useRef("")
+
   const {
     user: authUser,
     logout,
@@ -385,17 +405,10 @@ export default function Header() {
   const [logoError, setLogoError] = useState(false)
   const user = authUser
 
-  // Load and poll pending AI callbacks and reminders for notification bell (standard tenant CRM routes only)
+  // Load and poll pending AI callbacks and reminders (standard tenant CRM routes only)
   useEffect(() => {
     let isMounted = true
-    const isExcludedPage =
-      !pathname ||
-      pathname === "/" ||
-      pathname.startsWith("/super-admin") ||
-      pathname.startsWith("/portal/login") ||
-      pathname === "/login"
-
-    if (isExcludedPage) {
+    if (!pathname || isCrmSidebarHiddenPath(pathname)) {
       return
     }
 
@@ -435,18 +448,15 @@ export default function Header() {
     if (user.role === "super_admin") return NAV_CATEGORIES
 
     return NAV_CATEGORIES.map((cat) => {
-      // Filter child items
       const permittedItems = (cat.items || []).filter((item) => {
         if (!item.permission) return true
         return typeof hasPermission === "function" ? hasPermission(item.permission) : true
       })
 
-      // If category has top-level permission check
       if (cat.permission && typeof hasPermission === "function" && !hasPermission(cat.permission)) {
         return null
       }
 
-      // Hide category if all its items are filtered out
       if (cat.items && cat.items.length > 0 && permittedItems.length === 0) {
         return null
       }
@@ -460,11 +470,6 @@ export default function Header() {
       }
     }).filter(Boolean)
   }, [user, hasPermission])
-
-  const dropdownTimeoutRef = useRef(null)
-  const navRef = useRef(null)
-  const categoryButtonRefs = useRef({})
-  const searchInputRef = useRef(null)
 
   // Explicit action to exit active tenant and return to Super Admin Console
   const handleExitTenantContext = async () => {
@@ -484,7 +489,6 @@ export default function Header() {
     router.push("/super-admin")
   }
 
-
   // Fullscreen change listener
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -496,38 +500,73 @@ export default function Header() {
     }
   }, [])
 
-  // Close menus on path change
+  // Close transient drawers/popovers on route change
   useEffect(() => {
-    setActiveDropdown(null)
     setMobileMenuOpen(false)
-    setUserDropdownOpen(false)
     setWorkspaceDropdownOpen(false)
+    setNotificationsOpen(false)
+    setProfileMenuOpen(false)
   }, [pathname])
 
-  // Close menus on outside click, handle Escape and keyboard shortcut (Ctrl/Cmd + K)
+  // Lock background page scroll while mobile slide-over sidebar is open (< 1024px)
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return
+
+    const mql = window.matchMedia("(min-width: 1024px)")
+    const handleViewportChange = (e) => {
+      if (e.matches) {
+        setMobileMenuOpen(false)
+      }
+    }
+    mql.addEventListener?.("change", handleViewportChange)
+
+    if (!mobileMenuOpen || mql.matches) {
+      return () => {
+        mql.removeEventListener?.("change", handleViewportChange)
+      }
+    }
+
+    const prevOverflow = document.body.style.overflow
+    const prevTouchAction = document.body.style.touchAction
+    document.body.style.overflow = "hidden"
+    document.body.style.touchAction = "none"
+
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.body.style.touchAction = prevTouchAction
+      mql.removeEventListener?.("change", handleViewportChange)
+    }
+  }, [mobileMenuOpen])
+
+  // Close popovers on outside click, handle Escape and keyboard shortcut (Ctrl/Cmd + K)
   useEffect(() => {
     const handleClickOutside = (event) => {
-      const dropdownEl = document.getElementById("navbar-category-dropdown")
-      const isInsideDropdown = dropdownEl && dropdownEl.contains(event.target)
-      if (navRef.current && !navRef.current.contains(event.target) && !isInsideDropdown) {
-        setActiveDropdown(null)
-        setUserDropdownOpen(false)
-      }
-      if (workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(event.target)) {
+      if (workspaceRef.current && !workspaceRef.current.contains(event.target)) {
         setWorkspaceDropdownOpen(false)
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setNotificationsOpen(false)
+      }
+      if (profileRef.current && !profileRef.current.contains(event.target)) {
+        setProfileMenuOpen(false)
       }
     }
 
     const handleKeyDown = (e) => {
       if (e.key === "Escape") {
-        setActiveDropdown(null)
-        setUserDropdownOpen(false)
-        setMobileMenuOpen(false)
         setWorkspaceDropdownOpen(false)
+        setNotificationsOpen(false)
+        setProfileMenuOpen(false)
+        setMobileMenuOpen(false)
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault()
-        if (searchInputRef.current) {
+        if (typeof window !== "undefined" && window.innerWidth < 1024) {
+          setMobileMenuOpen(true)
+          setTimeout(() => {
+            searchInputRef.current?.focus()
+          }, 60)
+        } else if (searchInputRef.current) {
           searchInputRef.current.focus()
         }
       }
@@ -540,60 +579,6 @@ export default function Header() {
       document.removeEventListener("keydown", handleKeyDown)
     }
   }, [])
-
-  // Dynamic dropdown repositioning on scroll/resize
-  useEffect(() => {
-    const handleScrollOrResize = () => {
-      if (activeDropdown) {
-        const buttonEl = categoryButtonRefs.current[activeDropdown]
-        if (buttonEl) {
-          const rect = buttonEl.getBoundingClientRect()
-          const dropdownWidth = 288
-          let left = rect.left
-          if (left + dropdownWidth > window.innerWidth - 16) {
-            left = window.innerWidth - dropdownWidth - 16
-          }
-          if (left < 16) left = 16
-          setDropdownCoords({
-            top: Math.round(rect.bottom + 6),
-            left: Math.round(left),
-          })
-        }
-      }
-    }
-    window.addEventListener("scroll", handleScrollOrResize, { passive: true })
-    window.addEventListener("resize", handleScrollOrResize, { passive: true })
-    return () => {
-      window.removeEventListener("scroll", handleScrollOrResize)
-      window.removeEventListener("resize", handleScrollOrResize)
-    }
-  }, [activeDropdown])
-
-  // Dropdown open/leave handlers with natural container containment
-  const handleOpenDropdown = (categoryId) => {
-    if (dropdownTimeoutRef.current) {
-      clearTimeout(dropdownTimeoutRef.current)
-      dropdownTimeoutRef.current = null
-    }
-    setActiveDropdown(categoryId)
-    setUserDropdownOpen(false)
-  }
-
-  const handleDropdownLeave = () => {
-    if (dropdownTimeoutRef.current) {
-      clearTimeout(dropdownTimeoutRef.current)
-    }
-    dropdownTimeoutRef.current = setTimeout(() => {
-      setActiveDropdown(null)
-    }, 220)
-  }
-
-  const handleDropdownEnter = () => {
-    if (dropdownTimeoutRef.current) {
-      clearTimeout(dropdownTimeoutRef.current)
-      dropdownTimeoutRef.current = null
-    }
-  }
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -616,22 +601,13 @@ export default function Header() {
 
   const handleLogout = async () => {
     try {
-      setUserDropdownOpen(false)
+      setProfileMenuOpen(false)
+      setMobileMenuOpen(false)
       await logout()
     } catch (err) {
       console.error("Logout error:", err)
       toast.error("Logout failed. Please try again.")
     }
-  }
-
-  const isCategoryActive = (category) => {
-    if (category.id === "main") {
-      return pathname === "/" || pathname === "/portal" || pathname === "/dashboard"
-    }
-    if (category.id === "leads") {
-      return pathname?.startsWith("/leads") || pathname?.startsWith("/portal/leads")
-    }
-    return pathname?.startsWith(`/${category.id}`)
   }
 
   const isItemActive = (href) => {
@@ -643,8 +619,43 @@ export default function Header() {
         window.location.search.includes(href.split("?")[1])
       )
     }
-    return pathname === href
+    return pathname === href || pathname?.startsWith(`${href}/`)
   }
+
+  const isCategoryActive = (category) => {
+    if (category.id === "main") {
+      return pathname === "/" || pathname === "/portal" || pathname === "/dashboard"
+    }
+    if (category.id === "leads") {
+      return pathname?.startsWith("/leads") || pathname?.startsWith("/portal/leads")
+    }
+    if (pathname?.startsWith(`/${category.id}`)) return true
+    return Boolean(category.items?.some((item) => isItemActive(item.href)))
+  }
+
+  const handleSelectWorkspace = (workspaceId) => {
+    setActiveWorkspace(workspaceId)
+    setWorkspaceDropdownOpen(false)
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("leadflow_workspace_changed", { detail: { workspaceId } }))
+    }
+    router.refresh()
+  }
+
+  // Keep active multi-item category expanded automatically on route entry / auth hydration
+  useEffect(() => {
+    const syncKey = `${pathname || ""}:${filteredNavCategories.length > 0 ? "ready" : "empty"}`
+    if (lastAutoExpandedRef.current === syncKey) return
+    lastAutoExpandedRef.current = syncKey
+
+    const activeExpandable = filteredNavCategories.find(
+      (cat) => cat.items && cat.items.length > 1 && isCategoryActive(cat)
+    )
+    if (activeExpandable) {
+      setExpandedCategory(activeExpandable.id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, filteredNavCategories])
 
   // Display user identity: actual authenticated user session details
   const userName = user?.name || user?.username || "Account Admin"
@@ -666,711 +677,620 @@ export default function Header() {
     .slice(0, 2)
     .toUpperCase() || "A"
 
-  // Hide Client CRM header on Super Admin console or login pages or root entry router
-  if (
-    pathname === "/" ||
-    pathname?.startsWith("/super-admin") ||
-    pathname?.startsWith("/portal/login") ||
-    pathname === "/login"
-  ) {
+  // Hide Client CRM sidebar on Super Admin console, login pages, or root entry router
+  if (isCrmSidebarHiddenPath(pathname)) {
     return null
   }
 
-  const activeCategoryData = filteredNavCategories.find((c) => c.id === activeDropdown)
+  const renderBrandMark = ({ compact = false, onNavigate } = {}) => {
+    const brandName =
+      branding?.displayName && branding.displayName !== "LeadFlow"
+        ? branding.displayName
+        : isWhiteLabel
+        ? companyName || "CRM"
+        : "LEADS365"
+
+    return (
+      <Link
+        href="/"
+        onClick={onNavigate}
+        className="flex items-center space-x-2.5 group shrink-0 min-w-0"
+        title={branding?.displayName || companyName || "CRM Home"}
+      >
+        {branding?.logoUrl && !logoError ? (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={branding.logoUrl}
+            alt={branding.displayName || companyName || "Logo"}
+            onError={() => setLogoError(true)}
+            className={`${compact ? "h-7 max-w-[130px]" : "h-8 max-w-[140px]"} object-contain shrink-0 drop-shadow-2xs transition-transform group-hover:scale-105 duration-200`}
+          />
+        ) : (
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-white shadow-sm group-hover:scale-105 transition-all duration-200 shrink-0"
+            style={{
+              backgroundColor: branding?.primaryColor || branding?.brandPrimaryColor || "#4f46e5",
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2.2}
+                d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+              />
+            </svg>
+          </div>
+        )}
+        <div className="flex items-center space-x-1.5 min-w-0">
+          <span className="font-extrabold text-slate-900 text-sm tracking-tight group-hover:text-indigo-600 transition-colors truncate">
+            {brandName}
+          </span>
+          <span
+            className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wider border shrink-0"
+            style={{
+              backgroundColor: branding?.primaryColor ? `${branding.primaryColor}15` : "#eef2ff",
+              color: branding?.primaryColor || "#4338ca",
+              borderColor: branding?.primaryColor ? `${branding.primaryColor}30` : "#c7d2fe",
+            }}
+          >
+            CRM
+          </span>
+        </div>
+      </Link>
+    )
+  }
+
+  const selectedWorkspaceObj = workspaces?.find((w) => w._id?.toString() === activeWorkspace)
 
   return (
-    <header
-      ref={navRef}
-      className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-colors w-full max-w-full"
-    >
-      <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6">
-        <div className="flex items-center justify-between h-16 gap-2 sm:gap-4 lg:gap-6 min-w-0">
-          
-          {/* =========================================================================
-              LEFT SECTION: Brand Logo + Spacious, Left-positioned Search Bar
-          ========================================================================= */}
-          <div className="flex items-center space-x-3 sm:space-x-4 lg:space-x-5 min-w-0">
-            {/* Brand Logo & Name */}
-            <Link
-              href="/"
-              className="flex items-center space-x-2.5 group shrink-0"
-              title={branding?.displayName || companyName || "CRM Home"}
+    <>
+      {/* =========================================================================
+          MOBILE / TABLET COMPACT TRIGGER BAR (< 1024px ONLY — No duplicated nav items)
+      ========================================================================= */}
+      <header className="sticky top-0 z-30 lg:hidden bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none w-full">
+        <div className="px-3 sm:px-4 h-14 flex items-center justify-between gap-2 min-w-0">
+          <div className="flex items-center space-x-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="Open CRM Navigation"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="crm-sidebar"
+              className="p-2 -ml-1 rounded-lg text-slate-700 hover:text-slate-900 hover:bg-slate-100 focus:outline-none cursor-pointer shrink-0"
             >
-              {branding?.logoUrl && !logoError ? (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={branding.logoUrl}
-                  alt={branding.displayName || companyName || "Logo"}
-                  onError={() => setLogoError(true)}
-                  className="h-8 max-w-[150px] object-contain shrink-0 drop-shadow-2xs transition-transform group-hover:scale-105 duration-200"
-                />
-              ) : (
-                <div
-                  className="w-9 h-9 rounded-xl flex items-center justify-center text-white shadow-md group-hover:scale-105 transition-all duration-200"
-                  style={{
-                    backgroundColor: branding?.primaryColor || branding?.brandPrimaryColor || "#4f46e5",
-                  }}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2.2}
-                      d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-                    />
-                  </svg>
-                </div>
-              )}
-              <div className="flex items-center space-x-1.5">
-                <span className="font-extrabold text-slate-900 text-base tracking-tight group-hover:text-indigo-600 transition-colors">
-                  {branding?.displayName || (isWhiteLabel ? (companyName || "CRM") : "LeadFlow")}
-                </span>
-                <span
-                  className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wider border"
-                  style={{
-                    backgroundColor: branding?.primaryColor ? `${branding.primaryColor}15` : "#eef2ff",
-                    color: branding?.primaryColor || "#4338ca",
-                    borderColor: branding?.primaryColor ? `${branding.primaryColor}30` : "#c7d2fe",
-                  }}
-                >
-                  CRM
-                </span>
-              </div>
-            </Link>
+              <Menu className="w-5 h-5" />
+            </button>
+            {renderBrandMark({ compact: true })}
+          </div>
+        </div>
+      </header>
 
-            {/* Multi-Workspace Switcher — Only rendered when organization has multi-workspace mode enabled */}
-            {isMultiWorkspaceEnabled && workspaces && workspaces.length > 0 && (
-              <div className="relative shrink-0" ref={workspaceDropdownRef}>
+      {/* Mobile / Tablet Drawer Backdrop (< 1024px) */}
+      <div
+        onClick={() => setMobileMenuOpen(false)}
+        aria-hidden="true"
+        className={`fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden transition-opacity duration-200 ${
+          mobileMenuOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+      />
+
+      {/* =========================================================================
+          UNIFIED PERMANENT LEFT SIDEBAR (260px Fixed on >= 1024px, Drawer on < 1024px)
+      ========================================================================= */}
+      <aside
+        id="crm-sidebar"
+        aria-label="CRM Sidebar Navigation"
+        className={`fixed inset-y-0 left-0 z-50 lg:z-40 w-[260px] max-w-[86vw] lg:max-w-[260px] h-[100dvh] bg-white border-r border-slate-200/90 shadow-2xl lg:shadow-xs flex flex-col select-none transition-transform duration-200 ease-out ${
+          mobileMenuOpen
+            ? "translate-x-0 visible pointer-events-auto"
+            : "-translate-x-full invisible pointer-events-none lg:translate-x-0 lg:visible lg:pointer-events-auto"
+        }`}
+      >
+        {/* -----------------------------------------------------------------------
+            TOP SECTION: Branding + Workspace Selector + Global Search
+        ----------------------------------------------------------------------- */}
+        <div className="shrink-0 border-b border-slate-100 bg-white">
+          {/* Logo & Utility Buttons */}
+          <div className="px-4 pt-3.5 pb-2.5 flex items-center justify-between gap-2">
+            {renderBrandMark({ onNavigate: () => setMobileMenuOpen(false) })}
+
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                aria-label="Toggle Fullscreen"
+                className="hidden lg:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors focus:outline-none cursor-pointer"
+              >
+                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                aria-label="Close CRM Navigation"
+                className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Super Admin Active Tenant Indicator */}
+          {user?.role === "super_admin" && !isWhiteLabel && (
+            <div className="px-3.5 pb-2.5">
+              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200/80 text-[11px] shadow-2xs">
+                <div className="flex items-center space-x-1 min-w-0">
+                  <span className="font-bold text-indigo-700 shrink-0">Tenant:</span>
+                  <span className="text-slate-800 font-semibold truncate" title={companyName}>
+                    {companyName || user?.tenantId || "Active"}
+                  </span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setWorkspaceDropdownOpen((prev) => !prev)}
-                  className="flex items-center space-x-2 px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-100/90 hover:bg-slate-200/90 text-slate-800 border border-slate-200/80 transition-all shadow-2xs group cursor-pointer"
-                  title="Switch active project/workspace"
+                  onClick={handleExitTenantContext}
+                  className="text-indigo-600 hover:text-indigo-900 font-bold hover:underline shrink-0 cursor-pointer"
+                  title="Exit to Super Admin Console"
                 >
-                  <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  <span className="truncate max-w-[120px] sm:max-w-[150px]">
-                    {activeWorkspace === "all"
-                      ? "All Projects"
-                      : (workspaces.find((w) => w._id?.toString() === activeWorkspace)?.name || "Select Workspace")}
-                  </span>
-                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-transform" />
+                  Console
                 </button>
-
-                {workspaceDropdownOpen && (
-                  <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-                    <div className="px-3 py-1.5 border-b border-slate-100">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Project / Workspace</p>
-                    </div>
-
-                    {/* All Projects option for Org Admins */}
-                    {(user?.role === "account_admin" || user?.role === "super_admin") && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveWorkspace("all")
-                          setWorkspaceDropdownOpen(false)
-                          if (typeof window !== "undefined") {
-                            window.dispatchEvent(new CustomEvent("leadflow_workspace_changed", { detail: { workspaceId: "all" } }))
-                          }
-                          router.refresh()
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
-                          activeWorkspace === "all" ? "bg-indigo-50/80 text-indigo-700 font-semibold" : "text-slate-700"
-                        }`}
-                      >
-                        <div className="flex items-center space-x-2 min-w-0">
-                          <Layers className="w-4 h-4 text-indigo-600 shrink-0" />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">All Projects</p>
-                            <p className="text-[10px] text-slate-400">Consolidated Master View</p>
-                          </div>
-                        </div>
-                        {activeWorkspace === "all" && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
-                      </button>
-                    )}
-
-                    <div className="max-h-56 overflow-y-auto py-1">
-                      {workspaces.map((ws) => {
-                        const isSelected = activeWorkspace === ws._id?.toString()
-                        return (
-                          <button
-                            key={ws._id}
-                            type="button"
-                            onClick={() => {
-                              const wsId = ws._id?.toString()
-                              setActiveWorkspace(wsId)
-                              setWorkspaceDropdownOpen(false)
-                              if (typeof window !== "undefined") {
-                                window.dispatchEvent(new CustomEvent("leadflow_workspace_changed", { detail: { workspaceId: wsId } }))
-                              }
-                              router.refresh()
-                            }}
-                            className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
-                              isSelected ? "bg-indigo-50/80 text-indigo-700 font-semibold" : "text-slate-700"
-                            }`}
-                          >
-                            <div className="flex items-center space-x-2 min-w-0">
-                              <div
-                                className="w-2 h-2 rounded-full shrink-0"
-                                style={{ backgroundColor: ws.branding?.primaryColor || "#4f46e5" }}
-                              />
-                              <div className="min-w-0">
-                                <p className="truncate font-medium">{ws.name}</p>
-                                <p className="text-[10px] text-slate-400 truncate">
-                                  {ws.slug} {ws.userRole ? `• ${ws.userRole}` : ""}
-                                </p>
-                              </div>
-                            </div>
-                            {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
-                          </button>
-                        )
-                      })}
-                    </div>
-
-                    {(user?.role === "account_admin" || user?.role === "super_admin") && (
-                      <div className="border-t border-slate-100 pt-1 mt-1 px-1">
-                        <Link
-                          href="/settings/workspaces"
-                          onClick={() => setWorkspaceDropdownOpen(false)}
-                          className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50/60 rounded-lg font-medium transition-colors"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Manage Workspaces</span>
-                        </Link>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Spacious Search Bar — Positioned to the left, generous responsive width */}
-            <form
-              onSubmit={handleGlobalSearch}
-              className="relative w-32 sm:w-44 md:w-48 lg:w-64 xl:w-80 min-w-[100px] shrink transition-all duration-200"
-            >
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none transition-colors" />
+          {/* Workspace Selector */}
+          {isMultiWorkspaceEnabled && workspaces && workspaces.length > 0 && (
+            <div className="px-3.5 pb-2.5 relative" ref={workspaceRef}>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                CRM Workspace
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceDropdownOpen((prev) => !prev)
+                  setNotificationsOpen(false)
+                  setProfileMenuOpen(false)
+                }}
+                aria-expanded={workspaceDropdownOpen}
+                title="Switch active project/workspace"
+                className="w-full flex items-center justify-between gap-2 px-2.5 py-2 text-xs font-semibold rounded-lg bg-slate-50/90 hover:bg-slate-100 text-slate-800 border border-slate-200/90 shadow-2xs transition-colors cursor-pointer"
+              >
+                <div className="flex items-center space-x-2 min-w-0">
+                  <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                  <span className="truncate">
+                    {activeWorkspace === "all"
+                      ? `All Projects (${workspaces.length})`
+                      : selectedWorkspaceObj?.name || "Select Workspace"}
+                  </span>
+                </div>
+                <ChevronsUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              </button>
+
+              {workspaceDropdownOpen && (
+                <div className="absolute left-3.5 right-3.5 top-full -mt-1 bg-white rounded-xl shadow-xl border border-slate-200/95 py-1.5 z-30">
+                  <div className="px-3 py-1.5 border-b border-slate-100">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Project / Workspace
+                    </p>
+                  </div>
+
+                  {(user?.role === "account_admin" || user?.role === "super_admin") && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectWorkspace("all")}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
+                        activeWorkspace === "all" ? "bg-indigo-50/80 text-indigo-700 font-semibold" : "text-slate-700"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <Layers className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">All Projects</p>
+                          <p className="text-[10px] text-slate-400">Consolidated Master View</p>
+                        </div>
+                      </div>
+                      {activeWorkspace === "all" && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                    </button>
+                  )}
+
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {workspaces.map((ws) => {
+                      const wsId = ws._id?.toString()
+                      const isSelected = activeWorkspace === wsId
+                      return (
+                        <button
+                          key={ws._id}
+                          type="button"
+                          onClick={() => handleSelectWorkspace(wsId)}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer ${
+                            isSelected ? "bg-indigo-50/80 text-indigo-700 font-semibold" : "text-slate-700"
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2 min-w-0">
+                            <div
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: ws.branding?.primaryColor || "#4f46e5" }}
+                            />
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">{ws.name}</p>
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {ws.slug} {ws.userRole ? `• ${ws.userRole}` : ""}
+                              </p>
+                            </div>
+                          </div>
+                          {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {(user?.role === "account_admin" || user?.role === "super_admin") && (
+                    <div className="border-t border-slate-100 pt-1 mt-1 px-1">
+                      <Link
+                        href="/settings/workspaces"
+                        onClick={() => {
+                          setWorkspaceDropdownOpen(false)
+                          setMobileMenuOpen(false)
+                        }}
+                        className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50/60 rounded-lg font-medium transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Manage Workspaces</span>
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Global Search */}
+          <div className="px-3.5 pb-3">
+            <form onSubmit={handleGlobalSearch} className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search leads..."
-                className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50/90 hover:bg-slate-100/70 focus:bg-white text-slate-800 placeholder-slate-400 border border-slate-200/90 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 shadow-2xs transition-all duration-200"
+                aria-label="Global Search"
+                className="w-full pl-8 pr-11 py-2 text-xs bg-slate-50/90 hover:bg-slate-100/70 focus:bg-white text-slate-800 placeholder-slate-400 border border-slate-200/90 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 shadow-2xs transition-colors"
               />
-              <div className="hidden xl:flex items-center absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
-                <kbd className="text-[10px] font-medium text-slate-400 bg-white border border-slate-200/90 rounded px-1.5 py-0.5 shadow-2xs">
-                  ⌘K
-                </kbd>
-              </div>
+              <kbd className="hidden lg:inline-flex items-center text-[10px] font-medium text-slate-400 bg-white border border-slate-200/90 rounded px-1.5 py-0.5 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none shadow-2xs">
+                ⌘K
+              </kbd>
             </form>
           </div>
+        </div>
 
-          {/* =========================================================================
-              CENTER: ALL PRIMARY NAVIGATION ITEMS IN ONE NAVBAR (NO ARROWS, NO SCROLL)
-          ========================================================================= */}
-          <nav className="hidden md:flex items-center space-x-0.5 lg:space-x-1 xl:space-x-1.5 shrink-0">
-            {filteredNavCategories.map((category) => {
-              const CategoryIcon = category.icon
-              const isActive = isCategoryActive(category)
-              const isDropdownOpen = activeDropdown === category.id
-              const hasDropdown = category.items.length > 1
+        {/* -----------------------------------------------------------------------
+            NAVIGATION SECTION: Independently Scrollable CRM Menu & Submenus
+        ----------------------------------------------------------------------- */}
+        <nav
+          aria-label="Primary CRM Navigation"
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-2.5 space-y-1 [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent]"
+        >
+          {filteredNavCategories.map((category) => {
+            const CategoryIcon = category.icon
+            const isExpanded = expandedCategory === category.id
+            const isCatActive = isCategoryActive(category)
+            const hasChildren = category.items.length > 1
 
+            if (!hasChildren) {
               return (
-                <div
+                <Link
                   key={category.id}
-                  className="relative shrink-0"
-                  onMouseEnter={() => {
-                    if (hasDropdown) handleOpenDropdown(category.id)
-                  }}
-                  onMouseLeave={() => {
-                    if (hasDropdown) handleDropdownLeave()
-                  }}
+                  href={category.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors ${
+                    isCatActive
+                      ? "bg-indigo-50 text-indigo-700 border border-indigo-200/60"
+                      : "text-slate-700 hover:bg-slate-50 hover:text-slate-900 border border-transparent"
+                  }`}
                 >
-                  <button
-                    type="button"
-                    ref={(el) => (categoryButtonRefs.current[category.id] = el)}
-                    onClick={() => {
-                      if (!hasDropdown) {
-                        setActiveDropdown(null)
-                        router.push(category.href)
-                      } else {
-                        setActiveDropdown(isDropdownOpen ? null : category.id)
-                      }
-                    }}
-                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 lg:px-3 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-150 focus:outline-none cursor-pointer ${
-                      isActive || isDropdownOpen
-                        ? "bg-indigo-50/80 text-indigo-700 shadow-2xs border border-indigo-200/80"
-                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 border border-transparent"
-                    }`}
-                  >
-                    <CategoryIcon
-                      className={`w-3.5 h-3.5 transition-colors ${
-                        isActive || isDropdownOpen ? "text-indigo-600" : "text-slate-400"
-                      }`}
-                    />
-                    <span>{category.label}</span>
-                    {hasDropdown && (
-                      <ChevronDown
-                        className={`w-3 h-3 text-slate-400 transition-transform duration-200 ${
-                          isDropdownOpen ? "rotate-180 text-indigo-600" : ""
-                        }`}
-                      />
-                    )}
-                  </button>
-
-                  {/* Stable In-Front Category Dropdown Menu */}
-                  {hasDropdown && isDropdownOpen && (
-                    <div
-                      id={`navbar-category-dropdown-${category.id}`}
-                      className={`absolute top-full mt-1.5 w-72 bg-white rounded-xl shadow-2xl border border-slate-200/95 py-1.5 z-[99999] animate-in fade-in slide-in-from-top-1 duration-150 before:content-[''] before:absolute before:-top-3 before:left-0 before:right-0 before:h-3 ${
-                        category.id === "settings" || category.id === "reports" ? "right-0" : "left-0"
-                      }`}
-                      onMouseEnter={handleDropdownEnter}
-                      onMouseLeave={handleDropdownLeave}
-                    >
-                      <div className="px-3.5 py-2 mb-1 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 rounded-t-lg select-none">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                          {category.label}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-medium">
-                          {category.items.length} items
-                        </span>
-                      </div>
-                      <div className="px-1.5 py-0.5 space-y-0.5 max-h-[224px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400 [&::-webkit-scrollbar-track]:bg-transparent">
-                        {category.items.map((item) => {
-                          const ItemIcon = item.icon
-                          const itemActive = isItemActive(item.href)
-                          return (
-                            <Link
-                              key={item.id}
-                              href={item.href}
-                              onClick={() => setActiveDropdown(null)}
-                              className={`flex items-start space-x-2.5 p-2 rounded-lg text-xs transition-colors group ${
-                                itemActive
-                                  ? "bg-indigo-50/90 text-indigo-900 font-semibold"
-                                  : "text-slate-700 hover:bg-slate-50 hover:text-indigo-600"
-                              }`}
-                            >
-                              <div
-                                className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                                  itemActive
-                                    ? "bg-indigo-600 text-white shadow-2xs"
-                                    : "bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600"
-                                }`}
-                              >
-                                <ItemIcon className="w-3.5 h-3.5" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center space-x-1.5">
-                                  <span className="font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
-                                    {item.label}
-                                  </span>
-                                  {item.badge && (
-                                    <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-700">
-                                      {item.badge}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-[11px] text-slate-400 line-clamp-1 leading-normal">
-                                  {item.description}
-                                </p>
-                              </div>
-                            </Link>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  <CategoryIcon
+                    className={`w-4 h-4 shrink-0 ${isCatActive ? "text-indigo-600" : "text-slate-400"}`}
+                  />
+                  <span className="truncate">{category.label}</span>
+                </Link>
               )
-            })}
-          </nav>
+            }
 
-          {/* =========================================================================
-              RIGHT SECTION: Fullscreen & User Profile
-          ========================================================================= */}
-          <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
-            {/* Super Admin Active Tenant Indicator */}
-            {user?.role === "super_admin" && !isWhiteLabel && (
-              <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200/80 text-xs shadow-2xs">
-                <span className="font-bold text-indigo-700">Super Admin</span>
-                <span className="text-slate-400">/</span>
-                <span className="text-slate-800 font-semibold truncate max-w-[140px]" title={companyName}>
-                  {companyName || user?.tenantId || "Tenant"}
-                </span>
+            return (
+              <div key={category.id} className="space-y-0.5">
                 <button
                   type="button"
-                  onClick={handleExitTenantContext}
-                  className="text-indigo-600 hover:text-indigo-900 font-bold ml-1 hover:underline text-[11px] cursor-pointer"
-                  title="Exit to Super Admin Console"
+                  onClick={() => setExpandedCategory(isExpanded ? null : category.id)}
+                  aria-expanded={isExpanded}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors cursor-pointer ${
+                    isCatActive
+                      ? "bg-indigo-50/70 text-indigo-700"
+                      : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
                 >
-                  Console
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <CategoryIcon
+                      className={`w-4 h-4 shrink-0 ${isCatActive ? "text-indigo-600" : "text-slate-400"}`}
+                    />
+                    <span className="truncate">{category.label}</span>
+                  </div>
+                  {isExpanded ? (
+                    <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                  )}
                 </button>
+
+                {isExpanded && (
+                  <div className="pl-6 pr-1 py-0.5 space-y-0.5">
+                    {category.items.map((item) => {
+                      const ItemIcon = item.icon
+                      const itemActive = isItemActive(item.href)
+
+                      return (
+                        <Link
+                          key={item.id}
+                          href={item.href}
+                          onClick={() => setMobileMenuOpen(false)}
+                          className={`flex items-center space-x-2.5 px-3 py-1.5 rounded-lg text-[12.5px] font-medium transition-colors ${
+                            itemActive
+                              ? "bg-indigo-50 text-indigo-700 font-semibold"
+                              : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                          }`}
+                        >
+                          <ItemIcon
+                            className={`w-3.5 h-3.5 shrink-0 ${itemActive ? "text-indigo-600" : "text-slate-400"}`}
+                          />
+                          <span className="truncate">{item.label}</span>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </nav>
+
+        {/* -----------------------------------------------------------------------
+            BOTTOM SECTION: Notifications + User Profile + Super Admin Console + Sign Out
+        ----------------------------------------------------------------------- */}
+        <div className="shrink-0 border-t border-slate-200/80 bg-white px-3 py-2.5 space-y-1.5">
+          {/* Notifications Trigger & Upward Popover */}
+          <div className="relative" ref={notificationsRef}>
+            {notificationsOpen && (
+              <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-30">
+                <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 leading-snug">Callback Reminders</p>
+                    <p className="text-[11px] text-slate-500">
+                      {callbackCounts.today} today • {callbackCounts.overdue} overdue
+                    </p>
+                  </div>
+                  <Link
+                    href="/communication/follow-ups"
+                    onClick={() => {
+                      setNotificationsOpen(false)
+                      setMobileMenuOpen(false)
+                    }}
+                    className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 shrink-0"
+                  >
+                    View all
+                  </Link>
+                </div>
+
+                <div className="py-1 max-h-56 overflow-y-auto">
+                  {callbacksList.length === 0 ? (
+                    <div className="py-5 text-center text-slate-400">
+                      <Clock className="w-5 h-5 mx-auto mb-1 text-slate-300" />
+                      <p className="text-xs text-slate-500 font-medium">No pending callbacks</p>
+                      <p className="text-[10px] text-slate-400">You&apos;re all caught up!</p>
+                    </div>
+                  ) : (
+                    callbacksList.map((cb) => (
+                      <Link
+                        key={cb._id || cb.id}
+                        href="/communication/follow-ups"
+                        onClick={() => {
+                          setNotificationsOpen(false)
+                          setMobileMenuOpen(false)
+                        }}
+                        className="block px-3.5 py-2 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
+                      >
+                        <div className="flex items-center justify-between mb-1 gap-2">
+                          <span className="text-xs font-semibold text-slate-900 truncate">
+                            {cb.customerName || cb.lead?.name || cb.title}
+                          </span>
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                              cb.isOverdue
+                                ? "bg-red-100 text-red-700"
+                                : cb.isToday
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-blue-100 text-blue-700"
+                            }`}
+                          >
+                            {cb.isOverdue ? "Overdue" : cb.isToday ? "Today" : "Upcoming"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 line-clamp-1">
+                          {cb.notes || cb.callbackReason || "Scheduled follow-up"}
+                        </p>
+                        <p className="text-[10px] font-mono text-slate-400 mt-1">
+                          {cb.scheduledAt
+                            ? new Date(cb.scheduledAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+                            : ""}
+                        </p>
+                      </Link>
+                    ))
+                  )}
+                </div>
+
+                <div className="px-3.5 py-2 border-t border-slate-100 text-center bg-slate-50/40">
+                  <Link
+                    href="/communication/follow-ups"
+                    onClick={() => {
+                      setNotificationsOpen(false)
+                      setMobileMenuOpen(false)
+                    }}
+                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+                  >
+                    Manage All Follow-ups & Callbacks →
+                  </Link>
+                </div>
               </div>
             )}
 
-            {/* AI Callback Notification Bell */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setNotificationDropdownOpen(!notificationDropdownOpen)
-                  setUserDropdownOpen(false)
-                  setActiveDropdown(null)
-                }}
-                title="Scheduled Callbacks & Reminders"
-                aria-label="Scheduled Callbacks & Reminders"
-                className="relative p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors focus:outline-none cursor-pointer"
-              >
-                <Bell className="w-4 h-4" />
+            <button
+              type="button"
+              onClick={() => {
+                setNotificationsOpen((prev) => !prev)
+                setProfileMenuOpen(false)
+                setWorkspaceDropdownOpen(false)
+              }}
+              aria-expanded={notificationsOpen}
+              aria-label="Scheduled Callbacks & Reminders"
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors cursor-pointer ${
+                notificationsOpen
+                  ? "bg-indigo-50/70 text-indigo-700"
+                  : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <div className="flex items-center space-x-3 min-w-0">
+                <Bell
+                  className={`w-4 h-4 shrink-0 ${notificationsOpen ? "text-indigo-600" : "text-slate-400"}`}
+                />
+                <span className="truncate">Notifications</span>
+              </div>
+              <div className="flex items-center space-x-1.5 shrink-0">
                 {callbackCounts.total > 0 && (
-                  <span className="absolute top-1.5 right-1.5 flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                    {callbackCounts.total}
                   </span>
                 )}
-              </button>
+                {notificationsOpen ? (
+                  <ChevronUp className="w-4 h-4 text-slate-400" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-slate-400" />
+                )}
+              </div>
+            </button>
+          </div>
 
-              {/* Callback Reminders Dropdown */}
-              {notificationDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 py-2.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-slate-900 leading-snug">Callback Reminders</p>
-                      <p className="text-[11px] text-slate-500">
-                        {callbackCounts.today} today • {callbackCounts.overdue} overdue
-                      </p>
-                    </div>
-                    <Link
-                      href="/communication/follow-ups"
-                      onClick={() => setNotificationDropdownOpen(false)}
-                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
-                    >
-                      View all
-                    </Link>
-                  </div>
-
-                  <div className="py-1 max-h-64 overflow-y-auto">
-                    {callbacksList.length === 0 ? (
-                      <div className="py-6 text-center text-slate-400">
-                        <Clock className="w-6 h-6 mx-auto mb-1 text-slate-300" />
-                        <p className="text-xs text-slate-500 font-medium">No pending callbacks</p>
-                        <p className="text-[10px] text-slate-400">You&apos;re all caught up!</p>
-                      </div>
-                    ) : (
-                      callbacksList.map((cb) => (
-                        <Link
-                          key={cb._id || cb.id}
-                          href="/communication/follow-ups"
-                          onClick={() => setNotificationDropdownOpen(false)}
-                          className="block px-4 py-2.5 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold text-slate-900 truncate">
-                              {cb.customerName || cb.lead?.name || cb.title}
-                            </span>
-                            <span
-                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                                cb.isOverdue
-                                  ? "bg-red-100 text-red-700"
-                                  : cb.isToday
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-blue-100 text-blue-700"
-                              }`}
-                            >
-                              {cb.isOverdue ? "Overdue" : cb.isToday ? "Today" : "Upcoming"}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-500 line-clamp-1">
-                            {cb.notes || cb.callbackReason || "Scheduled follow-up"}
-                          </p>
-                          <p className="text-[10px] font-mono text-slate-400 mt-1">
-                            {cb.scheduledAt ? new Date(cb.scheduledAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : ""}
-                          </p>
-                        </Link>
-                      ))
+          {/* User Profile Menu + Direct Sign Out */}
+          <div className="relative" ref={profileRef}>
+            {profileMenuOpen && (
+              <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 max-h-[52vh] overflow-y-auto z-30">
+                <div className="px-3.5 py-2 border-b border-slate-100">
+                  <p className="text-xs font-bold text-slate-900 leading-snug truncate">{userName}</p>
+                  {userEmail && <p className="text-[11px] text-slate-500 font-mono truncate">{userEmail}</p>}
+                  <div className="mt-1.5 flex flex-wrap gap-1 items-center">
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      {userRole}
+                    </span>
+                    {companyName && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 truncate max-w-[180px]">
+                        {companyName}
+                      </span>
                     )}
                   </div>
-
-                  <div className="px-4 pt-2 border-t border-slate-100 text-center">
-                    <Link
-                      href="/communication/follow-ups"
-                      onClick={() => setNotificationDropdownOpen(false)}
-                      className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
-                    >
-                      Manage All Follow-ups & Callbacks →
-                    </Link>
-                  </div>
                 </div>
-              )}
-            </div>
 
-            {/* Fullscreen Toggle */}
-            <button
-              type="button"
-              onClick={toggleFullscreen}
-              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-              aria-label="Toggle Fullscreen"
-              className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors focus:outline-none cursor-pointer"
-            >
-              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-            </button>
+                <div className="py-1 text-xs text-slate-700">
+                  {user?.role === "super_admin" && !isWhiteLabel && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false)
+                        setMobileMenuOpen(false)
+                        handleExitTenantContext()
+                      }}
+                      className="w-full text-left flex items-center space-x-2.5 px-3.5 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100 cursor-pointer"
+                    >
+                      <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>Super Admin Console</span>
+                    </button>
+                  )}
+                  <Link
+                    href="/settings/staff"
+                    onClick={() => {
+                      setProfileMenuOpen(false)
+                      setMobileMenuOpen(false)
+                    }}
+                    className="flex items-center space-x-2.5 px-3.5 py-2 hover:bg-slate-50 transition-colors"
+                  >
+                    <Shield className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>Staff & Team Profile</span>
+                  </Link>
+                  <Link
+                    href="/settings/custom-fields"
+                    onClick={() => {
+                      setProfileMenuOpen(false)
+                      setMobileMenuOpen(false)
+                    }}
+                    className="flex items-center space-x-2.5 px-3.5 py-2 hover:bg-slate-50 transition-colors"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>Custom Fields & Tags</span>
+                  </Link>
+                </div>
 
-            {/* User Profile Avatar */}
-            <div className="relative pl-1">
+                <div className="pt-1.5 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => {
-                  setUserDropdownOpen(!userDropdownOpen)
-                  setActiveDropdown(null)
+                  setProfileMenuOpen((prev) => !prev)
+                  setNotificationsOpen(false)
+                  setWorkspaceDropdownOpen(false)
                 }}
-                title="Account Profile"
+                aria-expanded={profileMenuOpen}
                 aria-label="Account Profile"
-                className="flex items-center rounded-full p-0.5 hover:ring-2 hover:ring-indigo-400/50 transition-all focus:outline-none cursor-pointer"
+                className="flex-1 min-w-0 flex items-center justify-between gap-2 p-1.5 rounded-xl hover:bg-slate-50 transition-colors text-left cursor-pointer"
               >
-                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 via-indigo-700 to-purple-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
-                  {userInitials}
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 via-indigo-700 to-purple-600 text-white font-bold text-xs flex items-center justify-center shadow-xs shrink-0">
+                    {userInitials}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-900 truncate">{userName}</p>
+                    <p className="text-[11px] text-slate-500 truncate">{companyName || userRole}</p>
+                  </div>
                 </div>
+                <ChevronsUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </button>
-
-              {/* Profile Dropdown */}
-              {userDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 py-2.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="px-4 py-2.5 border-b border-slate-100">
-                    <p className="text-xs font-bold text-slate-900 leading-snug">{userName}</p>
-                    {userEmail && (
-                      <p className="text-[11px] text-slate-500 font-mono truncate">{userEmail}</p>
-                    )}
-                    <div className="mt-2 flex flex-wrap gap-1.5 items-center">
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                        {userRole}
-                      </span>
-                      {companyName && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 truncate max-w-[180px]">
-                          {companyName}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="py-1 text-xs text-slate-700">
-                    {user?.role === "super_admin" && !isWhiteLabel && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUserDropdownOpen(false)
-                          handleExitTenantContext()
-                        }}
-                        className="w-full text-left flex items-center space-x-2.5 px-4 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100 cursor-pointer"
-                      >
-                        <Building2 className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Super Admin Console</span>
-                      </button>
-                    )}
-                    <Link
-                      href="/settings/staff"
-                      onClick={() => setUserDropdownOpen(false)}
-                      className="flex items-center space-x-2.5 px-4 py-2 hover:bg-slate-50 transition-colors"
-                    >
-                      <Shield className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Staff & Team Profile</span>
-                    </Link>
-                    <Link
-                      href="/settings/custom-fields"
-                      onClick={() => setUserDropdownOpen(false)}
-                      className="flex items-center space-x-2.5 px-4 py-2 hover:bg-slate-50 transition-colors"
-                    >
-                      <Sliders className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Custom Fields & Tags</span>
-                    </Link>
-                  </div>
-
-                  <div className="pt-1.5 border-t border-slate-100">
-                    <button
-                      type="button"
-                      onClick={handleLogout}
-                      className="w-full flex items-center space-x-2.5 px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                    >
-                      <LogOut className="w-3.5 h-3.5 text-rose-500" />
-                      <span>Sign Out</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Mobile / Tablet Menu Button (Visible on screens < md) */}
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              aria-label="Toggle CRM Menu"
-              className="md:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 focus:outline-none ml-0.5 cursor-pointer"
-            >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
-          </div>
-        </div>
-      </div>
-
-
-
-      {/* =========================================================================
-          MOBILE NAVIGATION DRAWER
-      ========================================================================= */}
-      {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 md:hidden animate-in fade-in duration-200">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs transition-opacity"
-            onClick={() => setMobileMenuOpen(false)}
-          />
-
-          {/* Drawer content */}
-          <div className="fixed inset-y-0 right-0 w-84 max-w-[85vw] bg-white shadow-2xl flex flex-col z-50 border-l border-slate-200">
-            {/* Drawer Header */}
-            <div className="h-16 px-4 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs">
-                  LF
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900">LeadFlow CRM</h3>
-                  <p className="text-[10px] text-slate-400">All 6 CRM Categories</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMobileMenuOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Mobile Search */}
-            <div className="p-3 border-b border-slate-100">
-              <form onSubmit={handleGlobalSearch} className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search leads..."
-                  className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </form>
-            </div>
-
-            {/* Scrollable Categories List */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-1">
-              {filteredNavCategories.map((category) => {
-                const CategoryIcon = category.icon
-                const isExpanded = expandedMobileCategory === category.id
-                const isCatActive = isCategoryActive(category)
-                const hasChildren = category.items.length > 1
-
-                if (!hasChildren) {
-                  return (
-                    <Link
-                      key={category.id}
-                      href={category.href}
-                      onClick={() => setMobileMenuOpen(false)}
-                      className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition-colors ${
-                        isCatActive ? "text-indigo-700 bg-indigo-50/60" : "text-slate-800 hover:bg-slate-100"
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <CategoryIcon className="w-4 h-4 text-indigo-600" />
-                        <span>{category.label}</span>
-                      </div>
-                    </Link>
-                  )
-                }
-
-                return (
-                  <div
-                    key={category.id}
-                    className="rounded-xl border border-slate-100 overflow-hidden bg-slate-50/40"
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpandedMobileCategory(isExpanded ? null : category.id)
-                      }
-                      className={`w-full flex items-center justify-between p-2.5 text-xs font-bold transition-colors cursor-pointer ${
-                        isCatActive ? "text-indigo-700 bg-indigo-50/50" : "text-slate-800 hover:bg-slate-100"
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <CategoryIcon className="w-4 h-4 text-indigo-600" />
-                        <span>{category.label}</span>
-                      </div>
-                      <div className="flex items-center space-x-1.5">
-                        <span className="text-[10px] text-slate-400">{category.items.length}</span>
-                        <ChevronRight
-                          className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
-                            isExpanded ? "rotate-90" : ""
-                          }`}
-                        />
-                      </div>
-                    </button>
-
-                    {isExpanded && (
-                      <div className="bg-white px-2 py-1 space-y-0.5 border-t border-slate-100">
-                        {category.items.map((item) => {
-                          const ItemIcon = item.icon
-                          const itemActive = isItemActive(item.href)
-
-                          return (
-                            <Link
-                              key={item.id}
-                              href={item.href}
-                              onClick={() => setMobileMenuOpen(false)}
-                              className={`flex items-center space-x-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                                itemActive
-                                  ? "bg-indigo-50 text-indigo-700 font-semibold"
-                                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                              }`}
-                            >
-                              <ItemIcon className="w-3.5 h-3.5 text-slate-400" />
-                              <span>{item.label}</span>
-                            </Link>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Mobile Drawer Footer */}
-            <div className="p-3 border-t border-slate-100 bg-slate-50 space-y-2">
-              <Link
-                href="/leads/new"
-                onClick={() => setMobileMenuOpen(false)}
-                className="w-full flex items-center justify-center space-x-1.5 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-lg shadow-sm"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add New Lead</span>
-              </Link>
 
               <button
                 type="button"
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center space-x-1.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-rose-200 cursor-pointer"
+                title="Sign Out"
+                aria-label="Sign Out"
+                className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0 cursor-pointer"
               >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Sign Out</span>
+                <LogOut className="w-4 h-4" />
               </button>
             </div>
           </div>
         </div>
-      )}
+      </aside>
 
       {/* Persistent In-App Follow-up & Callback Alarms */}
       <FollowUpAlertManager />
-    </header>
+    </>
   )
 }

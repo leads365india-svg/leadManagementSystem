@@ -1,6 +1,6 @@
 import { Inter } from "next/font/google"
 import "./globals.css"
-import Header from "@/components/header"
+import Header, { CrmMainWrapper } from "@/components/header"
 import Footer from "@/components/footer"
 import { Toaster } from "react-hot-toast"
 import { AuthProvider } from "@/lib/auth-context"
@@ -64,9 +64,9 @@ export default function RootLayout({ children }) {
         <AuthProvider>
           <BrandingProvider>
             <Header />
-            <main className="flex-1 w-full max-w-full min-w-0">
+            <CrmMainWrapper>
               <AuthGuard>{children}</AuthGuard>
-            </main>
+            </CrmMainWrapper>
             <Footer />
           </BrandingProvider>
         </AuthProvider>

@@ -243,6 +243,8 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       transcript.completedAt = new Date()
       await transcript.save()
 
+      console.log("✅ [AIPipeline] Gemini STT completed for call " + callId + " (segments=" + transcript.segments.length + ", lang=" + transcript.language + ")")
+
       // Record STT usage
       await recordUsage({
         tenantId,
@@ -259,6 +261,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
       })
     } catch (sttErr) {
       const sanitized = sanitizeErrorMessage(sttErr.message)
+      console.error("❌ [AIPipeline] STT failed for call " + callId + ":", sanitized)
       transcript.status = "FAILED"
       transcript.errorCode = "STT_FAILED"
       transcript.safeErrorMessage = sanitized
@@ -588,6 +591,7 @@ async function processCallIntelligenceJob(job, workerContext = {}) {
     }
   } catch (analysisErr) {
     const sanitized = sanitizeErrorMessage(analysisErr.message)
+    console.error("❌ [AIPipeline] Analysis failed for call " + callId + ":", sanitized)
     analysis.status = "FAILED"
     analysis.errorCode = "ANALYSIS_FAILED"
     analysis.safeErrorMessage = sanitized

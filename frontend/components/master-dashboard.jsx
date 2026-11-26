@@ -118,7 +118,7 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
 
   if (loading) {
     return (
-      <div className="py-24 flex flex-col items-center justify-center space-y-3">
+      <div className="px-3 sm:px-4 py-24 flex flex-col items-center justify-center space-y-3">
         <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs text-slate-500 font-medium">Aggregating Master Organization Data...</p>
       </div>
@@ -131,7 +131,7 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
   const queueTotal = (reviewQueue?.unassignedLeads?.length || 0) + (reviewQueue?.conflictCalls?.length || 0)
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
+    <div className="w-full px-3 sm:px-4 py-4 sm:py-5 space-y-8 animate-in fade-in duration-300">
       {/* Top Welcome & Navigation Header */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -325,79 +325,99 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
 
       {/* 4 Consolidated Master KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {/* Total Leads */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-shadow">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Leads</span>
-            <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-              <Users className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {kpis.totalLeads?.toLocaleString() || 0}
-            </div>
-            {kpis.leadsToday > 0 && (
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                +{kpis.leadsToday} today
+        {[
+          {
+            key: "total-leads",
+            title: "Total Leads",
+            href: "/leads",
+            value: kpis.totalLeads?.toLocaleString() || 0,
+            subtitle: "Across all projects",
+            icon: Users,
+            iconClass: "bg-blue-50 text-blue-600",
+            hoverClass: "hover:border-blue-300/90 hover:bg-blue-50/20",
+            titleHoverClass: "group-hover:text-blue-700",
+            focusClass: "focus-visible:ring-blue-500",
+            meta:
+              kpis.leadsToday > 0 ? (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  +{kpis.leadsToday} today
+                </span>
+              ) : null,
+            ariaLabel: `Total Leads: ${kpis.totalLeads?.toLocaleString() || 0}. Open Leads page across all projects.`,
+          },
+          {
+            key: "active-follow-ups",
+            title: "Active Follow-ups",
+            href: "/communication/follow-ups?status=pending",
+            value: kpis.activeFollowUps?.toLocaleString() || 0,
+            subtitle: "Touchpoints requiring action",
+            icon: Clock,
+            iconClass: "bg-amber-50 text-amber-600",
+            hoverClass: "hover:border-amber-300/90 hover:bg-amber-50/20",
+            titleHoverClass: "group-hover:text-amber-700",
+            focusClass: "focus-visible:ring-amber-500",
+            meta: <span className="text-[11px] font-medium text-slate-400">Scheduled / Pending</span>,
+            ariaLabel: `Active Follow-ups: ${kpis.activeFollowUps?.toLocaleString() || 0}. Open scheduled and pending follow-ups.`,
+          },
+          {
+            key: "calls-logged",
+            title: "Calls Logged",
+            href: "/communication/call-reports",
+            value: kpis.totalCalls?.toLocaleString() || 0,
+            subtitle: "Attributed phone conversations",
+            icon: PhoneCall,
+            iconClass: "bg-indigo-50 text-indigo-600",
+            hoverClass: "hover:border-indigo-300/90 hover:bg-indigo-50/20",
+            titleHoverClass: "group-hover:text-indigo-700",
+            focusClass: "focus-visible:ring-indigo-500",
+            meta: <span className="text-[11px] font-medium text-indigo-600">Mobile &amp; PBX</span>,
+            ariaLabel: `Calls Logged: ${kpis.totalCalls?.toLocaleString() || 0}. Open call history and logs.`,
+          },
+          {
+            key: "deals-won",
+            title: "Deals Won",
+            href: "/leads?status=Closed-Won",
+            value: kpis.wonLeads?.toLocaleString() || 0,
+            subtitle: "Overall organization win rate",
+            icon: CheckCircle2,
+            iconClass: "bg-emerald-50 text-emerald-600",
+            hoverClass: "hover:border-emerald-300/90 hover:bg-emerald-50/20",
+            titleHoverClass: "group-hover:text-emerald-700",
+            focusClass: "focus-visible:ring-emerald-500",
+            meta: (
+              <span className="text-xs font-bold text-emerald-600">
+                {kpis.conversionRate || 0}% Conv.
               </span>
-            )}
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Across all projects</p>
-        </div>
-
-        {/* Active Follow-ups */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-shadow">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active Follow-ups</span>
-            <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Clock className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {kpis.activeFollowUps?.toLocaleString() || 0}
-            </div>
-            <span className="text-[11px] font-medium text-slate-400">Scheduled / Pending</span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Touchpoints requiring action</p>
-        </div>
-
-        {/* Total Calls */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-shadow">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Calls Logged</span>
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-              <PhoneCall className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {kpis.totalCalls?.toLocaleString() || 0}
-            </div>
-            <span className="text-[11px] font-medium text-indigo-600">Mobile & PBX</span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Attributed phone conversations</p>
-        </div>
-
-        {/* Closed Won & Conversion */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-shadow">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Deals Won</span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <div className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              {kpis.wonLeads?.toLocaleString() || 0}
-            </div>
-            <span className="text-xs font-bold text-emerald-600">
-              {kpis.conversionRate || 0}% Conv.
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Overall organization win rate</p>
-        </div>
+            ),
+            ariaLabel: `Deals Won: ${kpis.wonLeads?.toLocaleString() || 0}. Open won leads filtered by Closed-Won status.`,
+          },
+        ].map((card) => {
+          const CardIcon = card.icon
+          return (
+            <Link
+              key={card.key}
+              href={card.href}
+              aria-label={card.ariaLabel}
+              className={`group block bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all duration-150 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${card.hoverClass} ${card.focusClass}`}
+            >
+              <div className="flex items-center justify-between">
+                <span
+                  className={`text-xs font-semibold text-slate-500 uppercase tracking-wider transition-colors ${card.titleHoverClass}`}
+                >
+                  {card.title}
+                </span>
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${card.iconClass}`}>
+                  <CardIcon className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-baseline justify-between gap-2">
+                <div className="text-2xl font-extrabold text-slate-900 tracking-tight">{card.value}</div>
+                {card.meta}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">{card.subtitle}</p>
+            </Link>
+          )
+        })}
       </div>
 
       {/* Project-wise Performance Table */}

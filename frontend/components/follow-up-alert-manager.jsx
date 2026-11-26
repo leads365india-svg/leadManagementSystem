@@ -263,13 +263,13 @@ export default function FollowUpAlertManager() {
   // Must mount on client and have active alerts to render
   if (!mounted || activeAlerts.length === 0) return null
 
-  // Fixed overlay positioned strictly below header (top-20 = 80px vs header h-16 = 64px)
+  // Fixed overlay positioned at top-right on desktop sidebar layout, or below mobile trigger bar (< lg)
   // Rendered via React Portal directly into document.body to prevent parent clipping / stacking context bugs
   const alertContainer = (
     <div
       role="region"
       aria-label="Follow-up alerts"
-      className="fixed top-20 right-3 sm:right-6 md:right-8 z-[9999] flex flex-col space-y-3 max-w-sm sm:max-w-md w-[calc(100vw-1.5rem)] sm:w-full pointer-events-none max-h-[calc(100vh-6rem)] overflow-y-auto px-1 sm:px-0"
+      className="fixed top-16 lg:top-4 right-3 sm:right-6 md:right-8 z-[9999] flex flex-col space-y-3 max-w-sm sm:max-w-md w-[calc(100vw-1.5rem)] sm:w-full pointer-events-none max-h-[calc(100vh-5rem)] overflow-y-auto px-1 sm:px-0"
     >
       {activeAlerts.map(({ task, scheduleKey, alertType, title, subtitle }) => {
         const taskId = task.id || task._id

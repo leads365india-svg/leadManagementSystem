@@ -554,6 +554,41 @@ export default function AICallIntelligenceClient() {
     )
   })
 
+  const drawerFailureMessage =
+    detailData.transcript?.safeErrorMessage ||
+    detailData.call?.metadata?.aiErrorMessage ||
+    detailData.status?.errorMessage ||
+    detailData.status?.transcript?.safeErrorMessage ||
+    detailData.analysis?.safeErrorMessage ||
+    "AI transcription or analysis failed for this call."
+
+  const renderFailedBanner = (withRetry = false) => (
+    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-3">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+        <div className="space-y-1 min-w-0">
+          <h3 className="text-xs font-bold text-rose-900 uppercase tracking-wider">
+            AI Call Processing Failed
+          </h3>
+          <p className="text-xs text-rose-800 break-words leading-relaxed">{drawerFailureMessage}</p>
+        </div>
+      </div>
+      {withRetry && isAdmin && (
+        <div>
+          <button
+            type="button"
+            disabled={reprocessing}
+            onClick={() => handleReprocess(selectedCallId)}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 shadow-xs transition disabled:opacity-50"
+          >
+            {reprocessing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
+            <span>{reprocessing ? "Reprocessing..." : "Retry Analysis"}</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+
   // Token retrieval for streaming audio tag
   let authToken = null
   if (typeof window !== "undefined") {
@@ -1305,38 +1340,58 @@ export default function AICallIntelligenceClient() {
                   <p className="text-xs font-medium">Loading comprehensive intelligence...</p>
                 </div>
               ) : !detailData.analysis && !detailData.transcript ? (
-                <div className="py-20 text-center text-slate-500 space-y-3">
-                  <AlertCircle className="w-10 h-10 text-amber-500 mx-auto" />
-                  <h3 className="text-sm font-bold text-slate-800">Intelligence Report Not Ready</h3>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                    {detailData.status?.transcript?.safeErrorMessage ||
-                      (detailData.status?.overallStatus === "PROCESSING"
-                        ? "AI transcription and analysis are currently in progress..."
-                        : detailData.status?.overallStatus === "PENDING"
-                        ? "Call is queued for AI processing..."
-                        : "This call has an existing recording, but its AI transcription and analysis are not available yet.")}
-                  </p>
-                  {isAdmin && (
-                    <div className="pt-2">
-                      <button
-                        type="button"
-                        disabled={reprocessing}
-                        onClick={() => handleTriggerAnalysis(selectedCallId)}
-                        className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 shadow-md shadow-indigo-200 transition disabled:opacity-50"
-                      >
-                        {reprocessing ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Zap className="w-3.5 h-3.5" />
-                        )}
-                        <span>{reprocessing ? "Queueing Analysis..." : "Analyze Now"}</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                detailData.status?.overallStatus === "FAILED" ? (
+                  renderFailedBanner(true)
+                ) : (
+                  <div className="py-20 text-center text-slate-500 space-y-3">
+                    <AlertCircle className="w-10 h-10 text-amber-500 mx-auto" />
+                    <h3 className="text-sm font-bold text-slate-800">Intelligence Report Not Ready</h3>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                      {detailData.status?.transcript?.safeErrorMessage ||
+                        (detailData.status?.overallStatus === "PROCESSING"
+                          ? "AI transcription and analysis are currently in progress..."
+                          : detailData.status?.overallStatus === "PENDING"
+                          ? "Call is queued for AI processing..."
+                          : "This call has an existing recording, but its AI transcription and analysis are not available yet.")}
+                    </p>
+                    {isAdmin && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          disabled={reprocessing}
+                          onClick={() => handleTriggerAnalysis(selectedCallId)}
+                          className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 shadow-md shadow-indigo-200 transition disabled:opacity-50"
+                        >
+                          {reprocessing ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Zap className="w-3.5 h-3.5" />
+                          )}
+                          <span>{reprocessing ? "Queueing Analysis..." : "Analyze Now"}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
               ) : (
                 <>
                   {/* TAB 1: EXECUTIVE INTELLIGENCE */}
+                  {drawerTab === "summary" && detailData.status?.overallStatus === "FAILED" && (
+                    <div className="mb-4">{renderFailedBanner(!detailData.analysis)}</div>
+                  )}
+
+                  {drawerTab === "summary" && !detailData.analysis && detailData.status?.overallStatus !== "FAILED" && (
+                    <div className="py-12 text-center text-slate-500 space-y-2 rounded-2xl border border-slate-200 bg-slate-50/60 p-6">
+                      <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
+                      <h3 className="text-sm font-bold text-slate-800">Analysis Pending or Unavailable</h3>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        {detailData.status?.overallStatus === "PROCESSING"
+                          ? "Transcript is ready and AI analysis is currently running..."
+                          : "Transcript exists, but AI executive analysis has not completed yet."}
+                      </p>
+                    </div>
+                  )}
+
                   {drawerTab === "summary" && detailData.analysis && (
                     <div className="space-y-6">
                       {/* Summary Banner */}
