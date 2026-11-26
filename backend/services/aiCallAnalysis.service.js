@@ -579,6 +579,8 @@ async function processCallAnalysis({
       transcript,
       call,
       rawAnalysis: rawResult,
+      analysisSummary: rawResult?.summary || "",
+      analysisProductInterests: rawResult?.productInterests || [],
       matchedTopics: topicMatches,
       tenantId: effectiveTenantId,
     })

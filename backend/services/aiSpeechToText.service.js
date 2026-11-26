@@ -158,7 +158,7 @@ async function transcribeAudioWithGemini({
 Your objective is to accurately transcribe this sales phone call conversation into speaker-labeled, timestamped segments.
 
 RULES:
-1. Support Hindi, English, and mixed Hinglish. Transcribe what was said accurately without replacing vernacular terms.
+1. Support English, Hindi, and mixed Hinglish. ALWAYS write Hindi and Hinglish speech in Romanized Hinglish using the Latin/English alphabet (e.g., "Hamare paas OPD, IPD, OT aur Bed Management sab available hai") — NEVER use Devanagari script. Keep English product/business terms (OPD, IPD, OT, HMS, CRM, Demo, Quotation, etc.) in standard English spelling. Pure English speech remains standard English.
 2. Accurately identify speakers as "Agent" or "Customer". If uncertain, label as "unknown". Do not fabricate identities.
 3. Provide realistic start and end timestamps in seconds.
 4. If the audio is completely silent, empty, or contains no intelligible speech, return segments: [] and transcriptText: '' — NEVER invent or fabricate dialogue.

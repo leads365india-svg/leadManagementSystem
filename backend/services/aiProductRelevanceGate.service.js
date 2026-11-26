@@ -127,6 +127,8 @@ async function evaluateProductRelevanceAndGate({
   transcript,
   call = {},
   rawAnalysis = {},
+  analysisSummary = "",
+  analysisProductInterests = [],
   matchedTopics = [],
   tenantId = null,
   catalogOverride = null,
@@ -236,6 +238,54 @@ async function evaluateProductRelevanceAndGate({
     }
   }
 
+  const isExplicitNonInterestedOutcome =
+    rawAnalysis?.callOutcome === "OUT_OF_SCOPE" || rawAnalysis?.callOutcome === "NOT_INTERESTED"
+  const isUnsupportedCustomerInquiry = Boolean(customerProductInquiry && !isSupportedProduct)
+
+  const effectiveSummary = (analysisSummary || rawAnalysis?.summary || "").trim()
+  const effectiveProductInterests = (
+    Array.isArray(analysisProductInterests) && analysisProductInterests.length > 0
+      ? analysisProductInterests
+      : Array.isArray(rawAnalysis?.productInterests)
+      ? rawAnalysis.productInterests
+      : []
+  )
+    .map((pi) => String(pi || "").trim())
+    .filter((pi) => pi && !isUrlOrDomain(pi))
+
+  const analysisContextText = [effectiveProductInterests.join(" "), effectiveSummary]
+    .filter(Boolean)
+    .join(" ")
+    .trim()
+
+  const analysisKnowledgeResult = analysisContextText
+    ? matchTranscriptAgainstKnowledge(analysisContextText, knowledge)
+    : { substantiveMatches: [], matchedProducts: [], matchedModules: [] }
+  const analysisSubstantiveMatches = analysisKnowledgeResult.substantiveMatches || []
+  const matchedAnalysisInterests = effectiveProductInterests.filter((pi) => {
+    const clean = pi.toLowerCase().trim()
+    if (
+      !clean ||
+      clean.includes("placement") ||
+      clean.includes("hiring") ||
+      clean.includes("recruitment") ||
+      clean.includes("vacancy") ||
+      !isSubstantiveKeyword(clean)
+    ) {
+      return false
+    }
+    return (
+      catalog.approvedKeywords.some((ak) => clean.includes(ak) || ak.includes(clean)) ||
+      isProductSupportedByTenant({ productName: pi, keywords: clean.split(/\s+/) }, knowledge)
+    )
+  })
+  const analysisProductInquiry = analysisContextText
+    ? extractCustomerRequestedProduct(analysisContextText)
+    : null
+  const isAnalysisProductSupported = analysisProductInquiry
+    ? isProductSupportedByTenant(analysisProductInquiry, knowledge)
+    : false
+
   // Check if customer statements specifically show buying intent or product inquiry
   const referenceTimestamp = call?.startTime || call?.startedAt || call?.createdAt || new Date()
   const callbackIntent = extractCallbackIntent(transcriptText, {
@@ -244,18 +294,58 @@ async function evaluateProductRelevanceAndGate({
     segments,
   })
 
-  const hasBuyingIntent = BUYING_INTENT_PATTERNS.some((p) => p.test(customerText || lowerText))
+  const hasTranscriptBuyingIntent = BUYING_INTENT_PATTERNS.some((p) => p.test(customerText || lowerText))
   const hasFollowUpRequest = FOLLOW_UP_REQUEST_PATTERNS.some((p) => p.test(customerText || lowerText)) || callbackIntent.callbackRequested
   const hasExplicitRejection = EXPLICIT_REJECTION_PATTERNS.some((p) => p.test(customerText || lowerText))
   const hasPoliteDeflectionOnly = POLITE_DEFLECTION_PATTERNS.some((p) => p.test(customerText || lowerText))
+
+  const canPromoteFromAnalysis =
+    !callerIsPitchingOutOfScope &&
+    !isExplicitNonInterestedOutcome &&
+    !isUnsupportedCustomerInquiry &&
+    !hasExplicitRejection &&
+    !(hasPoliteDeflectionOnly && !hasTranscriptBuyingIntent) &&
+    !AGENT_DECLINED_PATTERNS.some((p) => p.test(agentText))
+
+  let promotedFromAnalysis = false
+  if (
+    canPromoteFromAnalysis &&
+    genuineApprovedMatches.length === 0 &&
+    (analysisSubstantiveMatches.length > 0 || matchedAnalysisInterests.length > 0 || isAnalysisProductSupported)
+  ) {
+    promotedFromAnalysis = true
+    const merged = new Set([
+      ...analysisSubstantiveMatches,
+      ...matchedAnalysisInterests.map((pi) => pi.toLowerCase()),
+    ])
+    if (merged.size === 0 && analysisProductInquiry?.productName) {
+      merged.add(analysisProductInquiry.productName.toLowerCase())
+    }
+    genuineApprovedMatches = Array.from(merged)
+  }
+
+  const hasAnalysisBuyingIntent =
+    !isExplicitNonInterestedOutcome &&
+    !callerIsPitchingOutOfScope &&
+    !hasExplicitRejection &&
+    (
+      BUYING_INTENT_PATTERNS.some((p) => p.test(effectiveSummary)) ||
+      ["INTERESTED", "FOLLOW_UP_REQUIRED", "CALL_BACK_LATER"].includes(rawAnalysis?.callOutcome)
+    )
+  const hasBuyingIntent =
+    hasTranscriptBuyingIntent || (genuineApprovedMatches.length > 0 && hasAnalysisBuyingIntent)
 
   // Determine Product Fit according to Strict Tenant Product-Only Policy
   let productFit = "UNRESOLVED"
   if (callerIsPitchingOutOfScope) {
     productFit = "UNSUPPORTED"
-  } else if (genuineApprovedMatches.length > 0 || (customerProductInquiry && isSupportedProduct)) {
+  } else if (
+    genuineApprovedMatches.length > 0 ||
+    (customerProductInquiry && isSupportedProduct) ||
+    (promotedFromAnalysis && isAnalysisProductSupported)
+  ) {
     productFit = "SUPPORTED"
-  } else if (customerProductInquiry && !isSupportedProduct) {
+  } else if (isUnsupportedCustomerInquiry) {
     // Customer clearly requested a product domain that this tenant does not sell
     productFit = "UNSUPPORTED"
   } else if (agentSubstantiveMatches.length > 0 && hasExplicitRejection) {
@@ -277,7 +367,7 @@ async function evaluateProductRelevanceAndGate({
     // Confirmed unsupported product or out-of-scope pitch -> exactly 0.0 (0%) relevance
     isProductRelevant = false
     productRelevanceScore = 0.0
-  } else if (productFit === "SUPPORTED" && (genuineApprovedMatches.length > 0 || agentSubstantiveMatches.length > 0)) {
+  } else if (productFit === "SUPPORTED" && (genuineApprovedMatches.length > 0 || agentSubstantiveMatches.length > 0 || isAnalysisProductSupported)) {
     if (hasExplicitRejection && !hasBuyingIntent) {
       // Product mentioned, but explicitly rejected
       isProductRelevant = true
@@ -285,7 +375,7 @@ async function evaluateProductRelevanceAndGate({
     } else if (hasBuyingIntent || hasFollowUpRequest) {
       isProductRelevant = true
       // Relevance score scales with verified match breadth up to 0.95
-      productRelevanceScore = Math.min(0.70 + genuineApprovedMatches.length * 0.05, 0.95)
+      productRelevanceScore = Math.min(0.70 + Math.max(genuineApprovedMatches.length, 1) * 0.05, 0.95)
     } else {
       // Casual mention without buying intent
       isProductRelevant = false
@@ -360,6 +450,15 @@ async function evaluateProductRelevanceAndGate({
     leadQualificationScore = 0.0
     customerPurchaseIntent = false
     crmLeadAction = "CLOSE_LOST"
+  } else if (rawAnalysis?.callOutcome === "NOT_INTERESTED" && !hasTranscriptBuyingIntent && !callbackIntent.callbackRequested) {
+    // Keep explicit NOT_INTERESTED classifications intact unless caller showed direct buying/callback intent
+    qualificationStatus = "DISQUALIFIED"
+    qualificationReason = "EXPLICIT_NOT_INTERESTED"
+    callOutcome = "NOT_INTERESTED"
+    productRelevanceScore = 0.0
+    leadQualificationScore = 0.0
+    customerPurchaseIntent = false
+    crmLeadAction = "CLOSE_LOST"
   } else if (isProductRelevant && callbackIntent.callbackRequested) {
     // RULE B1: PRODUCT RELEVANT + CUSTOMER REQUESTED SPECIFIC CALLBACK
     qualificationStatus = "QUALIFIED_FOLLOW_UP"
@@ -420,8 +519,8 @@ async function evaluateProductRelevanceAndGate({
   if (productFit === "UNSUPPORTED") {
     // Never emit product interests for unsupported products on tenant's catalogue
     filteredProductInterests = []
-  } else if (Array.isArray(rawAnalysis.productInterests) && rawAnalysis.productInterests.length > 0) {
-    filteredProductInterests = rawAnalysis.productInterests.filter((pi) => {
+  } else if (effectiveProductInterests.length > 0) {
+    filteredProductInterests = effectiveProductInterests.filter((pi) => {
       const clean = (pi || "").toLowerCase().trim()
       if (
         clean.includes("placement") ||
@@ -445,6 +544,17 @@ async function evaluateProductRelevanceAndGate({
     for (const m of customerKnowledgeResult.matchedModules) {
       candidateInterests.add(m)
     }
+    if (promotedFromAnalysis) {
+      for (const p of analysisKnowledgeResult.matchedProducts) {
+        candidateInterests.add(p)
+      }
+      for (const m of analysisKnowledgeResult.matchedModules) {
+        candidateInterests.add(m)
+      }
+      for (const mi of matchedAnalysisInterests) {
+        candidateInterests.add(mi)
+      }
+    }
     if (candidateInterests.size === 0 && genuineApprovedMatches.length > 0) {
       for (const kw of genuineApprovedMatches.slice(0, 4)) {
         candidateInterests.add(formatCanonicalInterestTitle(kw))
@@ -460,7 +570,7 @@ async function evaluateProductRelevanceAndGate({
   })
 
   // 7. Dynamic Grounded Summary & Intent Construction
-  let summary = rawAnalysis.summary || ""
+  let summary = effectiveSummary
   let customerIntent = rawAnalysis.customerIntent || ""
   const company = catalog.companyName || "the organization"
 
@@ -559,6 +669,7 @@ async function evaluateProductRelevanceAndGate({
 
 module.exports = {
   evaluateProductRelevanceAndGate,
+  evaluateProductRelevance: evaluateProductRelevanceAndGate,
   loadTenantApprovedCatalog,
   isUrlOrDomain,
   sanitizeTerm,
