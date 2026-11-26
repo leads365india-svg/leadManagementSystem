@@ -57,7 +57,7 @@ function resolveGeminiModel() {
  * Executes an HTTPS POST request with JSON payload.
  * Native implementation avoids third-party transport dependencies.
  */
-function makeHttpsRequest(urlStr, data, headers = {}) {
+function makeHttpsRequest(urlStr, data, headers = {}, requestOptions = {}) {
   return new Promise((resolve, reject) => {
     try {
       const url = new URL(urlStr)
@@ -94,8 +94,10 @@ function makeHttpsRequest(urlStr, data, headers = {}) {
       })
 
       req.on("error", (err) => reject(new Error(sanitizeErrorMessage(err.message))))
-      req.setTimeout(30000, () => {
-        req.destroy(new Error("AI Provider request timed out after 30 seconds"))
+      const configuredTimeoutMs = Number(requestOptions?.timeoutMs) || Number(process.env.AI_PROVIDER_TIMEOUT_MS)
+      const requestTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 120000
+      req.setTimeout(requestTimeoutMs, () => {
+        req.destroy(new Error(`AI Provider request timed out after ${Math.round(requestTimeoutMs / 1000)} seconds`))
       })
       req.write(postData)
       req.end()
