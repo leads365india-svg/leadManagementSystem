@@ -839,11 +839,19 @@ async function deleteCallAnalysis(req, res) {
     // PRESERVATION GUARANTEE: Never delete or modify follow-up tasks!
     // All linked follow-up documents (both manual and AI-scheduled) are left completely untouched and active.
 
-    // 3. Clear denormalized AI fields on Call document (preserving recording and transcript)
+    // 3. Clear any stale AITranscript for this call so an old/bad transcript never lingers
+    if (analysis.callId) {
+      await AITranscript.deleteMany({ tenantId, callId: analysis.callId }).setOptions({ skipTenantFilter: true })
+    }
+
+    // 4. Clear denormalized AI fields on Call document (preserving Call record and recording audio)
     if (call) {
       call.metadata = call.metadata || {}
       call.metadata.aiAnalysisStatus = "NOT_ANALYZED"
       call.metadata.aiAnalysisId = null
+      call.metadata.aiTranscriptId = null
+      call.metadata.aiTranscriptStatus = null
+      call.metadata.aiErrorMessage = null
       call.metadata.aiCallOutcome = null
       call.metadata.aiSentiment = null
       call.metadata.aiProductRelevanceScore = null
@@ -906,7 +914,7 @@ async function deleteCallAnalysis(req, res) {
           deletedByName: analysis.deletedByName,
           preservedFollowUpsCount: linkedFollowUps.length,
           originalCallPreserved: true,
-          transcriptPreserved: true,
+          transcriptCleared: Boolean(analysis.callId),
           recordingPreserved: true,
         },
       }).catch(() => {})

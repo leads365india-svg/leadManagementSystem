@@ -364,20 +364,11 @@ export default function AICallIntelligenceClient() {
           handleCloseDrawer()
         }
 
-        // Optimistically update calls in table
+        // Remove the deleted call row from table state instead of leaving it as NOT_ANALYZED
         setCalls((prev) =>
-          prev.map((c) => {
-            const currentId = c._id || c.id
-            if (String(currentId) === String(targetCallId)) {
-              return {
-                ...c,
-                aiAnalysis: null,
-                intelligenceStatus: "NOT_ANALYZED",
-              }
-            }
-            return c
-          })
+          prev.filter((c) => String(c._id || c.id) !== String(targetCallId))
         )
+        setTotalRecords((prev) => Math.max(0, (prev || 1) - 1))
 
         // Optimistically decrement metrics
         setMetrics((prev) => ({
@@ -388,9 +379,8 @@ export default function AICallIntelligenceClient() {
         setDeleteModalOpen(false)
         setReportToDelete(null)
 
-        // Refresh metrics and list in background
+        // Refresh dashboard metrics in background
         fetchDashboardMetrics()
-        fetchCallsList()
       } else {
         toast.error(res?.error || res?.message || "Failed to delete AI report")
       }
