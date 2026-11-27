@@ -294,12 +294,31 @@ export default function AICallIntelligenceClient() {
       const res = await apiClient.reprocessAICall(callId, { force: true })
       if (res && res.success) {
         toast.success(res.message || "Call re-enqueued for AI processing.")
-        // Reload detail and list
-        setTimeout(() => {
-          fetchCallDetail(callId)
-          fetchCallsList()
-          fetchDashboardMetrics()
-        }, 1500)
+        setCalls((prev) =>
+          prev.map((c) =>
+            String(c._id || c.id) === String(callId)
+              ? { ...c, intelligenceStatus: "PROCESSING", aiErrorMessage: null }
+              : c
+          )
+        )
+        // Reload detail and list immediately & start polling until terminal status
+        fetchCallDetail(callId)
+        fetchCallsList()
+        fetchDashboardMetrics()
+
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await apiClient.getAICallStatus(callId)
+            const st = statusRes?.data || statusRes
+            if (st?.overallStatus === "COMPLETED" || st?.overallStatus === "FAILED") {
+              clearInterval(pollInterval)
+              fetchCallDetail(callId)
+              fetchCallsList()
+              fetchDashboardMetrics()
+            }
+          } catch (_) {}
+        }, 3000)
+        setTimeout(() => clearInterval(pollInterval), 900000)
       } else {
         toast.error(res?.error || "Reprocess failed")
       }
@@ -399,10 +418,17 @@ export default function AICallIntelligenceClient() {
       const res = await apiClient.triggerAICallAnalysis(callId)
       if (res && res.success) {
         toast.success(res.message || "AI Analysis job enqueued successfully!")
+        setCalls((prev) =>
+          prev.map((c) =>
+            String(c._id || c.id) === String(callId)
+              ? { ...c, intelligenceStatus: "PROCESSING", aiErrorMessage: null }
+              : c
+          )
+        )
         fetchCallsList()
         fetchDashboardMetrics()
 
-        // Poll for completion
+        // Poll for completion (supports long 30-60+ min calls up to 15m UI poll)
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await apiClient.getAICallStatus(callId)
@@ -414,8 +440,8 @@ export default function AICallIntelligenceClient() {
               fetchDashboardMetrics()
             }
           } catch (_) {}
-        }, 2000)
-        setTimeout(() => clearInterval(pollInterval), 60000)
+        }, 3000)
+        setTimeout(() => clearInterval(pollInterval), 900000)
       } else {
         toast.error(res?.message || res?.error || "Analysis trigger failed")
       }
@@ -1024,7 +1050,17 @@ export default function AICallIntelligenceClient() {
 
                         {/* AI Status */}
                         <td className="px-5 py-4 whitespace-nowrap">
-                          {getStatusBadge(call.intelligenceStatus || (hasAnalysis ? "COMPLETED" : "PENDING"))}
+                          <div className="space-y-1">
+                            {getStatusBadge(call.intelligenceStatus || (hasAnalysis ? "COMPLETED" : "PENDING"))}
+                            {call.intelligenceStatus === "FAILED" && call.aiErrorMessage && (
+                              <p
+                                className="text-[10px] text-rose-600 max-w-[180px] truncate"
+                                title={call.aiErrorMessage}
+                              >
+                                {call.aiErrorMessage}
+                              </p>
+                            )}
+                          </div>
                         </td>
 
                         {/* Matched Topics */}
@@ -1067,7 +1103,7 @@ export default function AICallIntelligenceClient() {
                         {/* Action Buttons */}
                         <td className="px-5 py-4 whitespace-nowrap text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            {hasAnalysis ? (
+                            {hasAnalysis && call.intelligenceStatus !== "PROCESSING" ? (
                               <button
                                 type="button"
                                 onClick={() => handleOpenReport(call._id)}
@@ -1080,12 +1116,19 @@ export default function AICallIntelligenceClient() {
                               <div className="flex items-center gap-1">
                                 <button
                                   type="button"
+                                  disabled={call.intelligenceStatus === "PROCESSING"}
                                   onClick={() => handleTriggerAnalysis(call._id)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition"
-                                  title="Trigger AI Analysis Now"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition disabled:opacity-60"
+                                  title={call.intelligenceStatus === "FAILED" ? "Retry Failed AI Analysis" : "Trigger AI Analysis Now"}
                                 >
                                   <Zap className="w-3.5 h-3.5 text-indigo-600" />
-                                  <span>Analyze Now</span>
+                                  <span>
+                                    {call.intelligenceStatus === "PROCESSING"
+                                      ? "Processing..."
+                                      : call.intelligenceStatus === "FAILED"
+                                      ? "Retry Analysis"
+                                      : "Analyze Now"}
+                                  </span>
                                 </button>
                                 <button
                                   type="button"

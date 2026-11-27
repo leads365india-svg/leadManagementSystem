@@ -12,7 +12,7 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-const ALLOWED_SORT_FIELDS = ["name", "email", "phone", "source", "status", "assignedTo", "createdAt", "updatedAt"]
+const ALLOWED_SORT_FIELDS = ["name", "email", "phone", "source", "status", "assignedTo", "createdAt", "updatedAt", "lastInteractionAt", "lastContactedAt"]
 const { getEffectiveTenant } = require("../middleware/tenantContext")
 const { scopeFilter, checkDirectObjectAccess } = require("../utils/rbacScope")
 const leadService = require("../services/leadService")
@@ -30,7 +30,7 @@ const getLeads = async (req, res) => {
       status = "all",
       source = "all",
       assignedTo = "all",
-      sortBy = "createdAt",
+      sortBy = "lastInteractionAt",
       sortOrder = "desc",
       tenantId: requestedTenantId,
     } = req.query
@@ -187,9 +187,21 @@ const getLeads = async (req, res) => {
     }
 
     // Sort configuration with allowlist validation
-    const sortField = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt"
+    const sortField = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "lastInteractionAt"
+    const sortDir = sortOrder === "asc" ? 1 : -1
     const sortConfig = {}
-    sortConfig[sortField] = sortOrder === "asc" ? 1 : -1
+    if (sortField === "lastInteractionAt") {
+      sortConfig.lastInteractionAt = sortDir
+      sortConfig.createdAt = -1
+    } else if (sortField === "lastContactedAt") {
+      sortConfig.lastContactedAt = sortDir
+      sortConfig.createdAt = -1
+    } else {
+      sortConfig[sortField] = sortDir
+      if (sortField !== "createdAt") {
+        sortConfig.createdAt = -1
+      }
+    }
 
     // Execute queries
     const [leads, total] = await Promise.all([
@@ -314,6 +326,11 @@ const getLeads = async (req, res) => {
         attribution: lead.attribution || null,
         assignmentHistory: Array.isArray(lead.assignmentHistory) ? lead.assignmentHistory : [],
         lastContactedAt: lead.lastContactedAt || null,
+        lastInteractionAt: lead.lastInteractionAt || null,
+        lastInteractionChannel: lead.lastInteractionChannel || "",
+        lastInteractionDirection: lead.lastInteractionDirection || "",
+        lastInteractionCallId: lead.lastInteractionCallId || null,
+        workspaceId: lead.workspaceId ? lead.workspaceId.toString() : null,
         deletedAt: lead.deletedAt || null,
         source: lead.source || "Website Form",
         assignedTo: lead.assignedTo || "Unassigned",

@@ -125,7 +125,7 @@ export default function LeadsClient() {
   const currentLeadType = searchParams.get("leadType") || "all"
   const currentFromDate = searchParams.get("fromDate") || ""
   const currentToDate = searchParams.get("toDate") || ""
-  const currentSortBy = searchParams.get("sortBy") || "createdAt"
+  const currentSortBy = searchParams.get("sortBy") || "lastInteractionAt"
   const currentSortOrder = searchParams.get("sortOrder") || "desc"
 
   // Local filter inputs state for controlled form fields
@@ -377,7 +377,8 @@ export default function LeadsClient() {
 
   // Handle column sorting toggle
   const handleSort = (field) => {
-    const newOrder = currentSortBy === field && currentSortOrder === "asc" ? "desc" : "asc"
+    const defaultOrder = field === "lastInteractionAt" || field === "createdAt" ? "desc" : "asc"
+    const newOrder = currentSortBy === field ? (currentSortOrder === "asc" ? "desc" : "asc") : defaultOrder
     const params = new URLSearchParams(searchParams.toString())
     params.set("sortBy", field)
     params.set("sortOrder", newOrder)
@@ -1053,6 +1054,18 @@ export default function LeadsClient() {
             <span className="text-slate-400">Sort by:</span>
             <button
               type="button"
+              onClick={() => handleSort("lastInteractionAt")}
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                currentSortBy === "lastInteractionAt"
+                  ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              <span>Latest Interaction</span>
+              <ArrowUpDown className="w-3 h-3 text-slate-400" />
+            </button>
+            <button
+              type="button"
               onClick={() => handleSort("createdAt")}
               className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
                 currentSortBy === "createdAt"
@@ -1080,7 +1093,7 @@ export default function LeadsClient() {
 
         {/* Table Content */}
         <div className="overflow-x-auto w-full">
-          <table className="w-full text-left border-collapse text-xs min-w-[760px]">
+          <table className="w-full text-left border-collapse text-xs min-w-[860px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-4 cursor-pointer hover:text-slate-900" onClick={() => handleSort("name")}>
@@ -1093,6 +1106,12 @@ export default function LeadsClient() {
                 <th className="py-3 px-4">Source</th>
                 <th className="py-3 px-4">Pipeline Status</th>
                 <th className="py-3 px-4">Assigned To</th>
+                <th className="py-3 px-4 cursor-pointer hover:text-slate-900" onClick={() => handleSort("lastInteractionAt")}>
+                  <div className="flex items-center space-x-1">
+                    <span>Last Interaction</span>
+                    <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                  </div>
+                </th>
                 <th className="py-3 px-4 cursor-pointer hover:text-slate-900" onClick={() => handleSort("createdAt")}>
                   <div className="flex items-center space-x-1">
                     <span>Created Date</span>
@@ -1107,7 +1126,7 @@ export default function LeadsClient() {
               {loading ? (
                 /* Loading State Rows */
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-500">
+                  <td colSpan={8} className="py-16 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center space-y-3">
                       <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
                       <p className="text-xs font-medium text-slate-600">Loading leads database from Atlas...</p>
@@ -1117,7 +1136,7 @@ export default function LeadsClient() {
               ) : error ? (
                 /* Error State Row */
                 <tr>
-                  <td colSpan={7} className="py-12 text-center">
+                  <td colSpan={8} className="py-12 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2 text-rose-600">
                       <AlertCircle className="w-8 h-8" />
                       <p className="font-semibold text-xs">{error}</p>
@@ -1134,7 +1153,7 @@ export default function LeadsClient() {
               ) : allLeadsList.length === 0 ? (
                 /* Empty State */
                 <tr>
-                  <td colSpan={7} className="py-16 sm:py-20 text-center">
+                  <td colSpan={8} className="py-16 sm:py-20 text-center">
                     <div className="max-w-md mx-auto px-4 flex flex-col items-center justify-center animate-in fade-in duration-200">
                       <div className="w-16 h-16 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 mb-4 shadow-2xs">
                         <Users className="w-8 h-8 stroke-[1.8]" />
@@ -1298,7 +1317,44 @@ export default function LeadsClient() {
                         )}
                       </td>
 
-                      {/* 8. Created Date */}
+                      {/* 8. Last Voice Interaction */}
+                      <td className="py-3 px-4 whitespace-nowrap text-slate-600 text-[11px]">
+                        {lead.lastInteractionAt ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span
+                              className="font-mono font-medium text-slate-700"
+                              title={new Date(lead.lastInteractionAt).toLocaleString()}
+                            >
+                              {new Date(lead.lastInteractionAt).toLocaleString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            {(lead.lastInteractionChannel || lead.lastInteractionDirection) && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500">
+                                <span>
+                                  {lead.lastInteractionChannel === "whatsapp_voice"
+                                    ? "WhatsApp Call"
+                                    : lead.lastInteractionChannel === "ai_phone"
+                                      ? "AI Phone"
+                                      : "Phone Call"}
+                                </span>
+                                {lead.lastInteractionDirection ? (
+                                  <span className="text-slate-400">
+                                    • {lead.lastInteractionDirection === "inbound" ? "In" : "Out"}
+                                  </span>
+                                ) : null}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-mono">—</span>
+                        )}
+                      </td>
+
+                      {/* 9. Created Date */}
                       <td className="py-3 px-4 whitespace-nowrap text-slate-600 font-mono text-[11px]">
                         {lead.createdAt ? (
                           new Date(lead.createdAt).toLocaleDateString("en-US", {

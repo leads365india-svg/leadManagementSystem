@@ -165,6 +165,7 @@ const reportMobileCall = async (req, res) => {
       phone_number,
       call_direction,
       start_time_ms,
+      ended_at_ms,
       duration_seconds,
       call_outcome,
       notes,
@@ -194,6 +195,7 @@ const reportMobileCall = async (req, res) => {
 
     let effectivePhone = rawPhoneStr
     let contactMatchedLead = null
+    let contactMatchAmbiguous = false
     let hasValidResolvedPhone = rawPhoneDigits.length >= 7
 
     if (!isWhatsAppVoip) {
@@ -226,7 +228,7 @@ const reportMobileCall = async (req, res) => {
           if (hasValidResolvedPhone) {
             const { normalizePhoneE164: normalizeForContact } = require("../utils/phoneNormalizer")
             const resolvedNorm = normalizeForContact(effectivePhone, "+91") || effectivePhone
-            contactMatchedLead = await Lead.findOne({
+            const phoneContactLeads = await Lead.find({
               tenantId: targetTenantId,
               deletedAt: null,
               $or: [
@@ -234,14 +236,28 @@ const reportMobileCall = async (req, res) => {
                 { phone: effectivePhone },
                 { "metadata.normalizedPhone": resolvedNorm },
               ],
-            }).setOptions({ skipTenantFilter: true })
+            })
+              .limit(2)
+              .setOptions({ skipTenantFilter: true })
+            if (phoneContactLeads.length === 1) {
+              contactMatchedLead = phoneContactLeads[0]
+            } else if (phoneContactLeads.length > 1) {
+              contactMatchAmbiguous = true
+            }
           }
         } else {
-          contactMatchedLead = await Lead.findOne({
+          const nameContactLeads = await Lead.find({
             tenantId: targetTenantId,
             name: exactNameRegex,
             deletedAt: null,
-          }).setOptions({ skipTenantFilter: true })
+          })
+            .limit(2)
+            .setOptions({ skipTenantFilter: true })
+          if (nameContactLeads.length === 1) {
+            contactMatchedLead = nameContactLeads[0]
+          } else if (nameContactLeads.length > 1) {
+            contactMatchAmbiguous = true
+          }
 
           const leadPhone = contactMatchedLead ? (contactMatchedLead.phoneNormalized || contactMatchedLead.phone) : ""
           if (leadPhone) {
@@ -468,6 +484,28 @@ const reportMobileCall = async (req, res) => {
           lead = contactMatchedLead
           isUnlinkedCall = false
         }
+      } else if (!contactMatchAmbiguous && (normPhone || hasValidResolvedPhone || effectivePhone)) {
+        const leadInteractionService = require("../services/leadInteractionService")
+        const resolvedPhoneLead = await leadInteractionService.resolveUnambiguousLeadForCall({
+          tenantId: targetTenantId,
+          workspaceId:
+            req.tenantContext?.mode === "single_workspace"
+              ? req.tenantContext.workspaceId
+              : (req.body?.workspace_id || null),
+          workspaceMode: req.tenantContext?.mode || (req.body?.workspace_id ? "single_workspace" : "all"),
+          phone: normPhone || effectivePhone,
+          allowNameFallback: false,
+        })
+        if (!resolvedPhoneLead.ambiguous && resolvedPhoneLead.lead) {
+          if (resolvedPhoneLead.lead.metadata?.isDoNotRecord === true) {
+            return res.status(400).json({
+              success: false,
+              error: "Call reporting rejected: Phone number is marked Do-Not-Record (DNR).",
+            })
+          }
+          lead = resolvedPhoneLead.lead
+          isUnlinkedCall = false
+        }
       }
     }
 
@@ -651,10 +689,12 @@ const reportMobileCall = async (req, res) => {
     }
 
     // Helper: Update lead CRM state on call report
-    const syncLeadState = async (targetLead) => {
+    const leadInteractionService = require("../services/leadInteractionService")
+    const syncLeadState = async (targetLead, syncedCall = null) => {
       if (!targetLead) return
       const validCrmStatuses = ["New", "Engaged", "Proposal Sent", "Closed-Won", "Closed-Lost"]
       const oldStatus = targetLead.status
+      let needsLeadSave = false
       if (call_outcome && validCrmStatuses.includes(call_outcome)) {
         if (call_outcome !== oldStatus) {
           targetLead.status = call_outcome
@@ -669,6 +709,7 @@ const reportMobileCall = async (req, res) => {
           targetLead.metadata.statusHistory = Array.isArray(targetLead.metadata.statusHistory)
             ? [...targetLead.metadata.statusHistory, historyEntry]
             : [historyEntry]
+          needsLeadSave = true
 
           try {
             const { activity } = require("../services/activityService")
@@ -687,14 +728,57 @@ const reportMobileCall = async (req, res) => {
         }
       }
       targetLead.metadata = targetLead.metadata || {}
-      targetLead.metadata.lastCallOutcome = call_outcome || "Connected"
-      targetLead.metadata.lastCallAt = new Date(start_time_ms)
+
+      const callInteractionPayload = {
+        ...(syncedCall && typeof syncedCall.toObject === "function" ? syncedCall.toObject() : syncedCall || {}),
+        call_type,
+        call_direction,
+        call_outcome,
+        ...(call_outcome ? { callOutcome: call_outcome, disposition: call_outcome } : {}),
+        duration_seconds:
+          duration_seconds !== undefined
+            ? duration_seconds
+            : (syncedCall?.durationSeconds ?? syncedCall?.duration ?? 0),
+        start_time_ms,
+        ended_at_ms,
+        source: syncedCall?.source || (isWhatsAppVoip ? "whatsapp_voip" : "android_sync"),
+        call_channel,
+        source_app,
+      }
+
+      const interactionEligibility = leadInteractionService.isSuccessfulVoiceCall(callInteractionPayload)
+      if (interactionEligibility.connected) {
+        const interactionTs = leadInteractionService.resolveCallInteractionTimestamp(callInteractionPayload)
+        const currentLastCallAt = targetLead.metadata.lastCallAt ? new Date(targetLead.metadata.lastCallAt) : null
+        targetLead.metadata.lastCallOutcome = call_outcome || "Connected"
+        if (!currentLastCallAt || interactionTs > currentLastCallAt) {
+          targetLead.metadata.lastCallAt = interactionTs
+        }
+        needsLeadSave = true
+      }
+
       if (notes && notes.trim()) {
         targetLead.metadata.lastCallNotes = notes.trim()
+        needsLeadSave = true
       }
       await syncFollowUpForCall(targetLead)
-      targetLead.markModified("metadata")
-      await targetLead.save()
+      if (needsLeadSave) {
+        targetLead.markModified("metadata")
+        await targetLead.save()
+      }
+
+      if (interactionEligibility.connected) {
+        try {
+          await leadInteractionService.recordSuccessfulCallInteraction({
+            tenantId: targetLead.tenantId || targetTenantId,
+            call: syncedCall,
+            callData: callInteractionPayload,
+            lead: targetLead,
+          })
+        } catch (intErr) {
+          console.warn("[MobileController] Non-blocking interaction update failure:", intErr.message)
+        }
+      }
     }
 
     // 2. Idempotency Check: enforce strict tenant boundary when resolving clientCallId
@@ -711,7 +795,13 @@ const reportMobileCall = async (req, res) => {
         }
       }
       let isUpdated = false
-      if (call_outcome && call_outcome !== "Connected" && existingCall.callOutcome !== call_outcome) {
+      const preConnOutcomes = new Set(["", "ringing", "initiated", "dialing", "queued", "pending", "unanswered", "missed"])
+      const prevOutcome = String(existingCall.callOutcome || existingCall.disposition || "").trim().toLowerCase()
+      if (
+        call_outcome &&
+        existingCall.callOutcome !== call_outcome &&
+        (call_outcome !== "Connected" || preConnOutcomes.has(prevOutcome))
+      ) {
         existingCall.callOutcome = call_outcome
         existingCall.disposition = call_outcome
         isUpdated = true
@@ -727,6 +817,13 @@ const reportMobileCall = async (req, res) => {
       if (duration_seconds && (!existingCall.durationSeconds || existingCall.durationSeconds === 0)) {
         existingCall.durationSeconds = duration_seconds
         existingCall.duration = duration_seconds
+        isUpdated = true
+      }
+      const computedExistingEndedAt = ended_at_ms
+        ? new Date(ended_at_ms)
+        : (duration_seconds > 0 && start_time_ms ? new Date(start_time_ms + Number(duration_seconds) * 1000) : null)
+      if (computedExistingEndedAt && (!existingCall.endedAt || existingCall.endedAt < computedExistingEndedAt)) {
+        existingCall.endedAt = computedExistingEndedAt
         isUpdated = true
       }
       if (sim_id && !existingCall.simId) {
@@ -746,8 +843,14 @@ const reportMobileCall = async (req, res) => {
         await existingCall.save()
       }
 
-      if (lead) {
-        await syncLeadState(lead)
+      let interactionLead = lead
+      if (!interactionLead && existingCall.leadId) {
+        interactionLead = await Lead.findOne({ _id: existingCall.leadId, tenantId: targetTenantId, deletedAt: null }).setOptions({
+          skipTenantFilter: true,
+        })
+      }
+      if (interactionLead) {
+        await syncLeadState(interactionLead, existingCall)
       }
 
       return res.status(200).json({
@@ -797,7 +900,12 @@ const reportMobileCall = async (req, res) => {
       if (isUnassigned || isSameClient) {
         // Unambiguous single match: merge/link to this canonical call record
         matchedCall.clientCallId = trimmedClientCallId
-        if (call_outcome && call_outcome !== "Connected") {
+        const prevMatchedOutcome = String(matchedCall.callOutcome || matchedCall.disposition || "").trim().toLowerCase()
+        if (
+          call_outcome &&
+          (call_outcome !== "Connected" ||
+            new Set(["", "ringing", "initiated", "dialing", "queued", "pending", "unanswered", "missed"]).has(prevMatchedOutcome))
+        ) {
           matchedCall.callOutcome = call_outcome
           matchedCall.disposition = call_outcome
         }
@@ -811,6 +919,12 @@ const reportMobileCall = async (req, res) => {
           matchedCall.durationSeconds = duration_seconds
           matchedCall.duration = duration_seconds
         }
+        const computedMatchedEndedAt = ended_at_ms
+          ? new Date(ended_at_ms)
+          : (duration_seconds > 0 && start_time_ms ? new Date(start_time_ms + Number(duration_seconds) * 1000) : null)
+        if (computedMatchedEndedAt && (!matchedCall.endedAt || matchedCall.endedAt < computedMatchedEndedAt)) {
+          matchedCall.endedAt = computedMatchedEndedAt
+        }
         if (lead && (!matchedCall.leadId || matchedCall.isUnlinked)) {
           matchedCall.leadId = lead._id
           matchedCall.isUnlinked = false
@@ -820,8 +934,14 @@ const reportMobileCall = async (req, res) => {
         }
         await matchedCall.save()
 
-        if (lead) {
-          await syncLeadState(lead)
+        let matchedInteractionLead = lead
+        if (!matchedInteractionLead && matchedCall.leadId) {
+          matchedInteractionLead = await Lead.findOne({ _id: matchedCall.leadId, tenantId: targetTenantId, deletedAt: null }).setOptions({
+            skipTenantFilter: true,
+          })
+        }
+        if (matchedInteractionLead) {
+          await syncLeadState(matchedInteractionLead, matchedCall)
         }
 
         return res.status(200).json({
@@ -855,6 +975,9 @@ const reportMobileCall = async (req, res) => {
       phoneNumber: effectivePhone,
       callDirection: resolvedCallDirection,
       startTimeMs: start_time_ms,
+      endedAt: ended_at_ms
+        ? new Date(ended_at_ms)
+        : (duration_seconds > 0 && start_time_ms ? new Date(start_time_ms + Number(duration_seconds) * 1000) : null),
       durationSeconds: duration_seconds || 0,
       callOutcome: resolvedCallOutcome,
       notes: notes ? notes.trim() : (isUnlinkedCall ? (isMissedOrRejected ? "Unlinked Missed Call" : "Unlinked Call (Website Call attribution unverified)") : ""),
@@ -874,7 +997,7 @@ const reportMobileCall = async (req, res) => {
 
     // 5. Update CRM Lead State & Create FollowUp if applicable
     if (lead) {
-      await syncLeadState(lead)
+      await syncLeadState(lead, newCall)
     }
 
     return res.status(201).json({
@@ -1753,6 +1876,17 @@ const uploadMobileRecording = async (req, res) => {
       allowUnmatchedReview: Boolean(!call.leadId || call.isUnlinked),
     })
 
+    try {
+      const refreshedCall = await Call.findById(call._id).setOptions({ skipTenantFilter: true })
+      if (refreshedCall && refreshedCall.leadId) {
+        const leadInteractionService = require("../services/leadInteractionService")
+        await leadInteractionService.recordSuccessfulCallInteraction({
+          tenantId: refreshedCall.tenantId || call.tenantId,
+          call: refreshedCall,
+        })
+      }
+    } catch (_) {}
+
     return res.status(result.isDuplicate ? 200 : 201).json({
       success: true,
       message: result.message || "Recording uploaded successfully",
@@ -2205,6 +2339,15 @@ const linkCallToLead = async (req, res) => {
     call.metadata.linkedBy = user.id
     call.markModified("metadata")
     await call.save()
+
+    try {
+      const leadInteractionService = require("../services/leadInteractionService")
+      await leadInteractionService.recordSuccessfulCallInteraction({
+        tenantId: call.tenantId || user.tenantId,
+        call,
+        lead,
+      })
+    } catch (_) {}
 
     return res.status(200).json({
       success: true,

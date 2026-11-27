@@ -13,6 +13,7 @@ const mongoose = require("mongoose")
 const connectDB = require("./db/connection")
 const { checkDbConnection } = require("./db/connection")
 const leadRoutes = require("./routes/leadRoutes")
+const leadImportRoutes = require("./routes/leadImportRoutes")
 const authRoutes = require("./routes/authRoutes")
 const superAdminRoutes = require("./routes/superAdminRoutes")
 const integrationRoutes = require("./routes/integrationRoutes")
@@ -307,6 +308,7 @@ app.use("/api", tenantContextMiddleware)
 // API routes
 app.use("/api/auth", authRoutes)
 app.use("/api/super-admin", superAdminRoutes)
+app.use("/api/leads/import", leadImportRoutes)
 app.use("/api/leads", leadRoutes)
 app.use("/api/follow-ups", followUpRoutes)
 app.use("/api/followups", followUpRoutes)
@@ -458,6 +460,20 @@ const startServer = async () => {
 
     const { registerAllHandlers } = require("./jobs")
     registerAllHandlers()
+
+    try {
+      const { recoverStaleAiJobs, RECOVER_STALE_JOB_NAME } = require("./services/aiCallProcessingPipeline")
+      await recoverStaleAiJobs()
+      const scheduler = require("./services/schedulerService")
+      scheduler.registerSchedule({
+        id: "ai-call-stale-recovery",
+        name: RECOVER_STALE_JOB_NAME,
+        intervalMs: 5 * 60 * 1000,
+        runImmediately: false,
+      })
+    } catch (recErr) {
+      console.warn("⚠️ Startup AI stale-job recovery notice:", recErr.message)
+    }
 
     if (process.env.DISABLE_EMBEDDED_WORKER !== "true") {
       const worker = require("./worker")

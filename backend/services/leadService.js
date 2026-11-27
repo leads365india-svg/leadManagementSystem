@@ -125,7 +125,10 @@ async function createOrMergeLead({
             workspaceId: { $ne: incomingWorkspaceId },
             $or: duplicateConditions,
             deletedAt: null,
-          }).select("_id workspaceId name phone email").lean()
+          })
+            .setOptions({ skipTenantFilter: true })
+            .select("_id workspaceId name phone email")
+            .lean()
         }
       } else {
         // Standalone or unassigned account-level scope

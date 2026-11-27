@@ -170,10 +170,18 @@ async function ingestAudioRecording({
   // Reload fresh Call document with updated GridFS recording status and fileId
   const freshCall = await Call.findById(call._id).setOptions({ skipTenantFilter: true })
 
-  // 5. Activity log and Lead lastContactedAt update if matched
+  // 5. Activity log and Lead interaction update if matched to a connected call
   if (lead) {
-    lead.lastContactedAt = new Date()
-    await lead.save()
+    try {
+      const leadInteractionService = require("./leadInteractionService")
+      await leadInteractionService.recordSuccessfulCallInteraction({
+        tenantId,
+        call: freshCall || call,
+        lead,
+      })
+    } catch (intErr) {
+      console.warn("[CallIngestion] Non-blocking interaction update warning:", intErr.message)
+    }
 
     try {
       await activity.record({
@@ -378,8 +386,16 @@ async function ingestCsvRecords({ tenantId, agentId, user, records = [], csvText
 
     if (lead) {
       results.matched++
-      lead.lastContactedAt = new Date()
-      await lead.save()
+      try {
+        const leadInteractionService = require("./leadInteractionService")
+        await leadInteractionService.recordSuccessfulCallInteraction({
+          tenantId,
+          call,
+          lead,
+        })
+      } catch (intErr) {
+        console.warn("[CallIngestion] Non-blocking CSV interaction update warning:", intErr.message)
+      }
 
       try {
         await activity.callLogged({
@@ -593,9 +609,17 @@ async function matchUnmatchedCall({ tenantId, user, callId, leadId = null, newLe
     }
   }
 
-  // 6. Update lead's lastContactedAt & activity
-  targetLead.lastContactedAt = new Date()
-  await targetLead.save()
+  // 6. Update lead's latest voice interaction timestamp monotonically & activity
+  try {
+    const leadInteractionService = require("./leadInteractionService")
+    await leadInteractionService.recordSuccessfulCallInteraction({
+      tenantId,
+      call,
+      lead: targetLead,
+    })
+  } catch (intErr) {
+    console.warn("[CallIngestion] Non-blocking match interaction update warning:", intErr.message)
+  }
 
   try {
     await activity.callLogged({

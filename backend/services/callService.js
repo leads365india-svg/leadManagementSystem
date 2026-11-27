@@ -151,14 +151,23 @@ async function logCall(params = {}) {
     : null
 
   // 1. Resolve Lead linkage
+  const leadInteractionService = require("./leadInteractionService")
   let matchedLead = null
+  let isAmbiguousLead = false
   if (leadId && mongoose.Types.ObjectId.isValid(leadId)) {
     matchedLead = await Lead.findOne({ _id: leadId, tenantId, deletedAt: null }).setOptions({ skipTenantFilter: true })
   }
 
-  // If no explicit leadId provided or not found, attempt matching by phone number
-  if (!matchedLead) {
-    matchedLead = await findLeadByPhoneNumber(cleanNumber, tenantId, agentId)
+  // If no explicit leadId provided or not found, attempt unambiguous matching by phone number
+  if (!matchedLead && (!leadId || !mongoose.Types.ObjectId.isValid(leadId))) {
+    const resolved = await leadInteractionService.resolveUnambiguousLeadForCall({
+      tenantId,
+      phone: cleanNumber,
+      agentId,
+      preferAgentOwnership: true,
+    })
+    matchedLead = resolved.lead
+    isAmbiguousLead = Boolean(resolved.ambiguous)
   }
 
   // 2. Resolve Agent user info
@@ -174,9 +183,16 @@ async function logCall(params = {}) {
       clientCallId: trimmedClientCallId,
     }).setOptions({ skipTenantFilter: true })
 
+    const preConnectionStates = new Set(["", "ringing", "initiated", "dialing", "queued", "pending", "unanswered", "missed", "no-answer", "no_answer"])
+    const normalizedExistingDisp = String(existingCall.disposition || existingCall.callOutcome || "").trim().toLowerCase()
+    const normalizedIncomingDisp = String(disposition || "").trim().toLowerCase()
     if (existingCall) {
       let updated = false
-      if (disposition && disposition !== "connected" && existingCall.disposition !== disposition) {
+      if (
+        disposition &&
+        existingCall.disposition !== disposition &&
+        (normalizedIncomingDisp !== "connected" || preConnectionStates.has(normalizedExistingDisp))
+      ) {
         existingCall.disposition = disposition
         existingCall.callOutcome = disposition
         updated = true
@@ -184,6 +200,23 @@ async function logCall(params = {}) {
       if (durationSec > 0 && (!existingCall.duration || existingCall.duration === 0)) {
         existingCall.duration = durationSec
         existingCall.durationSeconds = durationSec
+        updated = true
+      }
+      const allowedStatuses = ["completed", "busy", "no-answer", "failed", "missed", "rejected", "ringing", "initiated", "dialing", "queued", "in-progress", "declined", "unanswered", "canceled", "cancelled"]
+      if (status && allowedStatuses.includes(status) && existingCall.status !== status) {
+        existingCall.status = status
+        updated = true
+      }
+      if (endedAt && !existingCall.endedAt) {
+        existingCall.endedAt = new Date(endedAt)
+        updated = true
+      } else if (durationSec > 0 && existingCall.startedAt && !existingCall.endedAt) {
+        existingCall.endedAt = new Date(new Date(existingCall.startedAt).getTime() + durationSec * 1000)
+        updated = true
+      }
+      if (matchedLead && (!existingCall.leadId || existingCall.isUnlinked)) {
+        existingCall.leadId = matchedLead._id
+        existingCall.isUnlinked = false
         updated = true
       }
       if (notes && notes.trim() && existingCall.notes !== notes.trim()) {
@@ -198,6 +231,22 @@ async function logCall(params = {}) {
       if (updated) {
         await existingCall.save()
       }
+
+      if (!isAmbiguousLead && (matchedLead || existingCall.leadId)) {
+        try {
+          await leadInteractionService.recordSuccessfulCallInteraction({
+            tenantId,
+            call: existingCall,
+            callData: params,
+            lead: matchedLead,
+            agentId,
+            preferAgentOwnership: true,
+          })
+        } catch (intErr) {
+          console.warn("[CallService] Non-blocking interaction sync failure on existing call:", intErr.message)
+        }
+      }
+
       return {
         success: true,
         data: existingCall,
@@ -250,6 +299,8 @@ async function logCall(params = {}) {
   }
 
   // 4. Create Call record
+  const allowedCreateStatuses = ["completed", "busy", "no-answer", "failed", "missed", "rejected", "ringing", "initiated", "dialing", "queued", "in-progress", "declined", "unanswered", "canceled", "cancelled"]
+  const resolvedCreateStatus = allowedCreateStatuses.includes(status) ? status : "completed"
   const call = new Call({
     tenantId,
     clientCallId: trimmedClientCallId,
@@ -260,12 +311,13 @@ async function logCall(params = {}) {
     number: cleanNumber,
     phoneNormalized,
     startedAt: callStartedAt,
+    startTimeMs: callStartedAt.getTime(),
     endedAt: callEndedAt,
     duration: durationSec,
-    status: ["completed", "busy", "no-answer", "failed", "missed", "rejected"].includes(status) ? status : "completed",
-    disposition: disposition ? String(disposition).trim() : "Interested",
+    status: resolvedCreateStatus,
+    disposition: disposition ? String(disposition).trim() : (resolvedCreateStatus === "completed" ? "Interested" : resolvedCreateStatus),
     notes: notes ? String(notes).trim().slice(0, 2000) : "",
-    source: ["android_sync", "manual", "exotel", "twilio"].includes(source) ? source : "manual",
+    source: ["android_sync", "whatsapp_voip", "manual", "exotel", "twilio", "mobile"].includes(source) ? source : "manual",
     recording: {
       fileId: recording?.fileId || null,
       sizeBytes: recording?.sizeBytes || 0,
@@ -297,10 +349,20 @@ async function logCall(params = {}) {
     throw saveErr
   }
 
-  // 5. If linked to lead: update lastContactedAt & record Activity timeline entry
+  // 5. If linked to lead: update latest voice interaction monotonically (connected calls only) & record Activity timeline
   if (matchedLead) {
-    matchedLead.lastContactedAt = callStartedAt
-    await matchedLead.save()
+    try {
+      await leadInteractionService.recordSuccessfulCallInteraction({
+        tenantId,
+        call: savedCall,
+        callData: params,
+        lead: matchedLead,
+        agentId,
+        preferAgentOwnership: true,
+      })
+    } catch (intErr) {
+      console.warn("[CallService] Non-blocking interaction update warning:", intErr.message)
+    }
 
     // Activity timeline hook
     try {
@@ -846,8 +908,10 @@ async function reconcileHistoricalCallsForLead({ lead, tenantId = null, user = n
     }
   }
 
+  const leadInteractionService = require("./leadInteractionService")
   const reconciledCallIds = []
-  let latestCallTime = lead.lastContactedAt ? new Date(lead.lastContactedAt).getTime() : 0
+  let latestSuccessfulCall = null
+  let latestSuccessfulCallTime = 0
 
   for (const call of unassignedCalls) {
     // Safety check: Never reassign a call already linked to another lead
@@ -871,9 +935,12 @@ async function reconcileHistoricalCallsForLead({ lead, tenantId = null, user = n
 
     reconciledCallIds.push(call._id.toString())
 
-    const callTimeMs = call.startedAt ? new Date(call.startedAt).getTime() : (call.startTimeMs || 0)
-    if (callTimeMs > latestCallTime) {
-      latestCallTime = callTimeMs
+    if (leadInteractionService.isSuccessfulVoiceCall(call).connected) {
+      const interactionTs = leadInteractionService.resolveCallInteractionTimestamp(call).getTime()
+      if (interactionTs > latestSuccessfulCallTime) {
+        latestSuccessfulCallTime = interactionTs
+        latestSuccessfulCall = call
+      }
     }
 
     // Record timeline activity only if newly linked (avoid duplicate activity entries)
@@ -907,16 +974,20 @@ async function reconcileHistoricalCallsForLead({ lead, tenantId = null, user = n
     }
   }
 
-  // Update lead's lastContactedAt and metadata.lastCallAt if historical calls were found
-  if (latestCallTime > 0) {
+  // Update lead's latest voice interaction & lastContactedAt monotonically ONLY from successful connected calls
+  if (latestSuccessfulCall && latestSuccessfulCallTime > 0) {
     try {
       const leadDoc = await Lead.findOne({ _id: lead._id, tenantId: effectiveTenantId }).setOptions({ skipTenantFilter: true })
       if (leadDoc) {
-        const currentLastContact = leadDoc.lastContactedAt ? new Date(leadDoc.lastContactedAt).getTime() : 0
-        if (latestCallTime > currentLastContact) {
-          leadDoc.lastContactedAt = new Date(latestCallTime)
+        await leadInteractionService.recordSuccessfulCallInteraction({
+          tenantId: effectiveTenantId,
+          call: latestSuccessfulCall,
+          lead: leadDoc,
+        })
+        const currentMetaCallAt = leadDoc.metadata?.lastCallAt ? new Date(leadDoc.metadata.lastCallAt).getTime() : 0
+        if (latestSuccessfulCallTime > currentMetaCallAt) {
           leadDoc.metadata = leadDoc.metadata || {}
-          leadDoc.metadata.lastCallAt = new Date(latestCallTime)
+          leadDoc.metadata.lastCallAt = new Date(latestSuccessfulCallTime)
           leadDoc.markModified("metadata")
           await leadDoc.save()
         }
@@ -988,12 +1059,17 @@ async function associateCallToLead({ callId, leadId, tenantId = null, user = nul
   call.markModified("metadata")
   await call.save()
 
-  // Update lead last contact timestamp if call is more recent
-  const callTimeMs = call.startedAt ? new Date(call.startedAt).getTime() : (call.startTimeMs || 0)
-  if (callTimeMs > 0) {
-    const currentLastContact = lead.lastContactedAt ? new Date(lead.lastContactedAt).getTime() : 0
-    if (callTimeMs > currentLastContact) {
-      lead.lastContactedAt = new Date(callTimeMs)
+  // Update lead interaction & lastContactedAt monotonically if call was connected
+  const leadInteractionService = require("./leadInteractionService")
+  if (leadInteractionService.isSuccessfulVoiceCall(call).connected) {
+    const callTimeMs = leadInteractionService.resolveCallInteractionTimestamp(call).getTime()
+    await leadInteractionService.recordSuccessfulCallInteraction({
+      tenantId: effectiveTenantId,
+      call,
+      lead,
+    })
+    const currentLastCall = lead.metadata?.lastCallAt ? new Date(lead.metadata.lastCallAt).getTime() : 0
+    if (callTimeMs > currentLastCall) {
       lead.metadata = lead.metadata || {}
       lead.metadata.lastCallAt = new Date(callTimeMs)
       lead.markModified("metadata")

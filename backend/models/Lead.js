@@ -205,6 +205,26 @@ const leadSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    lastInteractionAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    lastInteractionChannel: {
+      type: String,
+      enum: ["", "phone", "whatsapp_voice", "ai_phone"],
+      default: "",
+    },
+    lastInteractionDirection: {
+      type: String,
+      enum: ["", "inbound", "outbound"],
+      default: "",
+    },
+    lastInteractionCallId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Call",
+      default: null,
+    },
     deletedAt: {
       type: Date,
       default: null,
@@ -405,6 +425,8 @@ leadSchema.index({ tenantId: 1, "metadata.verificationTokenHash": 1 }, { sparse:
 leadSchema.index({ tenantId: 1, phoneNormalized: 1 })
 leadSchema.index({ tenantId: 1, ownerId: 1, status: 1 })
 leadSchema.index({ tenantId: 1, sourceId: 1, createdAt: -1 })
+leadSchema.index({ tenantId: 1, lastInteractionAt: -1, createdAt: -1 })
+leadSchema.index({ tenantId: 1, workspaceId: 1, lastInteractionAt: -1, createdAt: -1 })
 
 leadSchema.plugin(tenantIsolationPlugin)
 

@@ -191,6 +191,10 @@ const callSchema = new mongoose.Schema(
       default: Date.now,
       index: true,
     },
+    endedAt: {
+      type: Date,
+      default: null,
+    },
     startTimeMs: {
       type: Number,
       default: () => Date.now(),
@@ -286,7 +290,13 @@ function syncCallFields(doc) {
   }
 
   // Sync timestamp
-  if (doc.startTimeMs && !doc.startedAt) {
+  const modifiedStartedAt = typeof doc.isModified === "function" && doc.isModified("startedAt")
+  const modifiedStartTimeMs = typeof doc.isModified === "function" && doc.isModified("startTimeMs")
+  if (doc.isNew && modifiedStartedAt && !modifiedStartTimeMs && doc.startedAt) {
+    doc.startTimeMs = doc.startedAt.getTime()
+  } else if (doc.isNew && modifiedStartTimeMs && !modifiedStartedAt && doc.startTimeMs) {
+    doc.startedAt = new Date(doc.startTimeMs)
+  } else if (doc.startTimeMs && !doc.startedAt) {
     doc.startedAt = new Date(doc.startTimeMs)
   } else if (doc.startedAt && !doc.startTimeMs) {
     doc.startTimeMs = doc.startedAt.getTime()

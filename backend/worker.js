@@ -66,6 +66,20 @@ async function startWorker() {
     registerAllHandlers()
     console.log(`✅ [Worker] Job handlers registered.`)
 
+    // Recover stale AI Call Intelligence jobs stuck >20 minutes on startup
+    try {
+      const { recoverStaleAiJobs, RECOVER_STALE_JOB_NAME } = require("./services/aiCallProcessingPipeline")
+      await recoverStaleAiJobs()
+      scheduler.registerSchedule({
+        id: "ai-call-stale-recovery",
+        name: RECOVER_STALE_JOB_NAME,
+        intervalMs: 5 * 60 * 1000,
+        runImmediately: false,
+      })
+    } catch (recErr) {
+      console.warn("⚠️ [Worker] Initial AI stale-job recovery notice:", recErr.message)
+    }
+
     // Start recurring job scheduler
     scheduler.startScheduler()
     console.log(`✅ [Worker] Recurring job scheduler initialized.`)
@@ -113,6 +127,15 @@ async function shutdown(signal) {
   process.exit(0)
 }
 
+function wakeWorker() {
+  if (isShuttingDown || activeJob) return
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  pollTimer = setTimeout(processNext, 10)
+}
+
 function stopPolling() {
   isShuttingDown = true
   if (pollTimer) {
@@ -131,6 +154,7 @@ module.exports = {
   startWorker,
   shutdown,
   processNext,
+  wakeWorker,
   stopPolling,
   WORKER_ID,
 }

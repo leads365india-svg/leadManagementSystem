@@ -345,6 +345,14 @@ async function linkCallToLead({
   // Trigger live pipeline synchronization
   if (leadId) {
     try {
+      const leadInteractionService = require("../leadInteractionService")
+      await leadInteractionService.recordSuccessfulCallInteraction({
+        tenantId,
+        call: callDoc,
+      })
+    } catch (_) {}
+
+    try {
       await syncAiCallToLeadPipeline({
         callId: callDoc._id.toString(),
         tenantId,

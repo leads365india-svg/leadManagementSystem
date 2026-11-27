@@ -694,7 +694,7 @@ export default function Header() {
       <Link
         href="/"
         onClick={onNavigate}
-        className="flex items-center space-x-2.5 group shrink-0 min-w-0"
+        className="flex-1 min-w-0 flex items-center gap-1.5 group"
         title={branding?.displayName || companyName || "CRM Home"}
       >
         {branding?.logoUrl && !logoError ? (
@@ -703,7 +703,7 @@ export default function Header() {
             src={branding.logoUrl}
             alt={branding.displayName || companyName || "Logo"}
             onError={() => setLogoError(true)}
-            className={`${compact ? "h-7 max-w-[130px]" : "h-8 max-w-[140px]"} object-contain shrink-0 drop-shadow-2xs transition-transform group-hover:scale-105 duration-200`}
+            className={`${compact ? "h-7 w-auto max-w-[110px]" : "h-auto max-h-7 w-auto max-w-[76px]"} object-contain shrink-0 drop-shadow-2xs transition-transform group-hover:scale-105 duration-200`}
           />
         ) : (
           <div
@@ -722,8 +722,8 @@ export default function Header() {
             </svg>
           </div>
         )}
-        <div className="flex items-center space-x-1.5 min-w-0">
-          <span className="font-extrabold text-slate-900 text-sm tracking-tight group-hover:text-indigo-600 transition-colors truncate">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <span className="font-extrabold text-slate-900 text-sm tracking-tight group-hover:text-indigo-600 transition-colors truncate min-w-0">
             {brandName}
           </span>
           <span
@@ -792,7 +792,7 @@ export default function Header() {
         ----------------------------------------------------------------------- */}
         <div className="shrink-0 border-b border-slate-100 bg-white">
           {/* Logo & Utility Buttons */}
-          <div className="px-4 pt-3.5 pb-2.5 flex items-center justify-between gap-2">
+          <div className="px-3 pt-3.5 pb-2.5 flex items-center justify-between gap-1.5 min-w-0">
             {renderBrandMark({ onNavigate: () => setMobileMenuOpen(false) })}
 
             <div className="flex items-center gap-1 shrink-0">

@@ -160,7 +160,7 @@ export default function ClientPortalDashboard() {
 
   if (loading) {
     return (
-      <div className="py-20 flex flex-col items-center justify-center space-y-3">
+      <div className="w-full px-3 sm:px-4 py-20 flex flex-col items-center justify-center space-y-3">
         <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs text-slate-500 font-medium">Loading CRM Pipeline...</p>
       </div>
@@ -194,7 +194,7 @@ export default function ClientPortalDashboard() {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
+    <div className="w-full px-3 sm:px-4 py-4 sm:py-5 space-y-8 animate-in fade-in duration-300">
       {/* Top Welcome Bar */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

@@ -312,10 +312,349 @@ function runDeduplicatedConversion(key, taskFn) {
   return promise
 }
 
+const https = require("https")
+const http = require("http")
+
+/**
+ * Pure helper computing 10-minute (600s) chunk intervals with 5-second overlap.
+ */
+function computeAudioChunkPlan({ totalDurationSec = 0, chunkDurationSec = 600, overlapSec = 5 } = {}) {
+  const duration = Number(totalDurationSec) || 0
+  const chunkLen = Math.max(1, Number(chunkDurationSec) || 600)
+  const overlap = Math.max(0, Number(overlapSec) || 0)
+
+  if (duration <= 0) {
+    return []
+  }
+
+  if (duration <= chunkLen) {
+    return [
+      {
+        index: 0,
+        startSec: 0,
+        offsetSeconds: 0,
+        extractDurationSec: Math.round(duration * 100) / 100,
+      },
+    ]
+  }
+
+  const plan = []
+  let index = 0
+  let startSec = 0
+  while (startSec < duration - 0.25) {
+    const remaining = duration - startSec
+    const extractDurationSec = Math.min(chunkLen + overlap, remaining)
+    plan.push({
+      index,
+      startSec,
+      offsetSeconds: startSec,
+      extractDurationSec: Math.round(extractDurationSec * 100) / 100,
+    })
+    if (remaining <= chunkLen) {
+      break
+    }
+    startSec += chunkLen
+    index++
+  }
+  return plan
+}
+
+/**
+ * Downloads a Call recording from GridFS or remote CDN directly to a temporary file on disk
+ * without buffering large multi-megabyte recordings completely in Node RAM.
+ */
+async function downloadRecordingToTempFile({ call, timeoutMs = 180000 }) {
+  if (!call || !call.recording) {
+    throw new Error("Call object does not contain valid recording metadata.")
+  }
+
+  const rec = call.recording
+  const fileId = rec.mp3FileId || rec.fileId
+  const tempPath = path.join(os.tmpdir(), `call_rec_${call._id || Date.now()}_${crypto.randomBytes(6).toString("hex")}.audio`)
+
+  const safeCleanup = () => {
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+    } catch (_) {}
+  }
+
+  if (fileId) {
+    const recordingStorage = require("./recordingStorage")
+    const mongoose = require("mongoose")
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let writeStream = null
+      let downloadStream = null
+      let timer = null
+
+      const fail = (err) => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        try { downloadStream?.destroy() } catch (_) {}
+        try { writeStream?.destroy() } catch (_) {}
+        safeCleanup()
+        reject(err)
+      }
+
+      try {
+        const bucket = recordingStorage.getBucket()
+        const objectId = typeof fileId === "string" ? new mongoose.Types.ObjectId(fileId) : fileId
+        downloadStream = bucket.openDownloadStream(objectId)
+        writeStream = fs.createWriteStream(tempPath)
+        let sizeBytes = 0
+
+        downloadStream.on("data", (chunk) => {
+          sizeBytes += chunk.length
+        })
+
+        downloadStream.on("error", (err) => {
+          fail(new Error(`Failed to retrieve recording from GridFS: ${err.message}`))
+        })
+
+        writeStream.on("error", (err) => {
+          fail(new Error(`Failed writing temp recording file: ${err.message}`))
+        })
+
+        writeStream.on("finish", () => {
+          if (settled) return
+          settled = true
+          if (timer) clearTimeout(timer)
+          resolve({
+            filePath: tempPath,
+            sizeBytes,
+            mimeType: rec.mp3FileId ? "audio/mp3" : (rec.mimeType || "audio/mp3"),
+            cleanup: safeCleanup,
+          })
+        })
+
+        timer = setTimeout(() => {
+          fail(new Error(`GridFS audio download timed out after ${Math.round(timeoutMs / 1000)} seconds.`))
+        }, timeoutMs)
+
+        downloadStream.pipe(writeStream)
+      } catch (err) {
+        fail(new Error(`GridFS download initialization error: ${err.message}`))
+      }
+    })
+  }
+
+  const downloadUrlToTemp = (targetUrl, redirectDepth = 0) => {
+    if (redirectDepth > 5) {
+      return Promise.reject(new Error("Too many redirects while downloading remote recording."))
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let writeStream = null
+      let req = null
+      let timer = null
+
+      const fail = (err) => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        try { req?.destroy() } catch (_) {}
+        try { writeStream?.destroy() } catch (_) {}
+        safeCleanup()
+        reject(err)
+      }
+
+      try {
+        const parsed = new URL(targetUrl)
+        const client = parsed.protocol === "https:" ? https : http
+        req = client.get(targetUrl, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.resume()
+            if (timer) clearTimeout(timer)
+            settled = true
+            return downloadUrlToTemp(res.headers.location, redirectDepth + 1).then(resolve, reject)
+          }
+
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            res.resume()
+            return fail(new Error(`HTTP ${res.statusCode} while fetching remote recording from CDN.`))
+          }
+
+          writeStream = fs.createWriteStream(tempPath)
+          let sizeBytes = 0
+          const contentType = (res.headers["content-type"] || "audio/mp3").split(";")[0].trim()
+
+          res.on("data", (chunk) => {
+            sizeBytes += chunk.length
+          })
+          res.on("error", (err) => fail(new Error(`Remote stream error: ${err.message}`)))
+          writeStream.on("error", (err) => fail(new Error(`Failed writing temp remote file: ${err.message}`)))
+          writeStream.on("finish", () => {
+            if (settled) return
+            settled = true
+            if (timer) clearTimeout(timer)
+            resolve({
+              filePath: tempPath,
+              sizeBytes,
+              mimeType: contentType,
+              cleanup: safeCleanup,
+            })
+          })
+
+          res.pipe(writeStream)
+        })
+
+        req.on("error", (err) => fail(new Error(`Remote audio request error: ${err.message}`)))
+        timer = setTimeout(() => {
+          fail(new Error(`Remote audio download timed out after ${Math.round(timeoutMs / 1000)} seconds.`))
+        }, timeoutMs)
+      } catch (err) {
+        fail(new Error(`Invalid remote audio URL: ${err.message}`))
+      }
+    })
+  }
+
+  const remoteUrl = rec.imagekitMp3Url || rec.imagekitUrl || rec.url
+  if (remoteUrl) {
+    return downloadUrlToTemp(remoteUrl)
+  }
+
+  throw new Error("Call recording has neither a GridFS fileId nor an active remote storage URL.")
+}
+
+/**
+ * Splits a long audio file into sequential 10-minute MP3 chunks (with 5-second overlap)
+ * inside an isolated temporary directory so callers can transcribe and clean up safely.
+ */
+async function splitAudioIntoChunks({
+  inputPath,
+  totalDurationSec = 0,
+  chunkDurationSec = 600,
+  overlapSec = 5,
+  chunkTimeoutMs = 180000,
+}) {
+  if (!inputPath || !fs.existsSync(inputPath)) {
+    throw new Error("Input audio file does not exist for chunking.")
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "leads365_audio_chunks_"))
+  const cleanup = () => {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    } catch (_) {}
+  }
+
+  try {
+    let resolvedDuration = Number(totalDurationSec) || 0
+    const probed = await probeAudio(inputPath)
+    if (probed?.isValid && probed.duration > 0) {
+      // Authoritative media stream duration prevents seeking past EOF when Call metadata disagrees
+      resolvedDuration = Number(probed.duration)
+    } else if (resolvedDuration <= 0) {
+      throw new Error(`Invalid audio file: ${probed?.error || "Unable to decode audio stream"}`)
+    }
+
+    const chunks = []
+
+    if (resolvedDuration > 0) {
+      const plan = computeAudioChunkPlan({
+        totalDurationSec: resolvedDuration,
+        chunkDurationSec,
+        overlapSec,
+      })
+
+      for (const spec of plan) {
+        const outPath = path.join(tempDir, `chunk_${String(spec.index).padStart(3, "0")}.mp3`)
+        const args = [
+          "-y",
+          "-ss", String(spec.startSec),
+          "-t", String(spec.extractDurationSec),
+          "-i", inputPath,
+          "-vn",
+          "-acodec", "libmp3lame",
+          "-b:a", "64k",
+          "-ac", "1",
+          "-ar", "16000",
+          outPath,
+        ]
+        await runFFmpeg(args, chunkTimeoutMs)
+
+        if (!fs.existsSync(outPath) || fs.statSync(outPath).size === 0) {
+          throw new Error(`FFmpeg failed to produce chunk ${spec.index}.`)
+        }
+        const stat = fs.statSync(outPath)
+        chunks.push({
+          index: spec.index,
+          startSec: spec.startSec,
+          offsetSeconds: spec.offsetSeconds,
+          durationSec: spec.extractDurationSec,
+          filePath: outPath,
+          sizeBytes: stat.size,
+          mimeType: "audio/mp3",
+        })
+      }
+    } else {
+      // Fallback segment splitting when container lacks duration metadata
+      const segPattern = path.join(tempDir, "chunk_%03d.mp3")
+      await runFFmpeg(
+        [
+          "-y",
+          "-i", inputPath,
+          "-vn",
+          "-f", "segment",
+          "-segment_time", String(chunkDurationSec),
+          "-acodec", "libmp3lame",
+          "-b:a", "64k",
+          "-ac", "1",
+          "-ar", "16000",
+          segPattern,
+        ],
+        chunkTimeoutMs
+      )
+
+      const files = fs
+        .readdirSync(tempDir)
+        .filter((f) => f.endsWith(".mp3"))
+        .sort()
+
+      if (files.length === 0) {
+        throw new Error("FFmpeg produced zero audio chunks during segmentation.")
+      }
+
+      let cumulativeOffset = 0
+      for (let i = 0; i < files.length; i++) {
+        const fp = path.join(tempDir, files[i])
+        const stat = fs.statSync(fp)
+        const p = await probeAudio(fp)
+        const dur = Number(p.duration) || chunkDurationSec
+        chunks.push({
+          index: i,
+          startSec: cumulativeOffset,
+          offsetSeconds: cumulativeOffset,
+          durationSec: dur,
+          filePath: fp,
+          sizeBytes: stat.size,
+          mimeType: "audio/mp3",
+        })
+        cumulativeOffset += dur
+      }
+      resolvedDuration = cumulativeOffset
+    }
+
+    return {
+      tempDir,
+      totalDurationSec: resolvedDuration,
+      chunks,
+      cleanup,
+    }
+  } catch (err) {
+    cleanup()
+    throw err
+  }
+}
+
 module.exports = {
   getFfmpegPath: () => ffmpegPath,
   probeAudio,
   convertToMp3,
   runDeduplicatedConversion,
+  computeAudioChunkPlan,
+  downloadRecordingToTempFile,
+  splitAudioIntoChunks,
 }
 

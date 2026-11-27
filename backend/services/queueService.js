@@ -144,7 +144,12 @@ async function claimNextJob(workerId = "worker_default", options = {}) {
       },
       {
         status: "processing",
-        lockedAt: { $lt: new Date(now.getTime() - 60000) }, // Default fallback threshold
+        $expr: {
+          $lt: [
+            "$lockedAt",
+            { $subtract: [now, { $ifNull: ["$lockTimeoutMs", 60000] }] },
+          ],
+        },
       },
     ],
   }
@@ -172,6 +177,17 @@ async function claimNextJob(workerId = "worker_default", options = {}) {
   )
 
   return job
+}
+
+/**
+ * Refreshes lockedAt on a long-running processing job so it is not prematurely reclaimed.
+ */
+async function heartbeatJob(jobId) {
+  if (!jobId) return null
+  return Job.updateOne(
+    { jobId, status: "processing" },
+    { $set: { lockedAt: new Date() } }
+  )
 }
 
 /**
@@ -382,6 +398,7 @@ module.exports = {
   addJob,
   enqueue: addJob,
   claimNextJob,
+  heartbeatJob,
   completeJob,
   failJob,
   retryDeadLetterJob,

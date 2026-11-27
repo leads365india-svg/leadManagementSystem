@@ -85,19 +85,58 @@ async function triggerCallAnalysis(req, res) {
     }
 
     const force = Boolean(req.body?.force)
+    const [latestTranscript, latestAnalysis] = await Promise.all([
+      AITranscript.findOne({ tenantId, callId: call._id }).sort({ version: -1 }).lean(),
+      AICallAnalysis.findOne({ tenantId, callId: call._id, deletedAt: null }).sort({ analysisVersion: -1 }).lean(),
+    ])
+
+    const currentStatus =
+      call.metadata?.aiAnalysisStatus ||
+      latestAnalysis?.status ||
+      latestTranscript?.status ||
+      "NOT_STARTED"
+
+    const shouldForce =
+      force ||
+      ["FAILED", "PENDING", "NOT_STARTED", "NOT_ANALYZED", "COMPLETED"].includes(String(currentStatus).toUpperCase())
+    const forceNewTranscript =
+      req.body?.forceNewTranscript !== undefined
+        ? Boolean(req.body.forceNewTranscript)
+        : Boolean(!latestTranscript || latestTranscript.status !== "COMPLETED")
+
+    call.metadata = call.metadata || {}
+    call.metadata.aiAnalysisStatus = "PROCESSING"
+    call.metadata.aiTranscriptStatus = forceNewTranscript ? "PROCESSING" : (latestTranscript?.status || "PROCESSING")
+    call.metadata.aiQueuedAt = Date.now()
+    delete call.metadata.aiErrorMessage
+    call.markModified("metadata")
+    await call.save()
+
     const enqueueResult = await enqueueCallIntelligenceJob({
       callId: call._id,
       tenantId,
-      force,
+      force: shouldForce,
+      forceNewTranscript,
     })
+
+    if (process.env.DISABLE_EMBEDDED_WORKER !== "true" && process.env.NODE_ENV !== "test") {
+      try {
+        const worker = require("../worker")
+        if (typeof worker.wakeWorker === "function") {
+          setImmediate(() => worker.wakeWorker())
+        }
+      } catch (_) {}
+    }
 
     return res.status(202).json({
       success: true,
       message: enqueueResult.duplicate
         ? "AI intelligence job already queued or in progress."
         : "AI Call Intelligence job enqueued successfully.",
+      status: "PROCESSING",
       data: {
         callId: call._id,
+        status: "PROCESSING",
         enqueued: enqueueResult.enqueued,
         duplicate: enqueueResult.duplicate,
         jobId: enqueueResult.jobId,
@@ -148,16 +187,35 @@ async function getCallStatus(req, res) {
       call.recordingUrl
     )
 
+    const queuedAtMs = Number(call.metadata?.aiQueuedAt || 0)
+    const completedAtMs = latestAnalysis?.completedAt ? new Date(latestAnalysis.completedAt).getTime() : 0
+    const isRequeuedAfterCompletion =
+      call.metadata?.aiAnalysisStatus === "PROCESSING" && queuedAtMs > 0 && queuedAtMs > completedAtMs
+
     let overallStatus = "NOT_STARTED"
     if (!hasRecording) {
       overallStatus = "NOT_RECORDED"
+    } else if (isRequeuedAfterCompletion) {
+      overallStatus = "PROCESSING"
     } else if (latestAnalysis?.status === "COMPLETED") {
       overallStatus = "COMPLETED"
-    } else if (latestAnalysis?.status === "PROCESSING" || latestTranscript?.status === "PROCESSING") {
+    } else if (
+      latestAnalysis?.status === "PROCESSING" ||
+      latestTranscript?.status === "PROCESSING" ||
+      call.metadata?.aiAnalysisStatus === "PROCESSING"
+    ) {
       overallStatus = "PROCESSING"
-    } else if (latestAnalysis?.status === "FAILED" || latestTranscript?.status === "FAILED") {
+    } else if (
+      latestAnalysis?.status === "FAILED" ||
+      latestTranscript?.status === "FAILED" ||
+      call.metadata?.aiAnalysisStatus === "FAILED"
+    ) {
       overallStatus = "FAILED"
-    } else if (latestTranscript?.status === "PENDING" || latestAnalysis?.status === "PENDING") {
+    } else if (
+      latestTranscript?.status === "PENDING" ||
+      latestAnalysis?.status === "PENDING" ||
+      call.metadata?.aiAnalysisStatus === "PENDING"
+    ) {
       overallStatus = "PENDING"
     }
 
@@ -200,14 +258,23 @@ async function getCallStatus(req, res) {
       notes: call.notes,
       hasRecording,
       recording: call.recording,
+      metadata: call.metadata,
+      aiErrorMessage: call.metadata?.aiErrorMessage || null,
       createdAt: call.createdAt,
       startedAt: call.startedAt || call.createdAt,
     }
+
+    const resolvedErrorMessage =
+      latestAnalysis?.safeErrorMessage ||
+      latestTranscript?.safeErrorMessage ||
+      call.metadata?.aiErrorMessage ||
+      null
 
     const statusData = {
       callId: call._id,
       call: callSummary,
       overallStatus,
+      errorMessage: resolvedErrorMessage,
       hasRecording,
       transcript: transcriptPayload,
       analysis: analysisPayload,
@@ -333,12 +400,29 @@ async function reprocessCall(req, res) {
 
     const forceNewTranscript = req.body?.forceNewTranscript !== false
 
+    call.metadata = call.metadata || {}
+    call.metadata.aiAnalysisStatus = "PROCESSING"
+    call.metadata.aiTranscriptStatus = forceNewTranscript ? "PROCESSING" : (call.metadata.aiTranscriptStatus || "PROCESSING")
+    call.metadata.aiQueuedAt = Date.now()
+    delete call.metadata.aiErrorMessage
+    call.markModified("metadata")
+    await call.save()
+
     const enqueueResult = await enqueueCallIntelligenceJob({
       callId: call._id,
       tenantId,
       force: true,
       forceNewTranscript,
     })
+
+    if (process.env.DISABLE_EMBEDDED_WORKER !== "true" && process.env.NODE_ENV !== "test") {
+      try {
+        const worker = require("../worker")
+        if (typeof worker.wakeWorker === "function") {
+          setImmediate(() => worker.wakeWorker())
+        }
+      } catch (_) {}
+    }
 
     await audit.log({
       req,
@@ -351,9 +435,11 @@ async function reprocessCall(req, res) {
     return res.status(202).json({
       success: true,
       message: "Reprocessing job enqueued successfully.",
+      status: "PROCESSING",
       data: {
         jobId: enqueueResult.jobId,
         callId: call._id,
+        status: "PROCESSING",
         enqueued: enqueueResult.enqueued,
         duplicate: enqueueResult.duplicate,
       },
@@ -437,15 +523,24 @@ async function listAnalyzedCalls(req, res) {
 
     const callIds = calls.map((c) => c._id)
 
-    // Fetch corresponding latest analyses for these calls (excluding soft-deleted)
-    const analyses = await AICallAnalysis.find(applyWorkspaceScope({
-      tenantId,
-      callId: { $in: callIds },
-      deletedAt: null,
-    }, req))
-      .populate("topicMatches.topicId", "name category primaryKeywords")
-      .sort({ analysisVersion: -1 })
-      .lean()
+    // Fetch corresponding latest analyses and transcripts for these calls (excluding soft-deleted analyses)
+    const [analyses, transcripts] = await Promise.all([
+      AICallAnalysis.find(applyWorkspaceScope({
+        tenantId,
+        callId: { $in: callIds },
+        deletedAt: null,
+      }, req))
+        .populate("topicMatches.topicId", "name category primaryKeywords")
+        .sort({ analysisVersion: -1 })
+        .lean(),
+      AITranscript.find(applyWorkspaceScope({
+        tenantId,
+        callId: { $in: callIds },
+      }, req))
+        .select("callId status version safeErrorMessage errorCode")
+        .sort({ version: -1 })
+        .lean(),
+    ])
 
     const analysisMap = new Map()
     for (const a of analyses) {
@@ -455,15 +550,49 @@ async function listAnalyzedCalls(req, res) {
       }
     }
 
+    const transcriptMap = new Map()
+    for (const t of transcripts) {
+      const cIdStr = t.callId ? t.callId.toString() : null
+      if (cIdStr && !transcriptMap.has(cIdStr)) {
+        transcriptMap.set(cIdStr, t)
+      }
+    }
+
     // Map into unified call objects with attached aiAnalysis
     let mappedCalls = calls.map((c) => {
       const cIdStr = c._id.toString()
       const analysis = analysisMap.get(cIdStr) || null
+      const transcript = transcriptMap.get(cIdStr) || null
+      const metaStatus = String(c.metadata?.aiAnalysisStatus || "").toUpperCase()
+      const queuedAtMs = Number(c.metadata?.aiQueuedAt || 0)
+      const completedAtMs = analysis?.completedAt ? new Date(analysis.completedAt).getTime() : 0
+
+      let intelligenceStatus = "NOT_ANALYZED"
+      if (metaStatus === "PROCESSING" && (!analysis?.completedAt || queuedAtMs > completedAtMs)) {
+        intelligenceStatus = "PROCESSING"
+      } else if (analysis?.status) {
+        intelligenceStatus = analysis.status
+      } else if (metaStatus === "FAILED" || transcript?.status === "FAILED") {
+        intelligenceStatus = "FAILED"
+      } else if (metaStatus === "PROCESSING" || transcript?.status === "PROCESSING") {
+        intelligenceStatus = "PROCESSING"
+      } else if (metaStatus === "PENDING" || transcript?.status === "PENDING") {
+        intelligenceStatus = "PENDING"
+      }
+
+      const aiErrorMessage =
+        analysis?.safeErrorMessage ||
+        transcript?.safeErrorMessage ||
+        c.metadata?.aiErrorMessage ||
+        null
+
       return {
         ...c,
         id: c._id,
         aiAnalysis: analysis,
-        intelligenceStatus: analysis ? analysis.status : "NOT_ANALYZED",
+        aiTranscript: transcript,
+        aiErrorMessage,
+        intelligenceStatus,
       }
     })
 
@@ -545,10 +674,12 @@ async function getDashboardMetrics(req, res) {
     applyWorkspaceScope(recordingQuery, req)
     const analysisMetricQuery = applyWorkspaceScope({ tenantId, ...dateFilter, deletedAt: null }, req)
     const transcriptMetricQuery = applyWorkspaceScope({ tenantId, ...dateFilter }, req)
-    const [totalRecordedCalls, allAnalyses, allTranscripts] = await Promise.all([
+    const [totalRecordedCalls, allAnalyses, allTranscripts, failedCallsWithoutAnalysis, processingCallsWithoutAnalysis] = await Promise.all([
       Call.countDocuments(recordingQuery),
       AICallAnalysis.find(analysisMetricQuery).lean(),
-      AITranscript.find(transcriptMetricQuery).select("duration status").lean(),
+      AITranscript.find(transcriptMetricQuery).select("callId duration status").lean(),
+      Call.find({ ...recordingQuery, "metadata.aiAnalysisStatus": "FAILED" }).select("_id").lean(),
+      Call.find({ ...recordingQuery, "metadata.aiAnalysisStatus": { $in: ["PROCESSING", "PENDING"] } }).select("_id").lean(),
     ])
 
     let analyzedCount = 0
@@ -558,8 +689,10 @@ async function getDashboardMetrics(req, res) {
     const outcomeDistribution = {}
     const sentimentDistribution = {}
     const topicFrequency = {}
+    const analysisCallIds = new Set()
 
     for (const a of allAnalyses) {
+      if (a.callId) analysisCallIds.add(a.callId.toString())
       if (a.status === "COMPLETED") {
         analyzedCount++
         outcomeDistribution[a.callOutcome] = (outcomeDistribution[a.callOutcome] || 0) + 1
@@ -573,6 +706,17 @@ async function getDashboardMetrics(req, res) {
         pendingCount++
       } else if (a.status === "FAILED") {
         failedCount++
+      }
+    }
+
+    for (const fc of failedCallsWithoutAnalysis) {
+      if (!analysisCallIds.has(fc._id.toString())) {
+        failedCount++
+      }
+    }
+    for (const pc of processingCallsWithoutAnalysis) {
+      if (!analysisCallIds.has(pc._id.toString())) {
+        pendingCount++
       }
     }
 

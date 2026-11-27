@@ -423,7 +423,7 @@ STRICT GROUNDING & PRODUCT-RELEVANCE RULES:
       },
     ],
     generationConfig: {
-      maxOutputTokens: 4096,
+      maxOutputTokens: Number(process.env.AI_ANALYSIS_MAX_OUTPUT_TOKENS) || 16384,
       responseMimeType: "application/json",
     },
   }
@@ -432,10 +432,11 @@ STRICT GROUNDING & PRODUCT-RELEVANCE RULES:
   const headers = {
     "x-goog-api-key": apiKey.trim(),
   }
+  const analysisTimeoutMs = Number(process.env.AI_ANALYSIS_TIMEOUT_MS) || 300000
 
   let response
   try {
-    response = await httpClient(endpoint, requestBody, headers)
+    response = await httpClient(endpoint, requestBody, headers, { timeoutMs: analysisTimeoutMs })
   } catch (err) {
     throw new Error(sanitizeErrorMessage(err.message))
   }
