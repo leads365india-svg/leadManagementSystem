@@ -746,12 +746,18 @@ class ApiClient {
       }
     })
     const queryString = searchParams.toString()
-    return this.request(`/staff${queryString ? `?${queryString}` : ""}`)
+    const explicitTenant = typeof query?.tenantId === "string" ? query.tenantId.trim() : ""
+    return this.request(`/staff${queryString ? `?${queryString}` : ""}`, {
+      cache: "no-store",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+    })
   }
 
   async createStaff(payload) {
+    const explicitTenant = typeof payload?.tenantId === "string" ? payload.tenantId.trim() : ""
     return this.request("/staff", {
       method: "POST",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
       body: JSON.stringify(payload),
     })
   }
@@ -813,34 +819,50 @@ class ApiClient {
       }
     })
     const queryString = searchParams.toString()
-    return this.request(`/roles${queryString ? `?${queryString}` : ""}`)
+    const explicitTenant = typeof query?.tenantId === "string" ? query.tenantId.trim() : ""
+    return this.request(`/roles${queryString ? `?${queryString}` : ""}`, {
+      cache: "no-store",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+    })
   }
 
   async getAvailableRolePermissions() {
-    return this.request("/roles/permissions/available")
+    return this.request("/roles/permissions/available", { cache: "no-store" })
   }
 
-  async getRoleById(id) {
-    return this.request(`/roles/${id}`)
+  async getRoleById(id, query = {}) {
+    const explicitTenant = typeof query?.tenantId === "string" ? query.tenantId.trim() : ""
+    const qs = explicitTenant ? `?tenantId=${encodeURIComponent(explicitTenant)}` : ""
+    return this.request(`/roles/${id}${qs}`, {
+      cache: "no-store",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+    })
   }
 
   async createRole(payload) {
+    const explicitTenant = typeof payload?.tenantId === "string" ? payload.tenantId.trim() : ""
     return this.request("/roles", {
       method: "POST",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
       body: JSON.stringify(payload),
     })
   }
 
   async updateRole(id, payload) {
+    const explicitTenant = typeof payload?.tenantId === "string" ? payload.tenantId.trim() : ""
     return this.request(`/roles/${id}`, {
       method: "PUT",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
       body: JSON.stringify(payload),
     })
   }
 
-  async deleteRole(id) {
-    return this.request(`/roles/${id}`, {
+  async deleteRole(id, query = {}) {
+    const explicitTenant = typeof query?.tenantId === "string" ? query.tenantId.trim() : ""
+    const qs = explicitTenant ? `?tenantId=${encodeURIComponent(explicitTenant)}` : ""
+    return this.request(`/roles/${id}${qs}`, {
       method: "DELETE",
+      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
     })
   }
 

@@ -1,19 +1,20 @@
 const mongoose = require("mongoose")
 const Role = require("../models/Role")
 const User = require("../models/User")
+const Account = require("../models/Account")
 const { ensureTenantRoles, SYSTEM_ROLES } = require("../models/Role")
 const {
   PERMISSION_MODULES,
   getSuperAdminCeiling,
 } = require("../models/RolePermission")
-const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { getEffectiveTenant, runWithTenantContext } = require("../middleware/tenantContext")
 const { invalidateTenantRoleCache } = require("../middleware/authMiddleware")
 const { isPermissionCoveredByCeiling } = require("../utils/rbacScope")
 const audit = require("../services/auditService")
 
 /**
  * Role Controller - Phase 5: RBAC v2
- * 
+ *
  * Manages tenant-scoped roles and permissions with strict tenant isolation,
  * Super Admin ceiling enforcement, and privilege escalation prevention.
  */
@@ -30,20 +31,82 @@ const slugify = (text) => {
 }
 
 /**
+ * Resolve target tenant strictly and safely.
+ * - Non-Super-Admin callers are permanently bound to their authenticated tenantId and rejected if attempting to target another tenant.
+ * - Super Admin callers prefer explicit request tenantId (query/body) over ambient header/cookie tenant context, validated against Account.
+ */
+const resolveRoleTargetTenant = async (req, explicitTenantId = null) => {
+  const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
+  const cleanExplicit =
+    typeof explicitTenantId === "string" && explicitTenantId.trim() ? explicitTenantId.trim() : null
+
+  if (!isSuperAdmin) {
+    if (!tenantId) {
+      return { errorStatus: 403, errorMessage: "Tenant context required to access roles" }
+    }
+    if (cleanExplicit && cleanExplicit !== String(tenantId)) {
+      return {
+        errorStatus: 403,
+        errorMessage: "Cross-tenant access denied: Cannot manage roles for another tenant account",
+      }
+    }
+    return { targetTenantId: String(tenantId), isSuperAdmin: false, hasExplicitTenant: false }
+  }
+
+  const headerTenant =
+    typeof req.headers?.["x-tenant-id"] === "string" && req.headers["x-tenant-id"].trim()
+      ? req.headers["x-tenant-id"].trim()
+      : null
+  const targetTenantId = cleanExplicit || headerTenant || tenantId || null
+
+  if (targetTenantId) {
+    const accountExists = await Account.exists({ accountId: targetTenantId })
+    if (!accountExists) {
+      return {
+        errorStatus: 404,
+        errorMessage: `Tenant account '${targetTenantId}' does not exist or is invalid.`,
+      }
+    }
+  }
+
+  return {
+    targetTenantId,
+    isSuperAdmin: true,
+    hasExplicitTenant: Boolean(cleanExplicit),
+  }
+}
+
+const withRoleTenantContext = (req, targetTenantId, isSuperAdmin, fn) => {
+  const baseContext = req.tenantContext || {}
+  return runWithTenantContext(
+    {
+      ...baseContext,
+      tenantId: targetTenantId,
+      isSuperAdmin,
+      mode: isSuperAdmin ? "authorized_all_workspaces" : baseContext.mode || "standalone",
+      userId: baseContext.userId || req.user?.id || null,
+      userRole: baseContext.userRole || req.user?.role || null,
+      userEmail: baseContext.userEmail || req.user?.email || null,
+    },
+    fn,
+  )
+}
+
+/**
  * GET /api/roles
  * List all roles for caller's tenant with assigned staff count
  */
 const getRoles = async (req, res) => {
   try {
-    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
-    if (!tenantId && !isSuperAdmin) {
-      return res.status(403).json({
+    const resolved = await resolveRoleTargetTenant(req, req.query?.tenantId)
+    if (resolved.errorStatus) {
+      return res.status(resolved.errorStatus).json({
         success: false,
-        error: "Tenant context required to access roles",
+        error: resolved.errorMessage,
       })
     }
 
-    const targetTenantId = tenantId || req.query.tenantId
+    const { targetTenantId, isSuperAdmin } = resolved
     if (!targetTenantId) {
       return res.status(400).json({
         success: false,
@@ -51,35 +114,41 @@ const getRoles = async (req, res) => {
       })
     }
 
-    // Ensure system roles are seeded
-    await ensureTenantRoles(targetTenantId)
+    const { rolesWithCounts } = await withRoleTenantContext(req, targetTenantId, isSuperAdmin, async () => {
+      // Ensure default system roles are seeded once (never overwrites customized roles)
+      await ensureTenantRoles(targetTenantId)
 
-    const roles = await Role.find({ tenantId: targetTenantId })
-      .sort({ isSystem: -1, createdAt: 1 })
-      .lean()
+      const roles = await Role.find({ tenantId: targetTenantId })
+        .setOptions({ skipTenantFilter: true })
+        .sort({ isSystem: -1, createdAt: 1 })
+        .lean()
 
-    // Aggregate staff counts per role for this tenant
-    const staffCounts = await User.aggregate([
-      { $match: { tenantId: targetTenantId, isActive: { $ne: false }, status: { $ne: "suspended" } } },
-      { $group: { _id: "$role", count: { $sum: 1 } } },
-    ])
+      // Aggregate staff counts per role for this tenant
+      const staffCounts = await User.aggregate([
+        { $match: { tenantId: targetTenantId, isActive: { $ne: false }, status: { $ne: "suspended" } } },
+        { $group: { _id: "$role", count: { $sum: 1 } } },
+      ])
 
-    const countMap = {}
-    staffCounts.forEach((item) => {
-      countMap[item._id] = item.count
+      const countMap = {}
+      staffCounts.forEach((item) => {
+        countMap[item._id] = item.count
+      })
+
+      const formatted = roles.map((r) => ({
+        ...r,
+        id: r._id.toString(),
+        _id: r._id.toString(),
+        assignedStaffCount: countMap[r.slug] || 0,
+        permissionCount: Array.isArray(r.permissions) ? r.permissions.length : 0,
+      }))
+
+      return { rolesWithCounts: formatted }
     })
-
-    const rolesWithCounts = roles.map((r) => ({
-      ...r,
-      id: r._id.toString(),
-      _id: r._id.toString(),
-      assignedStaffCount: countMap[r.slug] || 0,
-      permissionCount: Array.isArray(r.permissions) ? r.permissions.length : 0,
-    }))
 
     res.status(200).json({
       success: true,
       data: {
+        tenantId: targetTenantId,
         roles: rolesWithCounts,
         total: rolesWithCounts.length,
       },
@@ -127,7 +196,12 @@ const getAvailablePermissions = async (req, res) => {
  */
 const getRoleById = async (req, res) => {
   try {
-    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
+    const resolved = await resolveRoleTargetTenant(req, req.query?.tenantId)
+    if (resolved.errorStatus) {
+      return res.status(resolved.errorStatus).json({ success: false, error: resolved.errorMessage })
+    }
+
+    const { targetTenantId, isSuperAdmin, hasExplicitTenant } = resolved
     const { id } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -135,20 +209,22 @@ const getRoleById = async (req, res) => {
     }
 
     const query = { _id: id }
-    if (!isSuperAdmin && tenantId) {
-      query.tenantId = tenantId
+    if (!isSuperAdmin || (hasExplicitTenant && targetTenantId)) {
+      query.tenantId = targetTenantId
     }
 
-    const role = await Role.findOne(query).lean()
+    const role = await Role.findOne(query).setOptions({ skipTenantFilter: true }).lean()
     if (!role) {
       return res.status(404).json({ success: false, error: "Role not found" })
     }
 
-    const staffCount = await User.countDocuments({
-      tenantId: role.tenantId,
-      role: role.slug,
-      isActive: { $ne: false },
-    })
+    const staffCount = await withRoleTenantContext(req, role.tenantId, isSuperAdmin, () =>
+      User.countDocuments({
+        tenantId: role.tenantId,
+        role: role.slug,
+        isActive: { $ne: false },
+      }),
+    )
 
     res.status(200).json({
       success: true,
@@ -172,12 +248,16 @@ const getRoleById = async (req, res) => {
  */
 const createRole = async (req, res) => {
   try {
-    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
-    if (!tenantId && !isSuperAdmin) {
-      return res.status(403).json({ success: false, error: "Tenant context required" })
+    const resolved = await resolveRoleTargetTenant(req, req.body?.tenantId)
+    if (resolved.errorStatus) {
+      return res.status(resolved.errorStatus).json({ success: false, error: resolved.errorMessage })
     }
 
-    const targetTenantId = tenantId || req.body.tenantId
+    const { targetTenantId, isSuperAdmin } = resolved
+    if (!targetTenantId) {
+      return res.status(400).json({ success: false, error: "Tenant ID is required" })
+    }
+
     const { name, slug, description = "", permissions = [] } = req.body
 
     if (!name || typeof name !== "string" || name.trim().length < 2) {
@@ -220,15 +300,18 @@ const createRole = async (req, res) => {
     }
 
     // Privilege escalation check: Validate requested permissions against Super Admin ceiling
-    if (!Array.isArray(permissions)) {
+    if (!Array.isArray(permissions) || permissions.some((p) => typeof p !== "string" || !p.trim())) {
       return res.status(400).json({
         success: false,
-        error: "Permissions must be an array of permission keys",
+        error: "Permissions must be an array of non-empty permission keys",
       })
     }
 
+    const normalizedPermissions = Array.from(new Set(permissions.map((p) => p.trim())))
     const ceiling = await getSuperAdminCeiling()
-    const unauthorizedPermissions = permissions.filter((p) => !isPermissionCoveredByCeiling(p, ceiling))
+    const unauthorizedPermissions = normalizedPermissions.filter(
+      (p) => !isPermissionCoveredByCeiling(p, ceiling),
+    )
 
     if (unauthorizedPermissions.length > 0) {
       return res.status(403).json({
@@ -237,29 +320,34 @@ const createRole = async (req, res) => {
       })
     }
 
-    const newRole = await Role.create({
-      tenantId: targetTenantId,
-      name: name.trim(),
-      slug: roleSlug,
-      description: typeof description === "string" ? description.trim() : "",
-      permissions: Array.from(new Set(permissions)),
-      isSystem: false,
-    })
-
-    invalidateTenantRoleCache(targetTenantId)
-
-    await audit.log({
-      tenantId: targetTenantId,
-      actor: req.user,
-      action: audit.AUDIT_ACTIONS.ROLE_CREATE,
-      entity: "role",
-      entityId: newRole._id,
-      summary: `Created custom role '${newRole.name}' (${newRole.slug})`,
-      details: {
-        permissions: newRole.permissions,
+    const newRole = await withRoleTenantContext(req, targetTenantId, isSuperAdmin, async () => {
+      const created = await Role.create({
+        tenantId: targetTenantId,
+        name: name.trim(),
+        slug: roleSlug,
+        description: typeof description === "string" ? description.trim() : "",
+        permissions: normalizedPermissions,
         isSystem: false,
-      },
-      req,
+        isCustomized: true,
+      })
+
+      invalidateTenantRoleCache(targetTenantId)
+
+      await audit.log({
+        tenantId: targetTenantId,
+        actor: req.user,
+        action: audit.AUDIT_ACTIONS.ROLE_CREATE,
+        entity: "role",
+        entityId: created._id,
+        summary: `Created custom role '${created.name}' (${created.slug})`,
+        details: {
+          permissions: created.permissions,
+          isSystem: false,
+        },
+        req,
+      })
+
+      return created
     })
 
     res.status(201).json({
@@ -289,7 +377,12 @@ const createRole = async (req, res) => {
  */
 const updateRole = async (req, res) => {
   try {
-    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
+    const resolved = await resolveRoleTargetTenant(req, req.body?.tenantId || req.query?.tenantId)
+    if (resolved.errorStatus) {
+      return res.status(resolved.errorStatus).json({ success: false, error: resolved.errorMessage })
+    }
+
+    const { targetTenantId, isSuperAdmin, hasExplicitTenant } = resolved
     const { id } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -297,11 +390,11 @@ const updateRole = async (req, res) => {
     }
 
     const query = { _id: id }
-    if (!isSuperAdmin && tenantId) {
-      query.tenantId = tenantId
+    if (!isSuperAdmin || (hasExplicitTenant && targetTenantId)) {
+      query.tenantId = targetTenantId
     }
 
-    const role = await Role.findOne(query)
+    const role = await Role.findOne(query).setOptions({ skipTenantFilter: true })
     if (!role) {
       return res.status(404).json({ success: false, error: "Role not found" })
     }
@@ -327,16 +420,20 @@ const updateRole = async (req, res) => {
     }
 
     if (permissions !== undefined) {
-      if (!Array.isArray(permissions)) {
+      if (!Array.isArray(permissions) || permissions.some((p) => typeof p !== "string" || !p.trim())) {
         return res.status(400).json({
           success: false,
-          error: "Permissions must be an array of permission keys",
+          error: "Permissions must be an array of non-empty permission keys",
         })
       }
 
+      const normalizedPermissions = Array.from(new Set(permissions.map((p) => p.trim())))
+
       // Check ceiling
       const ceiling = await getSuperAdminCeiling()
-      const unauthorizedPermissions = permissions.filter((p) => !isPermissionCoveredByCeiling(p, ceiling))
+      const unauthorizedPermissions = normalizedPermissions.filter(
+        (p) => !isPermissionCoveredByCeiling(p, ceiling),
+      )
 
       if (unauthorizedPermissions.length > 0) {
         return res.status(403).json({
@@ -345,34 +442,56 @@ const updateRole = async (req, res) => {
         })
       }
 
-      role.permissions = Array.from(new Set(permissions))
+      role.permissions = normalizedPermissions
+      role.markModified("permissions")
+      role.isCustomized = true
     }
 
-    await role.save()
+    const persistedRole = await withRoleTenantContext(req, role.tenantId, isSuperAdmin, async () => {
+      await role.save({ skipTenantFilter: true })
 
-    // Invalidate cached permissions for this tenant so updates take effect immediately
-    invalidateTenantRoleCache(role.tenantId)
+      // Invalidate cached permissions for this tenant so updates take effect immediately
+      invalidateTenantRoleCache(role.tenantId)
 
-    const diff = audit.computeAuditDiff(
-      { name: prevName, description: prevDescription, permissions: prevPermissions },
-      { name: role.name, description: role.description, permissions: role.permissions }
-    )
+      const freshRole = await Role.findOne({ _id: role._id, tenantId: role.tenantId })
+        .setOptions({ skipTenantFilter: true })
+        .lean()
 
-    await audit.log({
-      tenantId: role.tenantId,
-      actor: req.user,
-      action: audit.AUDIT_ACTIONS.ROLE_UPDATE,
-      entity: "role",
-      entityId: role._id,
-      summary: `Updated role '${role.name}'`,
-      details: diff || { permissions: role.permissions },
-      req,
+      const diff = audit.computeAuditDiff(
+        { name: prevName, description: prevDescription, permissions: prevPermissions },
+        {
+          name: freshRole?.name || role.name,
+          description: freshRole?.description ?? role.description,
+          permissions: freshRole?.permissions || role.permissions,
+        },
+      )
+
+      await audit.log({
+        tenantId: role.tenantId,
+        actor: req.user,
+        action: audit.AUDIT_ACTIONS.ROLE_UPDATE,
+        entity: "role",
+        entityId: role._id,
+        summary: `Updated role '${role.name}'`,
+        details: diff || { permissions: freshRole?.permissions || role.permissions },
+        req,
+      })
+
+      return freshRole
     })
+
+    const responseData = persistedRole
+      ? {
+          ...persistedRole,
+          id: persistedRole._id.toString(),
+          _id: persistedRole._id.toString(),
+        }
+      : role.toJSON()
 
     res.status(200).json({
       success: true,
       message: "Role updated successfully",
-      data: role.toJSON(),
+      data: responseData,
     })
   } catch (error) {
     console.error("Error updating role:", error)
@@ -386,7 +505,12 @@ const updateRole = async (req, res) => {
  */
 const deleteRole = async (req, res) => {
   try {
-    const { tenantId, isSuperAdmin } = getEffectiveTenant(req)
+    const resolved = await resolveRoleTargetTenant(req, req.query?.tenantId || req.body?.tenantId)
+    if (resolved.errorStatus) {
+      return res.status(resolved.errorStatus).json({ success: false, error: resolved.errorMessage })
+    }
+
+    const { targetTenantId, isSuperAdmin, hasExplicitTenant } = resolved
     const { id } = req.params
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -394,11 +518,11 @@ const deleteRole = async (req, res) => {
     }
 
     const query = { _id: id }
-    if (!isSuperAdmin && tenantId) {
-      query.tenantId = tenantId
+    if (!isSuperAdmin || (hasExplicitTenant && targetTenantId)) {
+      query.tenantId = targetTenantId
     }
 
-    const role = await Role.findOne(query)
+    const role = await Role.findOne(query).setOptions({ skipTenantFilter: true })
     if (!role) {
       return res.status(404).json({ success: false, error: "Role not found" })
     }
@@ -410,38 +534,50 @@ const deleteRole = async (req, res) => {
       })
     }
 
-    // Check if any active staff are assigned to this role
-    const assignedCount = await User.countDocuments({
-      tenantId: role.tenantId,
-      $or: [{ role: role.slug }, { roleId: role._id }],
-      isActive: { $ne: false },
+    const result = await withRoleTenantContext(req, role.tenantId, isSuperAdmin, async () => {
+      // Check if any active staff are assigned to this role
+      const assignedCount = await User.countDocuments({
+        tenantId: role.tenantId,
+        $or: [{ role: role.slug }, { roleId: role._id }],
+        isActive: { $ne: false },
+      })
+
+      if (assignedCount > 0) {
+        return {
+          blockedCount: assignedCount,
+        }
+      }
+
+      await Role.deleteOne({ _id: role._id, tenantId: role.tenantId }).setOptions({
+        skipTenantFilter: true,
+      })
+
+      invalidateTenantRoleCache(role.tenantId)
+
+      await audit.log({
+        tenantId: role.tenantId,
+        actor: req.user,
+        action: audit.AUDIT_ACTIONS.ROLE_DELETE,
+        entity: "role",
+        entityId: role._id,
+        summary: `Deleted custom role '${role.name}' (${role.slug})`,
+        details: {
+          name: role.name,
+          slug: role.slug,
+          permissionsCount: role.permissions?.length || 0,
+        },
+        req,
+      })
+
+      return { deleted: true }
     })
 
-    if (assignedCount > 0) {
+    if (result?.blockedCount > 0) {
       return res.status(400).json({
         success: false,
-        error: `Cannot delete role '${role.name}'. There are ${assignedCount} active staff member(s) assigned to this role. Please reassign them first.`,
+        error: `Cannot delete role '${role.name}'. There are ${result.blockedCount} active staff member(s) assigned to this role. Please reassign them first.`,
       })
     }
-
-    await Role.findByIdAndDelete(role._id).setOptions({ skipTenantFilter: true })
-
-    invalidateTenantRoleCache(role.tenantId)
-
-    await audit.log({
-      tenantId: role.tenantId,
-      actor: req.user,
-      action: audit.AUDIT_ACTIONS.ROLE_DELETE,
-      entity: "role",
-      entityId: role._id,
-      summary: `Deleted custom role '${role.name}' (${role.slug})`,
-      details: {
-        name: role.name,
-        slug: role.slug,
-        permissionsCount: role.permissions?.length || 0,
-      },
-      req,
-    })
 
     res.status(200).json({
       success: true,

@@ -20,6 +20,7 @@ import {
   Save,
   Sparkles,
   Building2,
+  MapPin,
 } from "lucide-react"
 
 const ALLOWED_STATUSES = [
@@ -51,6 +52,7 @@ function LeadFormContent() {
     email: "",
     phone: "",
     company: "",
+    city: "",
     status: "New",
     source: "Manual Entry",
     assignedTo: "Unassigned",
@@ -82,6 +84,7 @@ function LeadFormContent() {
             email: lead.email || "",
             phone: lead.phone || "",
             company: lead.company || lead.metadata?.company || "",
+            city: lead.city || "",
             status: lead.status || "New",
             source: lead.source || "Manual Entry",
             assignedTo: lead.assignedTo || "Unassigned",
@@ -154,6 +157,7 @@ function LeadFormContent() {
         email: formData.email.trim().toLowerCase(),
         phone: formData.phone.trim(),
         company: formData.company.trim(),
+        city: formData.city.trim(),
         status: formData.status,
         source: formData.source.trim(),
         assignedTo: formData.assignedTo.trim(),
@@ -373,6 +377,24 @@ function LeadFormContent() {
                       placeholder="e.g. Acme Health Corp"
                       value={formData.company}
                       onChange={(e) => handleInputChange("company", e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-colors"
+                    />
+                  </div>
+                </div>
+
+                {/* 3c. City */}
+                <div>
+                  <label htmlFor="city" className="block text-xs font-semibold text-slate-700 mb-1">
+                    City / Location
+                  </label>
+                  <div className="relative">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      id="city"
+                      type="text"
+                      placeholder="e.g. Jaipur"
+                      value={formData.city}
+                      onChange={(e) => handleInputChange("city", e.target.value)}
                       className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-colors"
                     />
                   </div>

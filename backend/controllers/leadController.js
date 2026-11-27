@@ -12,7 +12,7 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-const ALLOWED_SORT_FIELDS = ["name", "email", "phone", "source", "status", "assignedTo", "createdAt", "updatedAt", "lastInteractionAt", "lastContactedAt"]
+const ALLOWED_SORT_FIELDS = ["name", "email", "phone", "city", "source", "status", "assignedTo", "createdAt", "updatedAt", "lastInteractionAt", "lastContactedAt"]
 const { getEffectiveTenant } = require("../middleware/tenantContext")
 const { scopeFilter, checkDirectObjectAccess } = require("../utils/rbacScope")
 const leadService = require("../services/leadService")
@@ -95,6 +95,7 @@ const getLeads = async (req, res) => {
         { name: { $regex: sanitizedSearch, $options: "i" } },
         { email: { $regex: sanitizedSearch, $options: "i" } },
         { phone: { $regex: sanitizedSearch, $options: "i" } },
+        { city: { $regex: sanitizedSearch, $options: "i" } },
         { "metadata.company": { $regex: sanitizedSearch, $options: "i" } },
       ]
 

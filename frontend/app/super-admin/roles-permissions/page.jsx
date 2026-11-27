@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useCallback, useMemo } from "react"
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { buildCustomDomainUrl } from "@/lib/domain"
@@ -41,6 +41,7 @@ export default function RolesPermissionsPage() {
   // --- CEILING / ACCOUNT ADMIN PERMISSIONS STATE ---
   const [modules, setModules] = useState([])
   const [allowedPermissions, setAllowedPermissions] = useState([])
+  const [savedCeilingPermissions, setSavedCeilingPermissions] = useState([])
   const [selectedPermissions, setSelectedPermissions] = useState(new Set())
   const [initialPermissions, setInitialPermissions] = useState(new Set())
   const [updatedAt, setUpdatedAt] = useState(null)
@@ -53,10 +54,86 @@ export default function RolesPermissionsPage() {
   // --- TENANT CUSTOM ROLES & STAFF STATE ---
   const [accounts, setAccounts] = useState([])
   const [selectedTenantId, setSelectedTenantId] = useState("")
-  const [selectedTenantAccount, setSelectedTenantAccount] = useState(null)
   const [tenantSubTab, setTenantSubTab] = useState("roles") // "roles" | "staff"
   const [loadingAccounts, setLoadingAccounts] = useState(false)
   const [accountsError, setAccountsError] = useState(null)
+
+  const [hasHydratedUrlState, setHasHydratedUrlState] = useState(false)
+  const latestTenantIdRef = useRef("")
+
+  // Hydrate active tab and selected tenant across page refreshes
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setHasHydratedUrlState(true)
+      return
+    }
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const urlTab = params.get("tab")
+      const urlTenant = params.get("tenantId")
+      const urlSubTab = params.get("subTab")
+
+      const storedTab = sessionStorage.getItem("sa_roles_active_tab")
+      const storedTenant = sessionStorage.getItem("sa_roles_selected_tenant")
+      const storedSubTab = sessionStorage.getItem("sa_roles_sub_tab")
+
+      const initialTab = urlTab === "tenants" || urlTab === "ceiling"
+        ? urlTab
+        : storedTab === "tenants" || storedTab === "ceiling"
+        ? storedTab
+        : "ceiling"
+      const initialSubTab = urlSubTab === "staff" || urlSubTab === "roles"
+        ? urlSubTab
+        : storedSubTab === "staff" || storedSubTab === "roles"
+        ? storedSubTab
+        : "roles"
+      const initialTenant = (urlTenant || storedTenant || "").trim()
+
+      setActiveTab(initialTab)
+      setTenantSubTab(initialSubTab)
+      if (initialTenant) {
+        latestTenantIdRef.current = initialTenant
+        setSelectedTenantId(initialTenant)
+      }
+    } catch (_) {
+    } finally {
+      setHasHydratedUrlState(true)
+    }
+  }, [])
+
+  // Persist tab & selected tenant to sessionStorage and URL query so F5 refresh restores the exact tenant view
+  useEffect(() => {
+    if (!hasHydratedUrlState || typeof window === "undefined") return
+    try {
+      sessionStorage.setItem("sa_roles_active_tab", activeTab)
+      sessionStorage.setItem("sa_roles_sub_tab", tenantSubTab)
+      if (selectedTenantId) {
+        sessionStorage.setItem("sa_roles_selected_tenant", selectedTenantId)
+      }
+
+      const url = new URL(window.location.href)
+      url.searchParams.set("tab", activeTab)
+      if (activeTab === "tenants") {
+        url.searchParams.set("subTab", tenantSubTab)
+        if (selectedTenantId) {
+          url.searchParams.set("tenantId", selectedTenantId)
+        } else {
+          url.searchParams.delete("tenantId")
+        }
+      } else {
+        url.searchParams.delete("subTab")
+        url.searchParams.delete("tenantId")
+      }
+      window.history.replaceState(null, "", url.toString())
+    } catch (_) {}
+  }, [hasHydratedUrlState, activeTab, tenantSubTab, selectedTenantId])
+
+  const selectedTenantAccount = useMemo(
+    () => accounts.find((a) => (a.tenantId || a.accountId || a.id) === selectedTenantId) || null,
+    [accounts, selectedTenantId],
+  )
+
+  const ceilingPermissionSet = useMemo(() => new Set(savedCeilingPermissions), [savedCeilingPermissions])
 
   // Roles state for selected tenant
   const [tenantRoles, setTenantRoles] = useState([])
@@ -64,6 +141,7 @@ export default function RolesPermissionsPage() {
   const [tenantRolesError, setTenantRolesError] = useState(null)
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false)
   const [editingRole, setEditingRole] = useState(null)
+  const [roleModalError, setRoleModalError] = useState(null)
   const [roleFormData, setRoleFormData] = useState({
     name: "",
     slug: "",
@@ -101,7 +179,9 @@ export default function RolesPermissionsPage() {
       if (res.success && res.data) {
         setModules(res.data.modules || [])
         setAllowedPermissions(res.data.allowedPermissions || [])
-        const active = new Set(res.data.activePermissions || [])
+        const activeList = res.data.activePermissions || []
+        setSavedCeilingPermissions(activeList)
+        const active = new Set(activeList)
         setSelectedPermissions(active)
         setInitialPermissions(new Set(active))
         setUpdatedAt(res.data.updatedAt)
@@ -174,7 +254,9 @@ export default function RolesPermissionsPage() {
       const res = await apiClient.updatePermissions(permArray)
 
       if (res.success && res.data) {
-        const active = new Set(res.data.activePermissions || permArray)
+        const activeList = res.data.activePermissions || permArray
+        setSavedCeilingPermissions(activeList)
+        const active = new Set(activeList)
         setSelectedPermissions(active)
         setInitialPermissions(new Set(active))
         setUpdatedAt(res.data.updatedAt || new Date().toISOString())
@@ -205,19 +287,19 @@ export default function RolesPermissionsPage() {
 
       if (accountsList.length > 0) {
         setSelectedTenantId((prevId) => {
-          const matched = accountsList.find((a) => (a.tenantId || a.accountId) === prevId)
+          const matched = accountsList.find((a) => (a.tenantId || a.accountId || a.id) === prevId)
           if (prevId && matched) {
-            setSelectedTenantAccount(matched)
+            latestTenantIdRef.current = prevId
             return prevId
           }
           const first = accountsList[0]
           const firstId = first.tenantId || first.accountId || first.id || ""
-          setSelectedTenantAccount(first)
+          latestTenantIdRef.current = firstId
           return firstId
         })
       } else {
+        latestTenantIdRef.current = ""
         setSelectedTenantId("")
-        setSelectedTenantAccount(null)
       }
     } catch (err) {
       console.error("Error loading accounts for tenant management:", err)
@@ -240,9 +322,13 @@ export default function RolesPermissionsPage() {
   }, [activeTab, loadAccounts])
 
   const handleSelectTenant = (tenantOrAccountId) => {
+    latestTenantIdRef.current = tenantOrAccountId
+    setIsRoleModalOpen(false)
+    setEditingRole(null)
+    setRoleModalError(null)
+    setTenantRoles([])
+    setTenantStaff([])
     setSelectedTenantId(tenantOrAccountId)
-    const acc = accounts.find((a) => (a.tenantId || a.accountId) === tenantOrAccountId) || null
-    setSelectedTenantAccount(acc)
   }
 
   // Load roles & staff when selectedTenantId changes
@@ -255,6 +341,9 @@ export default function RolesPermissionsPage() {
       setLoadingTenantRoles(true)
       setTenantRolesError(null)
       const res = await apiClient.getRoles({ tenantId: tId })
+      if (latestTenantIdRef.current && latestTenantIdRef.current !== tId) {
+        return
+      }
       if (res && res.success !== false) {
         const rawRoles = res?.data?.roles || res?.roles || (Array.isArray(res) ? res : [])
         const rolesList = Array.isArray(rawRoles) ? rawRoles : []
@@ -266,6 +355,9 @@ export default function RolesPermissionsPage() {
         toast.error(errMsg)
       }
     } catch (err) {
+      if (latestTenantIdRef.current && latestTenantIdRef.current !== tId) {
+        return
+      }
       console.error("Failed to load tenant roles:", err)
       const errMsg = err.message || "Failed to load roles for selected tenant"
       setTenantRolesError(errMsg)
@@ -285,6 +377,9 @@ export default function RolesPermissionsPage() {
       setLoadingTenantStaff(true)
       setTenantStaffError(null)
       const res = await apiClient.getStaff({ tenantId: tId, limit: 100 })
+      if (latestTenantIdRef.current && latestTenantIdRef.current !== tId) {
+        return
+      }
       if (res && res.success !== false) {
         const rawStaff = res?.data?.staff || res?.staff || (Array.isArray(res) ? res : [])
         const staffList = Array.isArray(rawStaff) ? rawStaff : []
@@ -296,6 +391,9 @@ export default function RolesPermissionsPage() {
         toast.error(errMsg)
       }
     } catch (err) {
+      if (latestTenantIdRef.current && latestTenantIdRef.current !== tId) {
+        return
+      }
       console.error("Failed to load tenant staff:", err)
       const errMsg = err.message || "Failed to load staff for selected tenant"
       setTenantStaffError(errMsg)
@@ -308,6 +406,7 @@ export default function RolesPermissionsPage() {
 
   useEffect(() => {
     if (activeTab === "tenants" && selectedTenantId) {
+      latestTenantIdRef.current = selectedTenantId
       loadTenantRoles(selectedTenantId)
       loadTenantStaff(selectedTenantId)
     }
@@ -318,6 +417,7 @@ export default function RolesPermissionsPage() {
   // -------------------------------------------------------------
   const openCreateRoleModal = () => {
     setEditingRole(null)
+    setRoleModalError(null)
     setRoleFormData({
       name: "",
       slug: "",
@@ -329,18 +429,21 @@ export default function RolesPermissionsPage() {
 
   const openEditRoleModal = (role) => {
     setEditingRole(role)
+    setRoleModalError(null)
     setRoleFormData({
       name: role.name || "",
       slug: role.slug || "",
       description: role.description || "",
-      permissions: role.permissions || [],
+      permissions: Array.isArray(role.permissions) ? [...role.permissions] : [],
     })
     setIsRoleModalOpen(true)
   }
 
   const handleSaveRole = async (e) => {
     e.preventDefault()
-    if (!roleFormData.name.trim()) {
+    if (savingRole) return
+
+    if (!editingRole?.isSystem && !roleFormData.name.trim()) {
       toast.error("Role name is required")
       return
     }
@@ -351,19 +454,36 @@ export default function RolesPermissionsPage() {
 
     try {
       setSavingRole(true)
+      setRoleModalError(null)
       if (editingRole) {
-        // Update existing role
-        const res = await apiClient.updateRole(editingRole.id || editingRole._id, {
-          name: roleFormData.name.trim(),
+        // Update existing role within the exact selected tenant
+        const roleId = editingRole.id || editingRole._id
+        const payload = {
+          ...(editingRole.isSystem ? {} : { name: roleFormData.name.trim() }),
           description: roleFormData.description.trim(),
-          permissions: roleFormData.permissions,
-        })
-        if (res.success) {
-          toast.success(`Role "${roleFormData.name}" updated successfully!`)
+          permissions: Array.from(new Set(roleFormData.permissions)),
+          tenantId: selectedTenantId,
+        }
+        const res = await apiClient.updateRole(roleId, payload)
+        if (res && res.success) {
+          const persistedRole = res.data
+          if (persistedRole) {
+            setTenantRoles((prev) =>
+              prev.map((r) =>
+                (r.id || r._id) === (persistedRole.id || persistedRole._id || roleId)
+                  ? { ...r, ...persistedRole, id: persistedRole.id || persistedRole._id || roleId }
+                  : r,
+              ),
+            )
+          }
+          await loadTenantRoles(selectedTenantId)
+          toast.success(`Role "${editingRole.isSystem ? editingRole.name : roleFormData.name}" updated successfully!`)
           setIsRoleModalOpen(false)
-          loadTenantRoles(selectedTenantId)
+          setEditingRole(null)
         } else {
-          toast.error(res.error || "Failed to update role")
+          const errMsg = res?.error || "Failed to update role"
+          setRoleModalError(errMsg)
+          toast.error(errMsg)
         }
       } else {
         // Create new role
@@ -371,20 +491,24 @@ export default function RolesPermissionsPage() {
           name: roleFormData.name.trim(),
           slug: roleFormData.slug.trim() || undefined,
           description: roleFormData.description.trim(),
-          permissions: roleFormData.permissions,
+          permissions: Array.from(new Set(roleFormData.permissions)),
           tenantId: selectedTenantId,
         }
         const res = await apiClient.createRole(payload)
-        if (res.success) {
+        if (res && res.success) {
+          await loadTenantRoles(selectedTenantId)
           toast.success(`Custom role "${roleFormData.name}" created successfully!`)
           setIsRoleModalOpen(false)
-          loadTenantRoles(selectedTenantId)
         } else {
-          toast.error(res.error || "Failed to create role")
+          const errMsg = res?.error || "Failed to create role"
+          setRoleModalError(errMsg)
+          toast.error(errMsg)
         }
       }
     } catch (err) {
-      toast.error(err.message || "Failed to save role")
+      const errMsg = err?.message || "Failed to save role"
+      setRoleModalError(errMsg)
+      toast.error(errMsg)
     } finally {
       setSavingRole(false)
     }
@@ -404,10 +528,10 @@ export default function RolesPermissionsPage() {
     }
 
     try {
-      const res = await apiClient.deleteRole(role.id || role._id)
+      const res = await apiClient.deleteRole(role.id || role._id, { tenantId: selectedTenantId })
       if (res.success) {
         toast.success(`Role "${role.name}" deleted successfully`)
-        loadTenantRoles(selectedTenantId)
+        await loadTenantRoles(selectedTenantId)
       } else {
         toast.error(res.error || "Failed to delete role")
       }
@@ -1079,7 +1203,7 @@ export default function RolesPermissionsPage() {
                             className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer"
                           >
                             <Edit2 className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>{role.isSystem ? "View Perms" : "Edit"}</span>
+                            <span>{role.isSystem ? "Edit Perms" : "Edit"}</span>
                           </button>
                           {!role.isSystem && (
                             <button
@@ -1232,16 +1356,29 @@ export default function RolesPermissionsPage() {
             </div>
 
             <form onSubmit={handleSaveRole} className="flex-1 overflow-y-auto py-4 space-y-4">
+              {roleModalError && (
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{roleModalError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Role Name *</label>
                 <input
                   type="text"
                   required
+                  disabled={Boolean(editingRole?.isSystem)}
                   value={roleFormData.name}
                   onChange={(e) => setRoleFormData({ ...roleFormData, name: e.target.value })}
                   placeholder="e.g. Senior Closer or Telemarketing Specialist"
-                  className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg p-2.5 focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                  className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg p-2.5 focus:bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                 />
+                {editingRole?.isSystem && (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    System role names are fixed; description and permissions can be customized per tenant.
+                  </p>
+                )}
               </div>
 
               {!editingRole && (
@@ -1280,22 +1417,38 @@ export default function RolesPermissionsPage() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {(mod.permissions || []).map((perm) => {
                           const isChecked = roleFormData.permissions.includes(perm.key)
+                          const isAllowedByCeiling =
+                            ceilingPermissionSet.size === 0 || ceilingPermissionSet.has(perm.key)
+                          const isDisabled = !isAllowedByCeiling && !isChecked
                           return (
                             <label
                               key={perm.key}
-                              className={`flex items-start space-x-2 p-2 rounded border text-xs cursor-pointer select-none ${
-                                isChecked
-                                  ? "bg-indigo-50/70 border-indigo-200 text-indigo-900 font-semibold"
-                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                              title={
+                                isDisabled
+                                  ? "Blocked by Account Admin global permission ceiling"
+                                  : perm.label || perm.key
+                              }
+                              className={`flex items-start space-x-2 p-2 rounded border text-xs select-none ${
+                                isDisabled
+                                  ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-70"
+                                  : isChecked
+                                  ? "bg-indigo-50/70 border-indigo-200 text-indigo-900 font-semibold cursor-pointer"
+                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
                               }`}
                             >
                               <input
                                 type="checkbox"
                                 checked={isChecked}
+                                disabled={isDisabled}
                                 onChange={() => toggleRolePermission(perm.key)}
-                                className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 mt-0.5 cursor-pointer"
+                                className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 mt-0.5 cursor-pointer disabled:cursor-not-allowed"
                               />
-                              <span className="truncate">{perm.label || perm.key}</span>
+                              <span className="truncate flex-1">{perm.label || perm.key}</span>
+                              {!isAllowedByCeiling && (
+                                <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded shrink-0">
+                                  Ceiling blocked
+                                </span>
+                              )}
                             </label>
                           )
                         })}

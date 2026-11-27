@@ -7,7 +7,7 @@ const Account = require("../models/Account")
 const Lead = require("../models/Lead")
 const assignmentService = require("../services/assignmentService")
 const audit = require("../services/auditService")
-const { getEffectiveTenant } = require("../middleware/tenantContext")
+const { getEffectiveTenant, runWithTenantContext } = require("../middleware/tenantContext")
 
 /**
  * Staff Controller
@@ -48,7 +48,11 @@ const getStaff = async (req, res) => {
 
     const query = {}
 
-    const targetTenantId = tenantId || req.query.tenantId
+    const explicitQueryTenant =
+      isSuperAdmin && typeof req.query?.tenantId === "string" && req.query.tenantId.trim()
+        ? req.query.tenantId.trim()
+        : null
+    const targetTenantId = explicitQueryTenant || tenantId || req.query.tenantId
 
     // In tenant context, Mongoose plugin auto-injects tenantId.
     // If super admin passes specific tenant, filter on it.
@@ -89,30 +93,43 @@ const getStaff = async (req, res) => {
       ]
     }
 
-    const [staffMembers, totalCount, statsAgg] = await Promise.all([
-      User.find(query)
-        .populate("teamId", "name")
-        .populate("managerId", "name email")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      User.countDocuments(query),
-      User.aggregate([
-        { $match: targetTenantId ? { tenantId: targetTenantId, role: { $ne: "super_admin" } } : { role: { $ne: "super_admin" } } },
-        {
-          $group: {
-            _id: null,
-            totalStaff: { $sum: 1 },
-            activeCount: {
-              $sum: { $cond: [{ $and: [{ $eq: ["$isActive", true] }, { $eq: ["$status", "active"] }] }, 1, 0] },
+    const [staffMembers, totalCount, statsAgg] = await runWithTenantContext(
+      {
+        ...(req.tenantContext || {}),
+        tenantId: targetTenantId || tenantId || null,
+        isSuperAdmin,
+        mode: isSuperAdmin ? "authorized_all_workspaces" : req.tenantContext?.mode || "standalone",
+      },
+      () =>
+        Promise.all([
+          User.find(query)
+            .populate("teamId", "name")
+            .populate("managerId", "name email")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean(),
+          User.countDocuments(query),
+          User.aggregate([
+            {
+              $match: targetTenantId
+                ? { tenantId: targetTenantId, role: { $ne: "super_admin" } }
+                : { role: { $ne: "super_admin" } },
             },
-            agentsCount: { $sum: { $cond: [{ $eq: ["$role", "agent"] }, 1, 0] } },
-            managersCount: { $sum: { $cond: [{ $eq: ["$role", "manager"] }, 1, 0] } },
-          },
-        },
-      ]),
-    ])
+            {
+              $group: {
+                _id: null,
+                totalStaff: { $sum: 1 },
+                activeCount: {
+                  $sum: { $cond: [{ $and: [{ $eq: ["$isActive", true] }, { $eq: ["$status", "active"] }] }, 1, 0] },
+                },
+                agentsCount: { $sum: { $cond: [{ $eq: ["$role", "agent"] }, 1, 0] } },
+                managersCount: { $sum: { $cond: [{ $eq: ["$role", "manager"] }, 1, 0] } },
+              },
+            },
+          ]),
+        ]),
+    )
 
     const stats = statsAgg[0] || {
       totalStaff: 0,
@@ -189,8 +206,14 @@ const createStaff = async (req, res) => {
       return res.status(400).json({ success: false, error: "Valid email address is required" })
     }
 
-    const targetTenantId = tenantId || req.body.tenantId
-    const tenantRoles = targetTenantId ? await Role.find({ tenantId: targetTenantId }).lean() : []
+    const explicitBodyTenant =
+      isSuperAdmin && typeof req.body?.tenantId === "string" && req.body.tenantId.trim()
+        ? req.body.tenantId.trim()
+        : null
+    const targetTenantId = explicitBodyTenant || tenantId || req.body.tenantId
+    const tenantRoles = targetTenantId
+      ? await Role.find({ tenantId: targetTenantId }).setOptions({ skipTenantFilter: true }).lean()
+      : []
     const allowedRoleSlugs = new Set([
       "manager",
       "agent",

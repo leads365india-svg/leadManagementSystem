@@ -112,6 +112,10 @@ const roleSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isCustomized: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
@@ -165,29 +169,24 @@ const ensureTenantRoles = async (tenantId) => {
 
   for (const sysRole of SYSTEM_ROLES) {
     const existingDoc = existingRoles.find((r) => r.slug === sysRole.slug)
-    const grantedPermissions = sysRole.permissions.filter((p) =>
-      isPermissionCoveredByCeiling(p, ceiling),
-    )
-
     if (!existingDoc) {
+      const grantedPermissions =
+        sysRole.slug === "account_admin" && Array.isArray(ceiling)
+          ? Array.from(new Set(ceiling))
+          : sysRole.permissions.filter((p) => isPermissionCoveredByCeiling(p, ceiling))
+
       rolesToCreate.push({
         tenantId,
         name: sysRole.name,
         slug: sysRole.slug,
         description: sysRole.description,
         isSystem: true,
+        isCustomized: false,
         permissions: grantedPermissions,
       })
-    } else if (existingDoc.isSystem) {
-      const currentPerms = new Set(existingDoc.permissions || [])
-      const hasMissing = grantedPermissions.some((p) => !currentPerms.has(p))
-      if (hasMissing) {
-        await Role.updateOne(
-          { _id: existingDoc._id },
-          { permissions: grantedPermissions },
-        ).setOptions({ skipTenantFilter: true })
-      }
     }
+    // Never overwrite existing system role permissions on load/refresh;
+    // runtime checks enforce the Super Admin ceiling without clobbering tenant customizations.
   }
 
   if (rolesToCreate.length > 0) {

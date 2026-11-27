@@ -193,6 +193,9 @@ const HEADER_ALIAS_MAP = {
     "city",
     "location",
     "town",
+    "city name",
+    "your city",
+    "city town",
   ],
   alternatePhone: [
     "alternate phone",
@@ -476,7 +479,7 @@ function expandNestedJsonColumns(headers = [], rows = [], rawObjects = null) {
     }
 
     const childKeysOrder = []
-    const childKeysSet = new Set()
+    const canonicalKeyByLowerPath = new Map()
     const malformedRows = []
     let validCount = 0
     let emptyCount = 0
@@ -507,16 +510,22 @@ function expandNestedJsonColumns(headers = [], rows = [], rawObjects = null) {
       const flat = flattenNestedObject(parsed.obj, header)
       for (const [childKey, flatVal] of Object.entries(flat)) {
         if (topLevelSet.has(childKey)) continue
-        if (!childKeysSet.has(childKey)) {
-          childKeysSet.add(childKey)
-          childKeysOrder.push(childKey)
-          nestedColumnMeta[childKey] = {
+        const pathOnly = childKey.slice(header.length + 1)
+        const lowerPathKey = pathOnly.toLowerCase().trim()
+        let canonicalChildKey = canonicalKeyByLowerPath.get(lowerPathKey)
+        if (!canonicalChildKey) {
+          canonicalChildKey = childKey
+          canonicalKeyByLowerPath.set(lowerPathKey, canonicalChildKey)
+          childKeysOrder.push(canonicalChildKey)
+          nestedColumnMeta[canonicalChildKey] = {
             isNested: true,
             container: header,
-            path: childKey.slice(header.length + 1),
+            path: pathOnly,
           }
         }
-        row[childKey] = flatVal
+        if (flatVal !== "" || row[canonicalChildKey] === undefined) {
+          row[canonicalChildKey] = flatVal
+        }
       }
     }
 
@@ -1205,7 +1214,14 @@ function resolveRowDataFromContainers(rawRow = {}, cleanMapping = {}, options = 
     }
     const parsed = parseNestedJsonCell(rawRow[containerCol])
     const flat = parsed.status === "valid" ? flattenNestedObject(parsed.obj, containerCol) : {}
-    const entry = { parsed, flat }
+    const flatLower = {}
+    for (const [fk, fv] of Object.entries(flat)) {
+      const lowerKey = fk.toLowerCase()
+      if (fv !== "" || flatLower[lowerKey] === undefined) {
+        flatLower[lowerKey] = fv
+      }
+    }
+    const entry = { parsed, flat, flatLower }
     containerColumnsPresent.set(containerCol, entry)
     return entry
   }
@@ -1230,7 +1246,12 @@ function resolveRowDataFromContainers(rawRow = {}, cleanMapping = {}, options = 
   for (const col of Object.keys(cleanMapping)) {
     const containerCol = findContainerForMappedCol(col)
     if (containerCol) {
-      const { parsed, flat } = getContainerResult(containerCol)
+      const { parsed, flat, flatLower } = getContainerResult(containerCol)
+      if (parsed.status === "scalar") {
+        // Prefix column contains plain scalar text rather than JSON — preserve top-level cell
+        resolvedValues[col] = rawRow[col]
+        continue
+      }
       if (parsed.status === "malformed") {
         if (!reportedMalformedContainers.has(containerCol)) {
           reportedMalformedContainers.add(containerCol)
@@ -1247,7 +1268,14 @@ function resolveRowDataFromContainers(rawRow = {}, cleanMapping = {}, options = 
         resolvedValues[col] = ""
         continue
       }
-      resolvedValues[col] = flat[col] !== undefined ? flat[col] : ""
+      const lowerCol = col.toLowerCase()
+      if (flat[col] !== undefined) {
+        resolvedValues[col] = flat[col]
+      } else if (flatLower[lowerCol] !== undefined) {
+        resolvedValues[col] = flatLower[lowerCol]
+      } else {
+        resolvedValues[col] = ""
+      }
     } else {
       resolvedValues[col] = rawRow[col]
     }

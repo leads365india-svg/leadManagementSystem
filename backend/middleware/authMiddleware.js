@@ -19,6 +19,7 @@ const { isCustomDomainAllowed, getAccountByCustomDomainCached, isPlatformDomain,
 
 // In-memory cache for tenant roles: Map<tenantId, { roles: Array, timestamp: number }>
 const tenantRoleCache = new Map()
+const accountAdminRoleCache = new Map()
 
 const getTenantRolesCached = async (tenantId) => {
   if (!tenantId) return []
@@ -35,11 +36,30 @@ const getTenantRolesCached = async (tenantId) => {
   return roles
 }
 
+const getAccountAdminRoleCached = async (tenantId) => {
+  if (!tenantId) return null
+  const now = Date.now()
+  const cached = accountAdminRoleCache.get(tenantId)
+  if (cached && now - cached.timestamp < 60000) {
+    return cached.role
+  }
+  const role = await Role.findOne({ tenantId, slug: "account_admin" })
+    .setOptions({ skipTenantFilter: true })
+    .lean()
+  accountAdminRoleCache.set(tenantId, {
+    role: role || null,
+    timestamp: now,
+  })
+  return role || null
+}
+
 const invalidateTenantRoleCache = (tenantId = null) => {
   if (tenantId) {
     tenantRoleCache.delete(tenantId)
+    accountAdminRoleCache.delete(tenantId)
   } else {
     tenantRoleCache.clear()
+    accountAdminRoleCache.clear()
   }
 }
 
@@ -53,10 +73,18 @@ const resolveUserPermissions = async (user) => {
     permissions = ALLOWED_PERMISSIONS
     roleName = "Super Admin"
   } else if (user.tenantId) {
+    const ceiling = await getCachedRolePermissions("account_admin")
     if (user.role === "account_admin") {
-      const ceiling = await getCachedRolePermissions("account_admin")
-      permissions = ceiling
-      roleName = "Account Admin"
+      const adminRoleDoc = await getAccountAdminRoleCached(user.tenantId)
+      if (adminRoleDoc && adminRoleDoc.isCustomized) {
+        permissions = (adminRoleDoc.permissions || []).filter((p) =>
+          isPermissionCoveredByCeiling(p, ceiling),
+        )
+        roleName = adminRoleDoc.name || "Account Admin"
+      } else {
+        permissions = ceiling
+        roleName = adminRoleDoc?.name || "Account Admin"
+      }
       roleSlug = "account_admin"
     } else {
       const tenantRoles = await getTenantRolesCached(user.tenantId)
@@ -73,7 +101,9 @@ const resolveUserPermissions = async (user) => {
         userRoleDoc = tenantRoles.find((r) => r.slug === "agent")
       }
       if (userRoleDoc) {
-        permissions = userRoleDoc.permissions || []
+        permissions = (userRoleDoc.permissions || []).filter((p) =>
+          isPermissionCoveredByCeiling(p, ceiling),
+        )
         roleName = userRoleDoc.name
         roleSlug = userRoleDoc.slug
       }
@@ -567,9 +597,10 @@ const requirePermission = (requiredPermission, options = {}) => {
 
       const ceiling = await getCachedRolePermissions("account_admin")
 
-      // Ensure Account Admin always evaluates against the live ceiling configuration
-      if (req.user.role === "account_admin") {
-        req.user.permissions = ceiling || []
+      // Populate Account Admin permissions when middleware is invoked directly on a bare req.user mock
+      if (req.user.role === "account_admin" && !Array.isArray(req.user.permissions)) {
+        const resolved = await resolveUserPermissions(req.user)
+        req.user.permissions = resolved.permissions || ceiling || []
       }
 
       let anyAuthorized = false

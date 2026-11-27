@@ -596,7 +596,7 @@ export default function ImportLeadsClient() {
     }
     downloadCsvFile(
       `lead-import-validation-report-${Date.now()}.csv`,
-      ["Row Number", "Validation Status", "Lead Name", "Email", "Phone", "Company", "Reason"],
+      ["Row Number", "Validation Status", "Lead Name", "Email", "Phone", "Company", "City", "Source", "Reason"],
       issueRows.map((r) => [
         r.rowNumber,
         r.status === "duplicate" ? "Duplicate (Skipped)" : "Invalid",
@@ -604,6 +604,8 @@ export default function ImportLeadsClient() {
         r.data?.email || "",
         r.data?.phone || "",
         r.data?.company || "",
+        r.data?.city || "",
+        r.data?.source || "",
         r.reason || "",
       ]),
     )
@@ -1433,6 +1435,7 @@ export default function ImportLeadsClient() {
                     <th className="py-2.5 px-3">Email</th>
                     <th className="py-2.5 px-3">Phone</th>
                     <th className="py-2.5 px-3">Company</th>
+                    <th className="py-2.5 px-3">City</th>
                     <th className="py-2.5 px-3">Source</th>
                     <th className="py-2.5 px-3">Validation / Duplicate Reason</th>
                   </tr>
@@ -1462,6 +1465,7 @@ export default function ImportLeadsClient() {
                         {row.data?.phoneNormalized || row.data?.phone || "—"}
                       </td>
                       <td className="py-2.5 px-3 text-slate-600">{row.data?.company || "—"}</td>
+                      <td className="py-2.5 px-3 text-slate-600">{row.data?.city || "—"}</td>
                       <td className="py-2.5 px-3 text-slate-600">{row.data?.source || defaultSource}</td>
                       <td className="py-2.5 px-3 text-[11px]">
                         {row.reason ? (
@@ -1478,7 +1482,7 @@ export default function ImportLeadsClient() {
                   ))}
                   {filteredPreviewRows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-slate-400">
+                      <td colSpan={9} className="py-8 text-center text-slate-400">
                         No rows match this filter.
                       </td>
                     </tr>

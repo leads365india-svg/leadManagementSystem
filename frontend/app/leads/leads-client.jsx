@@ -53,6 +53,7 @@ import {
   Activity,
   XCircle,
   Building2,
+  MapPin,
   ChevronDown,
   PhoneIncoming,
 } from "lucide-react"
@@ -527,6 +528,7 @@ export default function LeadsClient() {
       email: lead.email || "",
       phone: lead.phone || "",
       company: lead.company || lead.metadata?.company || "",
+      city: lead.city || "",
       status: lead.status || "New",
       source: lead.source || "Website Form",
       assignedTo: lead.assignedTo || "Unassigned",
@@ -575,6 +577,7 @@ export default function LeadsClient() {
         email: editingLead.email.trim().toLowerCase(),
         phone: editingLead.phone.trim(),
         company: (editingLead.company || "").trim(),
+        city: (editingLead.city || "").trim(),
         status: editingLead.status,
         source: editingLead.source.trim(),
         assignedTo: editingLead.assignedTo.trim(),
@@ -1246,6 +1249,12 @@ export default function LeadsClient() {
                                 {lead.message}
                               </p>
                             ) : null}
+                            {lead.city ? (
+                              <p className="text-[11px] text-slate-500 font-medium truncate max-w-[180px] flex items-center gap-1">
+                                <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span>{lead.city}</span>
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       </td>
@@ -1622,6 +1631,18 @@ export default function LeadsClient() {
                     value={editingLead.company || ""}
                     onChange={(e) => setEditingLead({ ...editingLead, company: e.target.value })}
                     placeholder="e.g. Acme Health Corp"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
+                  />
+                </div>
+
+                {/* City */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">City</label>
+                  <input
+                    type="text"
+                    value={editingLead.city || ""}
+                    onChange={(e) => setEditingLead({ ...editingLead, city: e.target.value })}
+                    placeholder="e.g. Jaipur"
                     className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:bg-white"
                   />
                 </div>
