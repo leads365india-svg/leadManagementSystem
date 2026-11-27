@@ -139,19 +139,25 @@ const HEADER_ALIAS_MAP = {
     "work email",
     "contact email",
     "primary email",
+    "email id",
+    "e mail id",
   ],
   phone: [
     "phone",
     "phone number",
+    "phone no",
     "mobile",
     "mobile number",
+    "mobile no",
     "contact",
     "contact number",
+    "contact no",
     "cell",
     "telephone",
     "tel",
     "whatsapp",
     "whatsapp number",
+    "whatsapp no",
     "ph",
     "ph no",
   ],
@@ -242,6 +248,337 @@ function normalizeHeaderToken(header) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
+}
+
+const NESTED_JSON_COLUMN_TOKENS = new Set([
+  "data",
+  "payload",
+  "lead data",
+  "form data",
+  "raw data",
+  "submission",
+  "submission data",
+  "webhook data",
+  "lead payload",
+  "json",
+  "json data",
+  "lead info",
+  "meta data",
+  "metadata",
+  "details",
+  "fields",
+  "attributes",
+  "extra data",
+  "custom data",
+])
+
+const IGNORED_METADATA_TOKENS = new Set([
+  "id",
+  "lead id",
+  "row id",
+  "record id",
+  "entry id",
+  "submission id",
+  "external id",
+  "form",
+  "form id",
+  "form name",
+  "form title",
+  "contact form",
+  "campaign",
+  "campaign id",
+  "campaign name",
+  "ad",
+  "ad id",
+  "ad name",
+  "adset",
+  "adset id",
+  "adset name",
+  "otp",
+  "otp verified",
+  "verified",
+  "is verified",
+  "email verified",
+  "phone verified",
+  "verification",
+  "verification status",
+  "date",
+  "created",
+  "created at",
+  "created date",
+  "created time",
+  "updated at",
+  "submitted at",
+  "timestamp",
+  "time",
+  "ip",
+  "ip address",
+  "client ip",
+  "remote ip",
+  "user agent",
+  "browser",
+  "device",
+  "referrer",
+  "referer",
+  "url",
+  "page url",
+  "page title",
+  "landing page",
+  "source url",
+  "utm source",
+  "utm medium",
+  "utm campaign",
+  "utm term",
+  "utm content",
+  "gclid",
+  "fbclid",
+  "token",
+  "checksum",
+  "hash",
+])
+
+const UNSAFE_FUZZY_ALIAS_TOKENS = new Set(["name", "status", "stage", "contact", "mail"])
+const RESERVED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"])
+
+function isPlainObject(val) {
+  return Boolean(val) && typeof val === "object" && !Array.isArray(val) && !(val instanceof Date)
+}
+
+/**
+ * Safely parses a potential JSON object stored inside a table cell or JSON property.
+ */
+function parseNestedJsonCell(rawVal) {
+  if (rawVal === undefined || rawVal === null) {
+    return { status: "empty", obj: null }
+  }
+  if (isPlainObject(rawVal)) {
+    return { status: "valid", obj: rawVal }
+  }
+  if (Array.isArray(rawVal)) {
+    return { status: "non_object", obj: null, error: "Expected JSON object ({...}), got array" }
+  }
+
+  let text = String(rawVal).trim()
+  if (!text) {
+    return { status: "empty", obj: null }
+  }
+
+  // Unwrap doubly JSON-encoded string literals (up to 2 passes)
+  for (let pass = 0; pass < 2; pass++) {
+    if (text.startsWith("\"") && text.endsWith("\"")) {
+      try {
+        const unwrapped = JSON.parse(text)
+        if (typeof unwrapped === "string") {
+          text = unwrapped.trim()
+          continue
+        }
+      } catch (_) {
+        break
+      }
+    }
+    break
+  }
+
+  if (text.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(text)
+      if (isPlainObject(parsed)) {
+        return { status: "valid", obj: parsed }
+      }
+      return { status: "non_object", obj: null, error: "Expected JSON object ({...})" }
+    } catch (err) {
+      return { status: "malformed", obj: null, error: err.message }
+    }
+  }
+
+  if (text.startsWith("[")) {
+    return { status: "non_object", obj: null, error: "Expected JSON object ({...}), got array" }
+  }
+
+  return { status: "scalar", obj: null }
+}
+
+function formatNestedScalar(val) {
+  if (val === undefined || val === null) return ""
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) return ""
+    return Number.isInteger(val) ? val.toFixed(0) : String(val)
+  }
+  if (typeof val === "boolean") {
+    return val ? "true" : "false"
+  }
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    return val.toISOString().split("T")[0]
+  }
+  if (Array.isArray(val)) {
+    const allPrimitive = val.every((item) => item === null || item === undefined || typeof item !== "object")
+    return allPrimitive
+      ? val.map((v) => String(v ?? "").trim()).filter(Boolean).join(", ")
+      : JSON.stringify(val)
+  }
+  if (typeof val === "object") {
+    return JSON.stringify(val)
+  }
+  return String(val).trim()
+}
+
+function flattenNestedObject(obj, parentPrefix, depth = 0, out = {}) {
+  if (!isPlainObject(obj) || depth > 4) return out
+
+  for (const [rawKey, value] of Object.entries(obj)) {
+    const cleanKey = String(rawKey || "").trim()
+    if (!cleanKey || RESERVED_OBJECT_KEYS.has(cleanKey)) continue
+    const pathKey = parentPrefix ? `${parentPrefix}.${cleanKey}` : cleanKey
+
+    if (isPlainObject(value) && depth < 4 && Object.keys(value).length > 0) {
+      flattenNestedObject(value, pathKey, depth + 1, out)
+    } else {
+      out[pathKey] = formatNestedScalar(value)
+    }
+  }
+
+  return out
+}
+
+function isMessageColumnToken(token) {
+  return HEADER_ALIAS_MAP.message.includes(token)
+}
+
+/**
+ * Detects nested JSON object columns (`Data`, `Payload`, `Lead Data`, or plain object fields),
+ * extracts flattened dot-path fields onto rows, and returns column metadata safely without crashing on bad cells.
+ */
+function expandNestedJsonColumns(headers = [], rows = [], rawObjects = null) {
+  const containerColumns = []
+  const extractedByContainer = new Map()
+  const nestedColumnMeta = {}
+  const malformedByContainer = new Map()
+  const topLevelSet = new Set(headers)
+
+  for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+    const header = headers[colIdx]
+    const token = normalizeHeaderToken(header)
+    const isNamedContainer = NESTED_JSON_COLUMN_TOKENS.has(token)
+
+    let hasValidObjectCell = false
+    if (Array.isArray(rawObjects)) {
+      hasValidObjectCell = rawObjects.some((item) => {
+        if (!item) return false
+        const parsed = parseNestedJsonCell(item[header])
+        return parsed.status === "valid"
+      })
+    } else if (!isMessageColumnToken(token)) {
+      hasValidObjectCell = rows.some((row) => parseNestedJsonCell(row[header]).status === "valid")
+    }
+
+    if (!isNamedContainer && !hasValidObjectCell) {
+      continue
+    }
+
+    const childKeysOrder = []
+    const childKeysSet = new Set()
+    const malformedRows = []
+    let validCount = 0
+    let emptyCount = 0
+
+    for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+      const row = rows[rIdx]
+      const rawCell = Array.isArray(rawObjects) && isPlainObject(rawObjects[rIdx]?.[header])
+        ? rawObjects[rIdx][header]
+        : row[header]
+      const parsed = parseNestedJsonCell(rawCell)
+
+      if (parsed.status === "empty") {
+        emptyCount++
+        continue
+      }
+      if (parsed.status === "malformed" || parsed.status === "non_object") {
+        malformedRows.push({
+          rowNumber: row.__rowNumber || rIdx + 1,
+          error: parsed.error || "Invalid JSON value",
+        })
+        continue
+      }
+      if (parsed.status !== "valid") {
+        continue
+      }
+
+      validCount++
+      const flat = flattenNestedObject(parsed.obj, header)
+      for (const [childKey, flatVal] of Object.entries(flat)) {
+        if (topLevelSet.has(childKey)) continue
+        if (!childKeysSet.has(childKey)) {
+          childKeysSet.add(childKey)
+          childKeysOrder.push(childKey)
+          nestedColumnMeta[childKey] = {
+            isNested: true,
+            container: header,
+            path: childKey.slice(header.length + 1),
+          }
+        }
+        row[childKey] = flatVal
+      }
+    }
+
+    if (childKeysOrder.length > 0 || (isNamedContainer && malformedRows.length > 0)) {
+      for (const row of rows) {
+        for (const ck of childKeysOrder) {
+          if (row[ck] === undefined) row[ck] = ""
+        }
+      }
+      containerColumns.push({
+        column: header,
+        extractedFields: childKeysOrder,
+        validRowCount: validCount,
+        emptyRowCount: emptyCount,
+        malformedRowCount: malformedRows.length,
+        sampleMalformedRows: malformedRows.slice(0, 5),
+      })
+      extractedByContainer.set(header, childKeysOrder)
+      nestedColumnMeta[header] = {
+        isContainer: true,
+        children: childKeysOrder,
+      }
+      if (malformedRows.length > 0) {
+        malformedByContainer.set(header, malformedRows)
+      }
+    }
+  }
+
+  if (containerColumns.length === 0) {
+    return {
+      headers,
+      rows,
+      nestedColumnMeta: {},
+      nestedJson: {
+        containers: [],
+        extractedHeaders: [],
+        hasNestedJson: false,
+      },
+    }
+  }
+
+  const expandedHeaders = []
+  const extractedHeaders = []
+  for (const header of headers) {
+    expandedHeaders.push(header)
+    const children = extractedByContainer.get(header)
+    if (children && children.length > 0) {
+      expandedHeaders.push(...children)
+      extractedHeaders.push(...children)
+    }
+  }
+
+  return {
+    headers: expandedHeaders,
+    rows,
+    nestedColumnMeta,
+    nestedJson: {
+      hasNestedJson: true,
+      containers: containerColumns,
+      extractedHeaders,
+    },
+  }
 }
 
 function createImportError(message, status = 400, code = "IMPORT_VALIDATION_ERROR") {
@@ -335,6 +672,7 @@ function parseLeadImportFile({ buffer, originalName = "", mimetype = "" }) {
   let headers = []
   let rows = []
   let sheetName = null
+  let validJsonRawObjects = null
 
   if (fileType === "json") {
     const rawText = stripBom(buffer.toString("utf8")).trim()
@@ -393,6 +731,7 @@ function parseLeadImportFile({ buffer, originalName = "", mimetype = "" }) {
       throw createImportError("JSON objects do not contain any readable column headers.", 400, "INVALID_HEADERS")
     }
 
+    validJsonRawObjects = validObjects
     rows = validObjects.map((item, idx) => {
       const normalized = { __rowNumber: idx + 1 }
       for (const h of headers) {
@@ -508,6 +847,14 @@ function parseLeadImportFile({ buffer, originalName = "", mimetype = "" }) {
     }
   }
 
+  const nestedExpand = expandNestedJsonColumns(
+    headers,
+    rows,
+    fileType === "json" ? validJsonRawObjects : null,
+  )
+  headers = nestedExpand.headers
+  rows = nestedExpand.rows
+
   return {
     fileType,
     sheetName,
@@ -515,75 +862,269 @@ function parseLeadImportFile({ buffer, originalName = "", mimetype = "" }) {
     totalRows: rows.length,
     rows,
     sampleRows: rows.slice(0, 5),
+    nestedColumnMeta: nestedExpand.nestedColumnMeta,
+    nestedJson: nestedExpand.nestedJson,
   }
+}
+
+function escapeRegExp(str) {
+  return String(str || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function getNestedHeaderParts(header, nestedColumnMeta = {}) {
+  const meta = nestedColumnMeta?.[header]
+  if (meta?.isContainer) {
+    return { isContainer: true, isNested: false, container: header, leaf: header }
+  }
+  if (meta?.isNested) {
+    return { isContainer: false, isNested: true, container: meta.container, leaf: meta.path }
+  }
+  const str = String(header || "")
+  const dotIdx = str.indexOf(".")
+  if (dotIdx > 0) {
+    const prefix = str.slice(0, dotIdx)
+    const leaf = str.slice(dotIdx + 1)
+    const prefixToken = normalizeHeaderToken(prefix)
+    if (
+      nestedColumnMeta?.[prefix]?.isContainer ||
+      NESTED_JSON_COLUMN_TOKENS.has(prefixToken)
+    ) {
+      return { isContainer: false, isNested: true, container: prefix, leaf }
+    }
+  }
+  return { isContainer: false, isNested: false, container: null, leaf: header }
+}
+
+function matchExactFieldForHeader(header, customFields = [], nestedColumnMeta = {}) {
+  const parts = getNestedHeaderParts(header, nestedColumnMeta)
+  if (parts.isContainer) return null
+
+  const fullToken = normalizeHeaderToken(header)
+  const leafToken = normalizeHeaderToken(parts.leaf)
+  if (!fullToken && !leafToken) return null
+
+  if (IGNORED_METADATA_TOKENS.has(fullToken) || (parts.isNested && IGNORED_METADATA_TOKENS.has(leafToken))) {
+    return null
+  }
+
+  // For nested fields, first check compound fullToken (e.g. "company.name" -> "company name" -> company)
+  // before falling back to leafToken (e.g. "Data.Name" -> "name" -> name).
+  const candidateTokens = parts.isNested && fullToken !== leafToken ? [fullToken, leafToken] : [fullToken]
+
+  for (const tok of candidateTokens) {
+    if (!tok || IGNORED_METADATA_TOKENS.has(tok)) continue
+    for (const [fieldKey, aliases] of Object.entries(HEADER_ALIAS_MAP)) {
+      if (aliases.includes(tok)) {
+        return fieldKey
+      }
+    }
+    if (Array.isArray(customFields) && customFields.length > 0) {
+      for (const cf of customFields) {
+        const cfNameTok = normalizeHeaderToken(cf.name)
+        const cfLabelTok = normalizeHeaderToken(cf.label)
+        if (tok === cfNameTok || tok === cfLabelTok) {
+          return `customField:${cf.name}`
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function matchFuzzyFieldForHeader(header, nestedColumnMeta = {}) {
+  const parts = getNestedHeaderParts(header, nestedColumnMeta)
+  if (parts.isContainer) return null
+
+  const fullToken = normalizeHeaderToken(header)
+  const leafToken = normalizeHeaderToken(parts.leaf)
+  if (IGNORED_METADATA_TOKENS.has(fullToken) || (parts.isNested && IGNORED_METADATA_TOKENS.has(leafToken))) {
+    return null
+  }
+
+  const targetTok = parts.isNested ? leafToken : fullToken
+  if (!targetTok) return null
+
+  for (const [fieldKey, aliases] of Object.entries(HEADER_ALIAS_MAP)) {
+    for (const alias of aliases) {
+      if (alias.length < 4 || UNSAFE_FUZZY_ALIAS_TOKENS.has(alias)) continue
+      const wordRegex = new RegExp(`(?:^| )${escapeRegExp(alias)}(?:$| )`)
+      if (wordRegex.test(targetTok)) {
+        return fieldKey
+      }
+    }
+  }
+
+  return null
 }
 
 /**
  * Generates deterministic 1-to-1 column auto-mapping suggestions from uploaded headers.
+ * Always prioritizes top-level columns over extracted nested JSON fields so existing columns
+ * retain their mapping and duplicate mapping is prevented.
  */
-function suggestColumnMapping(headers = [], customFields = []) {
+function suggestColumnMapping(headers = [], customFields = [], options = {}) {
   const mapping = {}
   const usedTargets = new Set()
+  const nestedColumnMeta = options?.nestedColumnMeta || {}
 
-  // Pass 1: exact alias match against standard Lead fields (prioritize exact token matches first)
+  const topLevelHeaders = []
+  const nestedHeaders = []
+
   for (const header of headers) {
-    const token = normalizeHeaderToken(header)
-    if (!token) continue
-
-    let matchedField = null
-    for (const [fieldKey, aliases] of Object.entries(HEADER_ALIAS_MAP)) {
-      if (usedTargets.has(fieldKey)) continue
-      if (aliases.includes(token)) {
-        matchedField = fieldKey
-        break
-      }
-    }
-
-    // Match tenant active custom fields by key or label
-    if (!matchedField && Array.isArray(customFields) && customFields.length > 0) {
-      for (const cf of customFields) {
-        const target = `customField:${cf.name}`
-        if (usedTargets.has(target)) continue
-        const cfNameTok = normalizeHeaderToken(cf.name)
-        const cfLabelTok = normalizeHeaderToken(cf.label)
-        if (token === cfNameTok || token === cfLabelTok) {
-          matchedField = target
-          break
-        }
-      }
-    }
-
-    if (matchedField) {
-      mapping[header] = matchedField
-      usedTargets.add(matchedField)
-    }
-  }
-
-  // Pass 2: fuzzy substring fallback for remaining unmapped headers
-  for (const header of headers) {
-    if (mapping[header]) continue
-    const token = normalizeHeaderToken(header)
-    if (!token) {
+    const parts = getNestedHeaderParts(header, nestedColumnMeta)
+    if (parts.isContainer) {
       mapping[header] = ""
       continue
     }
+    if (parts.isNested) {
+      nestedHeaders.push(header)
+    } else {
+      topLevelHeaders.push(header)
+    }
+  }
 
-    let matchedField = ""
-    for (const [fieldKey, aliases] of Object.entries(HEADER_ALIAS_MAP)) {
-      if (usedTargets.has(fieldKey)) continue
-      if (aliases.some((alias) => alias.length >= 4 && token.includes(alias))) {
-        matchedField = fieldKey
-        break
+  const tryAssign = (headerList, matcherFn) => {
+    for (const header of headerList) {
+      if (mapping[header]) continue
+      const matched = matcherFn(header)
+      if (matched && !usedTargets.has(matched)) {
+        mapping[header] = matched
+        usedTargets.add(matched)
       }
     }
+  }
 
-    mapping[header] = matchedField
-    if (matchedField) {
-      usedTargets.add(matchedField)
+  // Pass 1: Top-level headers (exact first, then safe fuzzy)
+  tryAssign(topLevelHeaders, (h) => matchExactFieldForHeader(h, customFields, nestedColumnMeta))
+  tryAssign(topLevelHeaders, (h) => matchFuzzyFieldForHeader(h, nestedColumnMeta))
+
+  // Pass 2: Extracted nested JSON fields (exact first, then safe fuzzy)
+  tryAssign(nestedHeaders, (h) => matchExactFieldForHeader(h, customFields, nestedColumnMeta))
+  tryAssign(nestedHeaders, (h) => matchFuzzyFieldForHeader(h, nestedColumnMeta))
+
+  // Ensure all headers have explicit mapping entries
+  for (const header of headers) {
+    if (mapping[header] === undefined) {
+      mapping[header] = ""
     }
   }
 
   return mapping
+}
+
+function normalizeValueForConflictComparison(targetField, rawVal, defaultCountry = "+91") {
+  const str = rawVal !== undefined && rawVal !== null ? String(rawVal).trim() : ""
+  if (!str) return ""
+
+  if (targetField === "email") {
+    return str.toLowerCase()
+  }
+  if (targetField === "phone" || targetField === "alternatePhone") {
+    const norm = normalizePhoneE164(str, defaultCountry)
+    if (norm) return norm
+    return str.replace(/[\s()-]/g, "").toLowerCase()
+  }
+  if (targetField === "status") {
+    const res = normalizeLeadStatus(str)
+    return res.valid ? res.value.toLowerCase() : str.toLowerCase()
+  }
+  if (targetField === "expectedDealAmount" || targetField === "closedWonAmount") {
+    const numStr = str.replace(/[,$\s₹]/g, "")
+    const n = Number(numStr)
+    return numStr && Number.isFinite(n) ? String(n) : str.toLowerCase()
+  }
+  return str.replace(/\s+/g, " ").toLowerCase()
+}
+
+function getFieldLabel(targetField, customFields = []) {
+  const std = SUPPORTED_LEAD_FIELDS.find((f) => f.key === targetField)
+  if (std) return std.label
+  const cf = (customFields || []).find((c) => `customField:${c.name}` === targetField)
+  return cf ? cf.label : targetField
+}
+
+/**
+ * Detects conflicts across rows where both a mapped column (e.g. top-level Email)
+ * and an unmapped sibling column (e.g. Data.Email) target the same Lead field with differing values.
+ */
+function detectNestedFieldConflicts({
+  headers = [],
+  rows = [],
+  mapping = {},
+  customFields = [],
+  nestedColumnMeta = {},
+} = {}) {
+  const conflictsByKey = new Map()
+
+  const candidatePairs = []
+  const mappedEntries = Object.entries(mapping || {}).filter(([, target]) => Boolean(target))
+
+  for (const otherHeader of headers) {
+    if (mapping?.[otherHeader]) continue
+    const parts = getNestedHeaderParts(otherHeader, nestedColumnMeta)
+    if (parts.isContainer) continue
+
+    const candidateTarget =
+      matchExactFieldForHeader(otherHeader, customFields, nestedColumnMeta) ||
+      matchFuzzyFieldForHeader(otherHeader, nestedColumnMeta)
+    if (!candidateTarget) continue
+
+    const primaryMatch = mappedEntries.find(([mappedCol, target]) => target === candidateTarget && mappedCol !== otherHeader)
+    if (!primaryMatch) continue
+
+    const [primaryCol] = primaryMatch
+    const primaryIsNested = getNestedHeaderParts(primaryCol, nestedColumnMeta).isNested
+    if (!parts.isNested && !primaryIsNested) continue
+
+    candidatePairs.push({
+      primaryCol,
+      secondaryCol: otherHeader,
+      targetField: candidateTarget,
+      targetLabel: getFieldLabel(candidateTarget, customFields),
+    })
+  }
+
+  if (candidatePairs.length === 0) return []
+
+  for (const pair of candidatePairs) {
+    const key = `${pair.primaryCol}::${pair.secondaryCol}::${pair.targetField}`
+    const sampleConflicts = []
+    let conflictCount = 0
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]
+      const v1 = row[pair.primaryCol] !== undefined && row[pair.primaryCol] !== null ? String(row[pair.primaryCol]).trim() : ""
+      const v2 = row[pair.secondaryCol] !== undefined && row[pair.secondaryCol] !== null ? String(row[pair.secondaryCol]).trim() : ""
+      if (!v1 || !v2) continue
+
+      const n1 = normalizeValueForConflictComparison(pair.targetField, v1)
+      const n2 = normalizeValueForConflictComparison(pair.targetField, v2)
+      if (n1 && n2 && n1 !== n2) {
+        conflictCount++
+        if (sampleConflicts.length < 5) {
+          sampleConflicts.push({
+            rowNumber: row.__rowNumber || i + 1,
+            primaryValue: v1,
+            secondaryValue: v2,
+          })
+        }
+      }
+    }
+
+    if (conflictCount > 0) {
+      conflictsByKey.set(key, {
+        primaryColumn: pair.primaryCol,
+        secondaryColumn: pair.secondaryCol,
+        targetField: pair.targetField,
+        targetLabel: pair.targetLabel,
+        conflictRowCount: conflictCount,
+        sampleConflicts,
+      })
+    }
+  }
+
+  return Array.from(conflictsByKey.values())
 }
 
 /**
@@ -649,6 +1190,116 @@ function validateAndSanitizeMapping(mapping = {}, customFields = []) {
 }
 
 /**
+ * Re-parses raw JSON container columns present on `rawRow` on the server so preview and execute
+ * apply identical extraction/validation rules and never trust tampered client-extracted fields.
+ */
+function resolveRowDataFromContainers(rawRow = {}, cleanMapping = {}, options = {}) {
+  const customFields = options.customFields || []
+  const containerColumnsPresent = new Map() // containerCol -> { parsed, flat }
+  const errors = []
+  const warnings = []
+
+  const getContainerResult = (containerCol) => {
+    if (containerColumnsPresent.has(containerCol)) {
+      return containerColumnsPresent.get(containerCol)
+    }
+    const parsed = parseNestedJsonCell(rawRow[containerCol])
+    const flat = parsed.status === "valid" ? flattenNestedObject(parsed.obj, containerCol) : {}
+    const entry = { parsed, flat }
+    containerColumnsPresent.set(containerCol, entry)
+    return entry
+  }
+
+  const findContainerForMappedCol = (col) => {
+    let searchFrom = col.length
+    while (searchFrom > 0) {
+      const dotIdx = col.lastIndexOf(".", searchFrom - 1)
+      if (dotIdx <= 0) break
+      const prefix = col.slice(0, dotIdx)
+      if (Object.prototype.hasOwnProperty.call(rawRow, prefix)) {
+        return prefix
+      }
+      searchFrom = dotIdx
+    }
+    return null
+  }
+
+  const resolvedValues = {}
+  const reportedMalformedContainers = new Set()
+
+  for (const col of Object.keys(cleanMapping)) {
+    const containerCol = findContainerForMappedCol(col)
+    if (containerCol) {
+      const { parsed, flat } = getContainerResult(containerCol)
+      if (parsed.status === "malformed") {
+        if (!reportedMalformedContainers.has(containerCol)) {
+          reportedMalformedContainers.add(containerCol)
+          errors.push(`Column '${containerCol}' contains malformed JSON (${parsed.error || "invalid syntax"})`)
+        }
+        resolvedValues[col] = ""
+        continue
+      }
+      if (parsed.status === "non_object") {
+        if (!reportedMalformedContainers.has(containerCol)) {
+          reportedMalformedContainers.add(containerCol)
+          errors.push(`Column '${containerCol}' must contain a valid JSON object ({...})`)
+        }
+        resolvedValues[col] = ""
+        continue
+      }
+      resolvedValues[col] = flat[col] !== undefined ? flat[col] : ""
+    } else {
+      resolvedValues[col] = rawRow[col]
+    }
+  }
+
+  // Also scan any raw container columns on the row for conflicting sibling values (e.g. Email vs Data.Email)
+  const potentialContainers = Object.keys(rawRow).filter((k) => {
+    if (k === "__rowNumber" || cleanMapping[k]) return false
+    const tok = normalizeHeaderToken(k)
+    if (NESTED_JSON_COLUMN_TOKENS.has(tok)) return true
+    if (!isMessageColumnToken(tok) && isPlainObject(rawRow[k])) return true
+    return false
+  })
+
+  for (const containerCol of potentialContainers) {
+    const { parsed, flat } = getContainerResult(containerCol)
+    if (parsed.status !== "valid") continue
+
+    for (const [childHeader, childVal] of Object.entries(flat)) {
+      if (cleanMapping[childHeader]) continue
+      const syntheticMeta = {
+        [containerCol]: { isContainer: true },
+        [childHeader]: { isNested: true, container: containerCol, path: childHeader.slice(containerCol.length + 1) },
+      }
+      const candidateTarget =
+        matchExactFieldForHeader(childHeader, customFields, syntheticMeta) ||
+        matchFuzzyFieldForHeader(childHeader, syntheticMeta)
+      if (!candidateTarget) continue
+
+      const mappedPair = Object.entries(cleanMapping).find(([, target]) => target === candidateTarget)
+      if (!mappedPair) continue
+      const [primaryCol] = mappedPair
+      const primaryRaw = resolvedValues[primaryCol] !== undefined ? resolvedValues[primaryCol] : rawRow[primaryCol]
+      const v1 = primaryRaw !== undefined && primaryRaw !== null ? String(primaryRaw).trim() : ""
+      const v2 = childVal !== undefined && childVal !== null ? String(childVal).trim() : ""
+      if (!v1 || !v2) continue
+
+      const n1 = normalizeValueForConflictComparison(candidateTarget, v1, options.defaultCountry || "+91")
+      const n2 = normalizeValueForConflictComparison(candidateTarget, v2, options.defaultCountry || "+91")
+      if (n1 && n2 && n1 !== n2) {
+        const label = getFieldLabel(candidateTarget, customFields)
+        warnings.push(
+          `Value conflict on ${label}: '${primaryCol}' ('${v1}') differs from '${childHeader}' ('${v2}') — using '${primaryCol}'`,
+        )
+      }
+    }
+  }
+
+  return { resolvedValues, containerErrors: errors, warnings }
+}
+
+/**
  * Validates and transforms a single uploaded row according to Lead model & CRM rules.
  */
 function validateAndNormalizeImportRow(rawRow = {}, cleanMapping = {}, options = {}) {
@@ -659,11 +1310,13 @@ function validateAndNormalizeImportRow(rawRow = {}, cleanMapping = {}, options =
       : "Bulk Import"
   const cfMap = sanitizeCustomFieldKeySet(options.customFields || [])
 
+  const { resolvedValues, containerErrors, warnings } = resolveRowDataFromContainers(rawRow, cleanMapping, options)
+
   const extracted = {}
   const customFieldValues = []
 
   for (const [col, target] of Object.entries(cleanMapping)) {
-    const rawVal = rawRow[col]
+    const rawVal = resolvedValues[col]
     const strVal = rawVal !== undefined && rawVal !== null ? String(rawVal).trim() : ""
 
     if (target.startsWith("customField:")) {
@@ -676,7 +1329,7 @@ function validateAndNormalizeImportRow(rawRow = {}, cleanMapping = {}, options =
     }
   }
 
-  const errors = []
+  const errors = [...containerErrors]
 
   // 1. Name (Required, 2-100 chars matching Lead.js)
   const name = (extracted.name || "").trim()
@@ -830,6 +1483,7 @@ function validateAndNormalizeImportRow(rawRow = {}, cleanMapping = {}, options =
     rowNumber,
     valid: errors.length === 0,
     errors,
+    warnings,
     payload: normalizedPayload,
   }
 }
@@ -1093,10 +1747,14 @@ async function previewImportLeads({
   let validCount = 0
   let invalidCount = 0
   let duplicateCount = 0
+  let warningCount = 0
   const previewRows = []
   const sampleValidLeads = []
 
   for (const vr of validatedRows) {
+    const rowWarnings = Array.isArray(vr.warnings) ? vr.warnings : []
+    if (rowWarnings.length > 0) warningCount++
+
     if (!vr.valid) {
       invalidCount++
       previewRows.push({
@@ -1104,6 +1762,7 @@ async function previewImportLeads({
         status: "invalid",
         reasons: vr.errors,
         reason: vr.errors.join("; "),
+        warnings: rowWarnings,
         data: vr.payload,
       })
       continue
@@ -1131,6 +1790,7 @@ async function previewImportLeads({
         status: "duplicate",
         reasons: dupReasons,
         reason: dupReasons.join("; "),
+        warnings: rowWarnings,
         data: vr.payload,
       })
       continue
@@ -1151,6 +1811,7 @@ async function previewImportLeads({
       status: "valid",
       reasons: [],
       reason: "",
+      warnings: rowWarnings,
       data: vr.payload,
     })
   }
@@ -1162,6 +1823,7 @@ async function previewImportLeads({
       invalid: invalidCount,
       duplicate: duplicateCount,
       skipped: duplicateCount,
+      conflicts: warningCount,
     },
     mappedFields,
     rows: previewRows,
@@ -1491,7 +2153,10 @@ module.exports = {
   MAX_IMPORT_ROWS,
   SUPPORTED_LEAD_FIELDS,
   parseLeadImportFile,
+  parseNestedJsonCell,
+  expandNestedJsonColumns,
   suggestColumnMapping,
+  detectNestedFieldConflicts,
   validateAndSanitizeMapping,
   validateAndNormalizeImportRow,
   normalizeLeadStatus,

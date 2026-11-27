@@ -8,6 +8,7 @@ const {
   SUPPORTED_LEAD_FIELDS,
   parseLeadImportFile,
   suggestColumnMapping,
+  detectNestedFieldConflicts,
   previewImportLeads,
   executeImportLeads,
   resolveImportScope,
@@ -133,7 +134,16 @@ const parseImportFileHandler = async (req, res) => {
       .sort({ order: 1, createdAt: 1 })
       .lean()
 
-    const autoMapping = suggestColumnMapping(parsed.headers, customFields)
+    const autoMapping = suggestColumnMapping(parsed.headers, customFields, {
+      nestedColumnMeta: parsed.nestedColumnMeta,
+    })
+    const conflicts = detectNestedFieldConflicts({
+      headers: parsed.headers,
+      rows: parsed.rows,
+      mapping: autoMapping,
+      customFields,
+      nestedColumnMeta: parsed.nestedColumnMeta,
+    })
 
     return res.status(200).json({
       success: true,
@@ -147,6 +157,11 @@ const parseImportFileHandler = async (req, res) => {
         autoMapping,
         sampleRows: parsed.sampleRows,
         rows: parsed.rows,
+        nestedColumnMeta: parsed.nestedColumnMeta || {},
+        nestedJson: {
+          ...(parsed.nestedJson || { hasNestedJson: false, containers: [], extractedHeaders: [] }),
+          conflicts,
+        },
       },
     })
   } catch (error) {

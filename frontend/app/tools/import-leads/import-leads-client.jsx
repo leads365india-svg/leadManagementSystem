@@ -146,6 +146,8 @@ export default function ImportLeadsClient() {
   const [parsedHeaders, setParsedHeaders] = useState([])
   const [parsedRows, setParsedRows] = useState([])
   const [sampleRows, setSampleRows] = useState([])
+  const [nestedColumnMeta, setNestedColumnMeta] = useState({})
+  const [nestedJsonInfo, setNestedJsonInfo] = useState(null)
 
   // Step 2: Mapping & options
   const [columnMapping, setColumnMapping] = useState({})
@@ -226,7 +228,9 @@ export default function ImportLeadsClient() {
     const mappedTargets = new Set(Object.values(columnMapping).filter(Boolean))
     const hasName = mappedTargets.has("name")
     const hasEmailOrPhone = mappedTargets.has("email") || mappedTargets.has("phone")
-    const unmappedHeaders = parsedHeaders.filter((h) => !columnMapping[h])
+    const unmappedHeaders = parsedHeaders.filter(
+      (h) => !columnMapping[h] && !nestedColumnMeta?.[h]?.isContainer,
+    )
     const mappedHeaders = parsedHeaders.filter((h) => Boolean(columnMapping[h]))
 
     const missingRequired = []
@@ -242,7 +246,105 @@ export default function ImportLeadsClient() {
       missingRequired,
       isReady: missingRequired.length === 0,
     }
-  }, [columnMapping, parsedHeaders])
+  }, [columnMapping, parsedHeaders, nestedColumnMeta])
+
+  const fieldLabelLookup = useMemo(() => {
+    const map = {}
+    for (const f of allTargetFields) {
+      map[f.key] = f.label
+    }
+    return map
+  }, [allTargetFields])
+
+  const dynamicFieldConflicts = useMemo(() => {
+    if (!nestedJsonInfo?.hasNestedJson || !parsedRows.length) return []
+
+    const findMatchingTargetForColumn = (header) => {
+      const meta = nestedColumnMeta?.[header]
+      if (meta?.isContainer) return null
+      const leaf = meta?.isNested ? meta.path : header
+      const norm = (s) =>
+        String(s || "")
+          .toLowerCase()
+          .replace(/[_-]+/g, " ")
+          .replace(/[^a-z0-9\s]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+      const leafTok = norm(leaf)
+      const fullTok = norm(header)
+      const candidates = [
+        ["name", ["name", "full name", "fullname", "lead name", "contact name", "customer name", "client name", "prospect", "prospect name"]],
+        ["email", ["email", "email address", "e mail", "mail", "work email", "contact email", "primary email", "email id", "e mail id"]],
+        ["phone", ["phone", "phone number", "phone no", "mobile", "mobile number", "mobile no", "contact", "contact number", "contact no", "cell", "telephone", "tel", "whatsapp", "whatsapp number", "whatsapp no"]],
+        ["company", ["company", "company name", "organization", "organisation", "org", "business", "business name", "firm", "hospital", "clinic", "account name"]],
+        ["source", ["source", "lead source", "channel", "origin", "campaign source", "acquisition channel"]],
+        ["status", ["status", "lead status", "stage", "pipeline status", "pipeline stage"]],
+        ["city", ["city", "location", "town"]],
+        ["alternatePhone", ["alternate phone", "alt phone", "secondary phone", "phone 2", "mobile 2", "alternate mobile"]],
+      ]
+      for (const tok of meta?.isNested ? [fullTok, leafTok] : [fullTok]) {
+        for (const [key, aliases] of candidates) {
+          if (aliases.includes(tok)) return key
+        }
+      }
+      return null
+    }
+
+    const normalizeVal = (target, raw) => {
+      const s = String(raw ?? "").trim()
+      if (!s) return ""
+      if (target === "email") return s.toLowerCase()
+      if (target === "phone" || target === "alternatePhone") {
+        const digits = s.replace(/\D/g, "")
+        return digits.length === 10 ? `+91${digits}` : digits.length >= 11 ? `+${digits}` : s.toLowerCase()
+      }
+      return s.replace(/\s+/g, " ").toLowerCase()
+    }
+
+    const mappedEntries = Object.entries(columnMapping).filter(([, t]) => Boolean(t))
+    const conflicts = []
+
+    for (const h of parsedHeaders) {
+      if (columnMapping[h]) continue
+      const candidateTarget = findMatchingTargetForColumn(h)
+      if (!candidateTarget) continue
+
+      const match = mappedEntries.find(([col, t]) => t === candidateTarget && col !== h)
+      if (!match) continue
+
+      const [primaryCol] = match
+      const primaryIsNested = Boolean(nestedColumnMeta?.[primaryCol]?.isNested)
+      const hIsNested = Boolean(nestedColumnMeta?.[h]?.isNested)
+      if (!primaryIsNested && !hIsNested) continue
+
+      let conflictCount = 0
+      let sample = null
+      for (const row of parsedRows) {
+        const v1 = String(row[primaryCol] ?? "").trim()
+        const v2 = String(row[h] ?? "").trim()
+        if (!v1 || !v2) continue
+        if (normalizeVal(candidateTarget, v1) !== normalizeVal(candidateTarget, v2)) {
+          conflictCount++
+          if (!sample) {
+            sample = { rowNumber: row.__rowNumber, primaryValue: v1, secondaryValue: v2 }
+          }
+        }
+      }
+
+      if (conflictCount > 0) {
+        conflicts.push({
+          primaryColumn: primaryCol,
+          secondaryColumn: h,
+          targetField: candidateTarget,
+          targetLabel: fieldLabelLookup[candidateTarget] || candidateTarget,
+          conflictRowCount: conflictCount,
+          sampleConflicts: sample ? [sample] : [],
+        })
+      }
+    }
+
+    return conflicts
+  }, [nestedJsonInfo, parsedRows, columnMapping, parsedHeaders, nestedColumnMeta, fieldLabelLookup])
 
   const resetAllState = () => {
     setStep(1)
@@ -253,6 +355,8 @@ export default function ImportLeadsClient() {
     setParsedHeaders([])
     setParsedRows([])
     setSampleRows([])
+    setNestedColumnMeta({})
+    setNestedJsonInfo(null)
     setColumnMapping({})
     setPreviewData(null)
     setImportResult(null)
@@ -325,6 +429,8 @@ export default function ImportLeadsClient() {
       setParsedHeaders(res.data.headers || [])
       setParsedRows(res.data.rows || [])
       setSampleRows(res.data.sampleRows || [])
+      setNestedColumnMeta(res.data.nestedColumnMeta || {})
+      setNestedJsonInfo(res.data.nestedJson || null)
       setColumnMapping(res.data.autoMapping || {})
       setStep(2)
       toast.success(`Parsed ${res.data.totalRows} row(s) from ${res.data.fileName}`)
@@ -358,15 +464,29 @@ export default function ImportLeadsClient() {
         .filter(([, target]) => Boolean(target))
         .map(([col]) => col)
 
+      const containerCols = new Set(
+        (nestedJsonInfo?.containers || []).map((c) => c.column).filter(Boolean),
+      )
+      for (const col of mappedCols) {
+        const meta = nestedColumnMeta?.[col]
+        if (meta?.isNested && meta.container) {
+          containerCols.add(meta.container)
+        }
+      }
+
+      const colsToInclude = Array.from(new Set([...mappedCols, ...containerCols]))
+
       return rowsList.map((row) => {
         const projected = { __rowNumber: row.__rowNumber }
-        for (const col of mappedCols) {
-          projected[col] = row[col] ?? ""
+        for (const col of colsToInclude) {
+          if (row[col] !== undefined) {
+            projected[col] = row[col]
+          }
         }
         return projected
       })
     },
-    [columnMapping],
+    [columnMapping, nestedJsonInfo, nestedColumnMeta],
   )
 
   const handleRunPreview = async () => {
@@ -1034,6 +1154,62 @@ export default function ImportLeadsClient() {
               </div>
             )}
 
+            {nestedJsonInfo?.hasNestedJson && (
+              <div className="space-y-2.5">
+                <div className="p-3.5 rounded-xl bg-indigo-50/80 border border-indigo-200 text-xs text-indigo-900 flex items-start gap-2.5">
+                  <Layers className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-semibold">
+                      Nested JSON data detected and expanded into {nestedJsonInfo.extractedHeaders?.length || 0} mappable field(s)
+                    </p>
+                    <p className="text-[11px] text-indigo-700">
+                      {(nestedJsonInfo.containers || [])
+                        .map((c) => `${c.column} → ${c.extractedFields.length} field(s)`)
+                        .join(" • ")}
+                      . Unmapped metadata (such as ID, Form, OTP Verified, Date, IP) is skipped by default.
+                    </p>
+                  </div>
+                </div>
+
+                {(nestedJsonInfo.containers || []).some((c) => c.malformedRowCount > 0) && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-semibold">Malformed JSON detected: </span>
+                      <span>
+                        {(nestedJsonInfo.containers || [])
+                          .filter((c) => c.malformedRowCount > 0)
+                          .map((c) => `${c.malformedRowCount} row(s) in '${c.column}' (e.g., row #${c.sampleMalformedRows?.[0]?.rowNumber || "?"})`)
+                          .join("; ")}
+                        . Those rows will be flagged during validation without aborting valid leads.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {dynamicFieldConflicts.length > 0 && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-semibold">
+                        Conflicting top-level and nested JSON values detected (preferring existing mapped column):
+                      </p>
+                      <ul className="list-disc pl-4 space-y-0.5 text-[11px]">
+                        {dynamicFieldConflicts.map((c) => (
+                          <li key={`${c.primaryColumn}-${c.secondaryColumn}`}>
+                            <strong>{c.targetLabel}</strong>: <code>{c.primaryColumn}</code> vs <code>{c.secondaryColumn}</code> differ in {c.conflictRowCount} row(s)
+                            {c.sampleConflicts?.[0]
+                              ? ` (e.g., row #${c.sampleConflicts[0].rowNumber}: '${c.sampleConflicts[0].primaryValue}' vs '${c.sampleConflicts[0].secondaryValue}')`
+                              : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Column Mapping Table */}
             <div className="overflow-x-auto border border-slate-200 rounded-xl">
               <table className="w-full text-left border-collapse text-xs">
@@ -1048,16 +1224,39 @@ export default function ImportLeadsClient() {
                 <tbody className="divide-y divide-slate-100">
                   {parsedHeaders.map((header) => {
                     const selectedTarget = columnMapping[header] || ""
-                    const sampleValues = sampleRows
-                      .map((r) => r[header])
-                      .filter((v) => String(v || "").trim() !== "")
-                      .slice(0, 2)
-                      .join(" | ")
+                    const colMeta = nestedColumnMeta?.[header]
+                    const extractedSamples = []
+                    const scanList = parsedRows.length > 0 ? parsedRows : sampleRows
+                    for (const r of scanList) {
+                      const val = r?.[header]
+                      if (String(val ?? "").trim() !== "") {
+                        extractedSamples.push(String(val).trim())
+                        if (extractedSamples.length >= 2) break
+                      }
+                    }
+                    const sampleValues = extractedSamples.join(" | ")
 
                     return (
-                      <tr key={header} className="hover:bg-slate-50/70">
-                        <td className="py-3 px-4 font-semibold text-slate-900">{header}</td>
-                        <td className="py-3 px-4 text-slate-500 font-mono text-[11px] max-w-xs truncate">
+                      <tr key={header} className={`hover:bg-slate-50/70 ${colMeta?.isNested ? "bg-indigo-50/15" : ""}`}>
+                        <td className="py-3 px-4 font-semibold text-slate-900">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span>{header}</span>
+                            {colMeta?.isNested && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                From {colMeta.container}
+                              </span>
+                            )}
+                            {colMeta?.isContainer && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                                JSON Object ({colMeta.children?.length || 0} fields)
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td
+                          className="py-3 px-4 text-slate-500 font-mono text-[11px] max-w-xs truncate"
+                          title={sampleValues || ""}
+                        >
                           {sampleValues || <span className="italic text-slate-400">Empty</span>}
                         </td>
                         <td className="py-3 px-4">
@@ -1094,6 +1293,10 @@ export default function ImportLeadsClient() {
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                               <Check className="w-3 h-3" />
                               Mapped
+                            </span>
+                          ) : colMeta?.isContainer ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              Expanded to Fields
                             </span>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
@@ -1265,6 +1468,8 @@ export default function ImportLeadsClient() {
                           <span className={row.status === "duplicate" ? "text-amber-700" : "text-rose-700 font-medium"}>
                             {row.reason}
                           </span>
+                        ) : Array.isArray(row.warnings) && row.warnings.length > 0 ? (
+                          <span className="text-amber-700 font-medium">{row.warnings.join("; ")}</span>
                         ) : (
                           <span className="text-slate-400">Ready to import</span>
                         )}
