@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import Link from "next/link"
 import { apiClient } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import { buildCustomDomainUrl } from "@/lib/domain"
 import { toast } from "react-hot-toast"
 import {
@@ -35,8 +36,13 @@ import {
 } from "lucide-react"
 
 export default function RolesPermissionsPage() {
+  const { user, activeTenant, setActiveTenant, checkAuth } = useAuth()
+
   // Top-level View Tab: "ceiling" | "tenants"
   const [activeTab, setActiveTab] = useState("ceiling")
+  const [supportModeCookieTenant, setSupportModeCookieTenant] = useState("")
+  const [supportModeBlocked, setSupportModeBlocked] = useState(false)
+  const [exitingSupportMode, setExitingSupportMode] = useState(false)
 
   // --- CEILING / ACCOUNT ADMIN PERMISSIONS STATE ---
   const [modules, setModules] = useState([])
@@ -134,6 +140,75 @@ export default function RolesPermissionsPage() {
   )
 
   const ceilingPermissionSet = useMemo(() => new Set(savedCeilingPermissions), [savedCeilingPermissions])
+
+  const readSupportCookieTenant = useCallback(() => {
+    if (typeof document === "undefined") return ""
+    try {
+      const match = document.cookie
+        .split(";")
+        .map((c) => c.trim())
+        .find((c) => c.startsWith("active_tenant_id="))
+      if (!match) return ""
+      return decodeURIComponent(match.slice("active_tenant_id=".length)).trim()
+    } catch (_) {
+      return ""
+    }
+  }, [])
+
+  useEffect(() => {
+    setSupportModeCookieTenant(readSupportCookieTenant())
+  }, [readSupportCookieTenant, activeTenant, user])
+
+  const supportModeTenantId = useMemo(() => {
+    if (supportModeCookieTenant) return supportModeCookieTenant
+    if (activeTenant) return activeTenant
+    if (typeof window !== "undefined") {
+      const stored = (localStorage.getItem("leadflow_active_tenant") || "").trim()
+      if (stored) return stored
+    }
+    if (user?.role === "super_admin" && user?.effectiveTenantId) {
+      return user.effectiveTenantId
+    }
+    return ""
+  }, [supportModeCookieTenant, activeTenant, user])
+
+  const isReadOnlySupportMode = Boolean(supportModeTenantId || supportModeBlocked)
+
+  const handleExitSupportMode = async () => {
+    if (exitingSupportMode) return
+    try {
+      setExitingSupportMode(true)
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("leadflow_active_tenant")
+        localStorage.removeItem("leadflow_active_workspace")
+        localStorage.removeItem("leadflow_active_workspace_tenant")
+        localStorage.removeItem("leadflow_session_tenant")
+        try {
+          Object.keys(localStorage)
+            .filter((k) => k.startsWith("leadflow_active_workspace:"))
+            .forEach((k) => localStorage.removeItem(k))
+        } catch (_) {}
+      }
+      await apiClient.switchTenant(null)
+      if (typeof setActiveTenant === "function") {
+        setActiveTenant(null)
+      }
+      setSupportModeCookieTenant("")
+      setSupportModeBlocked(false)
+      setRoleModalError(null)
+      if (typeof checkAuth === "function") {
+        await checkAuth()
+      }
+      if (selectedTenantId) {
+        await loadTenantRoles(selectedTenantId)
+      }
+      toast.success("Exited read-only support mode. Role editing is now enabled.")
+    } catch (err) {
+      toast.error(err?.message || "Failed to exit support mode")
+    } finally {
+      setExitingSupportMode(false)
+    }
+  }
 
   // Roles state for selected tenant
   const [tenantRoles, setTenantRoles] = useState([])
@@ -482,6 +557,9 @@ export default function RolesPermissionsPage() {
           setEditingRole(null)
         } else {
           const errMsg = res?.error || "Failed to update role"
+          if (res?.code === "SUPERADMIN_READONLY_SUPPORT_MODE") {
+            setSupportModeBlocked(true)
+          }
           setRoleModalError(errMsg)
           toast.error(errMsg)
         }
@@ -501,12 +579,18 @@ export default function RolesPermissionsPage() {
           setIsRoleModalOpen(false)
         } else {
           const errMsg = res?.error || "Failed to create role"
+          if (res?.code === "SUPERADMIN_READONLY_SUPPORT_MODE") {
+            setSupportModeBlocked(true)
+          }
           setRoleModalError(errMsg)
           toast.error(errMsg)
         }
       }
     } catch (err) {
       const errMsg = err?.message || "Failed to save role"
+      if (err?.code === "SUPERADMIN_READONLY_SUPPORT_MODE") {
+        setSupportModeBlocked(true)
+      }
       setRoleModalError(errMsg)
       toast.error(errMsg)
     } finally {
@@ -738,8 +822,13 @@ export default function RolesPermissionsPage() {
                     <button
                       type="button"
                       onClick={openCreateRoleModal}
-                      disabled={!selectedTenantId}
-                      className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                      disabled={!selectedTenantId || isReadOnlySupportMode}
+                      title={
+                        isReadOnlySupportMode
+                          ? "Exit read-only support mode to create roles"
+                          : "Create Custom Role"
+                      }
+                      className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Create Custom Role</span>
@@ -1012,6 +1101,30 @@ export default function RolesPermissionsPage() {
         ========================================================================= */}
         {activeTab === "tenants" && (
           <div className="space-y-6">
+            {isReadOnlySupportMode && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-xs">
+                <div className="flex items-start space-x-3">
+                  <Lock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-900">
+                    <p className="font-bold">
+                      Audited Read-Only Support Mode Active{supportModeTenantId ? ` (${supportModeTenantId})` : ""}
+                    </p>
+                    <p className="mt-0.5 text-amber-800">
+                      Tenant role and organization mutations are disabled while inspecting a tenant support session. Exit support mode to edit roles.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExitSupportMode}
+                  disabled={exitingSupportMode}
+                  className="inline-flex items-center justify-center px-3.5 py-2 rounded-lg text-xs font-bold text-white bg-amber-700 hover:bg-amber-800 disabled:opacity-50 transition-colors shrink-0 cursor-pointer"
+                >
+                  {exitingSupportMode ? "Exiting..." : "Exit Support Mode"}
+                </button>
+              </div>
+            )}
+
             {/* Tenant Selector Header */}
             <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 shadow-xs">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -1203,14 +1316,21 @@ export default function RolesPermissionsPage() {
                             className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer"
                           >
                             <Edit2 className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>{role.isSystem ? "Edit Perms" : "Edit"}</span>
+                            <span>
+                              {isReadOnlySupportMode
+                                ? "View (Read-Only)"
+                                : role.isSystem
+                                ? "Edit Perms"
+                                : "Edit"}
+                            </span>
                           </button>
                           {!role.isSystem && (
                             <button
                               type="button"
                               onClick={() => handleDeleteRole(role)}
-                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="Delete Role"
+                              disabled={isReadOnlySupportMode}
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isReadOnlySupportMode ? "Exit support mode to delete role" : "Delete Role"}
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -1356,6 +1476,28 @@ export default function RolesPermissionsPage() {
             </div>
 
             <form onSubmit={handleSaveRole} className="flex-1 overflow-y-auto py-4 space-y-4">
+              {isReadOnlySupportMode && (
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+                  <div className="flex items-start gap-2">
+                    <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold">Read-Only Support Mode Active</p>
+                      <p className="text-amber-800">
+                        Editing is blocked until you exit the active tenant support session.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExitSupportMode}
+                    disabled={exitingSupportMode}
+                    className="px-3 py-1.5 rounded-md text-xs font-bold text-white bg-amber-700 hover:bg-amber-800 disabled:opacity-50 shrink-0 cursor-pointer"
+                  >
+                    {exitingSupportMode ? "Exiting..." : "Exit Support Mode"}
+                  </button>
+                </div>
+              )}
+
               {roleModalError && (
                 <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -1368,7 +1510,7 @@ export default function RolesPermissionsPage() {
                 <input
                   type="text"
                   required
-                  disabled={Boolean(editingRole?.isSystem)}
+                  disabled={Boolean(editingRole?.isSystem) || isReadOnlySupportMode}
                   value={roleFormData.name}
                   onChange={(e) => setRoleFormData({ ...roleFormData, name: e.target.value })}
                   placeholder="e.g. Senior Closer or Telemarketing Specialist"
@@ -1398,10 +1540,11 @@ export default function RolesPermissionsPage() {
                 <label className="block text-xs font-bold text-slate-700 mb-1">Description</label>
                 <textarea
                   rows={2}
+                  disabled={isReadOnlySupportMode}
                   value={roleFormData.description}
                   onChange={(e) => setRoleFormData({ ...roleFormData, description: e.target.value })}
                   placeholder="Scope of responsibilities and permissions"
-                  className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg p-2.5 focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                  className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg p-2.5 focus:bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -1419,7 +1562,7 @@ export default function RolesPermissionsPage() {
                           const isChecked = roleFormData.permissions.includes(perm.key)
                           const isAllowedByCeiling =
                             ceilingPermissionSet.size === 0 || ceilingPermissionSet.has(perm.key)
-                          const isDisabled = !isAllowedByCeiling && !isChecked
+                          const isDisabled = isReadOnlySupportMode || (!isAllowedByCeiling && !isChecked)
                           return (
                             <label
                               key={perm.key}
@@ -1468,8 +1611,9 @@ export default function RolesPermissionsPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingRole}
-                  className="px-4 py-2 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 cursor-pointer"
+                  disabled={savingRole || isReadOnlySupportMode}
+                  title={isReadOnlySupportMode ? "Exit support mode to save role changes" : undefined}
+                  className="px-4 py-2 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
                   {savingRole ? "Saving..." : editingRole ? "Update Role" : "Create Role"}
                 </button>

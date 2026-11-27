@@ -370,7 +370,25 @@ const tenantContextMiddleware = async (req, res, next) => {
 
   // Case B4: Workspace header omitted in workspaceModeEnabled account
   if (isOrgAdmin || isSuperAdmin) {
-    if (isSuperAdmin && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+    const requestPath = (req.originalUrl || req.baseUrl || "").split("?")[0]
+    const isPlatformSuperAdminRoute = /^\/api\/super-admin(\/|$)/.test(requestPath)
+    const isRoleGovernanceRoute = /^\/api\/roles(\/|$)/.test(requestPath)
+    const hasSupportModeCookie = Boolean(
+      typeof req.cookies?.active_tenant_id === "string" &&
+        req.cookies.active_tenant_id.trim(),
+    )
+    const isSuperAdminControlAllowed =
+      isSuperAdmin &&
+      req.user?.role === "super_admin" &&
+      !domainBoundWs &&
+      (isPlatformSuperAdminRoute ||
+        (isRoleGovernanceRoute && !hasSupportModeCookie && !rawWorkspaceHeader))
+
+    if (
+      isSuperAdmin &&
+      ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) &&
+      !isSuperAdminControlAllowed
+    ) {
       return res.status(403).json({
         success: false,
         error: "Access denied: Platform Super Admin is in audited read-only support mode and cannot modify organization resources.",

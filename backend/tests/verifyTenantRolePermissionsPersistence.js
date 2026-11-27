@@ -28,6 +28,7 @@ const {
 const TEST_TAG = `role_persist_${Date.now()}`
 const TENANT_A = `ACC-RPT-A-${Date.now()}`
 const TENANT_B = `ACC-RPT-B-${Date.now()}`
+const TENANT_MW = `ACC-RPT-MW-${Date.now()}`
 
 const cleanupData = async (originalCeiling) => {
   try {
@@ -41,16 +42,16 @@ const cleanupData = async (originalCeiling) => {
       invalidateTenantRoleCache()
     }
 
-    await Lead.deleteMany({ tenantId: { $in: [TENANT_A, TENANT_B] } }).setOptions({ skipTenantFilter: true })
+    await Lead.deleteMany({ tenantId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } }).setOptions({ skipTenantFilter: true })
     await AuditLog.collection.deleteMany({ tenantId: { $regex: /^ACC-RPT-/ } })
-    await Role.deleteMany({ tenantId: { $in: [TENANT_A, TENANT_B] } }).setOptions({ skipTenantFilter: true })
+    await Role.deleteMany({ tenantId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } }).setOptions({ skipTenantFilter: true })
     await User.deleteMany({
       $or: [
-        { tenantId: { $in: [TENANT_A, TENANT_B] } },
+        { tenantId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } },
         { email: { $regex: TEST_TAG } },
       ],
     })
-    await Account.deleteMany({ accountId: { $in: [TENANT_A, TENANT_B] } })
+    await Account.deleteMany({ accountId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } })
   } catch (err) {
     console.warn("Cleanup warning:", err.message)
   }
@@ -499,6 +500,91 @@ const runTests = async () => {
         .set("Authorization", `Bearer ${adminAToken}`)
         .send({ permissions: ["dashboard.view"] })
       assert.strictEqual(adminACrossIdRes.status, 404)
+    })
+
+    await check("Scenario 11: Multi-workspace tenant enforces Read-Only Support Mode when active_tenant_id cookie present, and permits Role updates after Exit Support Mode", async () => {
+      const mwAdminId = new mongoose.Types.ObjectId()
+      await Account.create({
+        accountId: TENANT_MW,
+        companyName: `MultiWorkspace ${TEST_TAG}`,
+        displayName: "MultiWorkspace Tenant",
+        adminName: "Admin MW",
+        adminEmail: `admin_mw_${TEST_TAG}@test.local`,
+        adminUserId: mwAdminId,
+        status: "active",
+        workspaceModeEnabled: true,
+      })
+
+      const mwRolesRes = await request(app)
+        .get(`/api/roles?tenantId=${TENANT_MW}`)
+        .set("Authorization", `Bearer ${superToken}`)
+      assert.strictEqual(mwRolesRes.status, 200)
+      const mwManagerRole = mwRolesRes.body.data.roles.find((r) => r.slug === "manager")
+      assert(mwManagerRole, "Manager role seeded for multi-workspace tenant")
+      const originalMwManagerPerms = [...mwManagerRole.permissions]
+
+      // 1. Enter support mode via switch-tenant
+      const enterSupportRes = await request(app)
+        .post("/api/super-admin/switch-tenant")
+        .set("Authorization", `Bearer ${superToken}`)
+        .send({ tenantId: TENANT_MW })
+      assert.strictEqual(enterSupportRes.status, 200)
+
+      // 2. While active_tenant_id cookie is set, mutating role is strictly blocked (403 SUPERADMIN_READONLY_SUPPORT_MODE)
+      const blockedRoleUpdateRes = await request(app)
+        .put(`/api/roles/${mwManagerRole.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("Cookie", `active_tenant_id=${TENANT_MW}`)
+        .send({
+          tenantId: TENANT_MW,
+          permissions: originalMwManagerPerms.filter((p) => p !== "reports.view"),
+        })
+      assert.strictEqual(blockedRoleUpdateRes.status, 403)
+      assert.strictEqual(blockedRoleUpdateRes.body.code, "SUPERADMIN_READONLY_SUPPORT_MODE")
+
+      // 3. Exit support mode via switch-tenant { tenantId: null }
+      const exitSupportRes = await request(app)
+        .post("/api/super-admin/switch-tenant")
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("Cookie", `active_tenant_id=${TENANT_MW}`)
+        .send({ tenantId: null })
+      assert.strictEqual(exitSupportRes.status, 200)
+      const clearedCookieHeader = (exitSupportRes.headers["set-cookie"] || []).join("; ")
+      assert(clearedCookieHeader.includes("active_tenant_id=;"), "switch-tenant(null) must clear active_tenant_id cookie")
+
+      // 4. Outside support mode, authorized Super Admin updates multi-workspace role -> 200 OK & persisted
+      const targetMwPerms = originalMwManagerPerms.filter((p) => p !== "reports.view")
+      const allowedRoleUpdateRes = await request(app)
+        .put(`/api/roles/${mwManagerRole.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .send({
+          tenantId: TENANT_MW,
+          permissions: targetMwPerms,
+        })
+      assert.strictEqual(allowedRoleUpdateRes.status, 200)
+      assert.deepStrictEqual(allowedRoleUpdateRes.body.data.permissions.sort(), [...targetMwPerms].sort())
+
+      // 5. Verify DB & reload persistence
+      const dbMwManager = await Role.findById(mwManagerRole.id).setOptions({ skipTenantFilter: true }).lean()
+      assert.deepStrictEqual(dbMwManager.permissions.sort(), [...targetMwPerms].sort())
+
+      invalidateTenantRoleCache(TENANT_MW)
+      await ensureTenantRoles(TENANT_MW)
+      const reloadMwRes = await request(app)
+        .get(`/api/roles?tenantId=${TENANT_MW}`)
+        .set("Authorization", `Bearer ${superToken}`)
+      assert.strictEqual(reloadMwRes.status, 200)
+      const reloadedMwManager = reloadMwRes.body.data.roles.find((r) => r.slug === "manager")
+      assert.deepStrictEqual(reloadedMwManager.permissions.sort(), [...targetMwPerms].sort())
+
+      // 6. Read-only guard remains strictly enforced on other organization mutations even outside support mode
+      const leadCreateBlockedRes = await request(app)
+        .post("/api/leads")
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_MW)
+        .send({ name: "Forbidden SuperAdmin Lead", email: `forbidden_sa_${TEST_TAG}@test.local` })
+      assert.strictEqual(leadCreateBlockedRes.status, 403)
+      assert.strictEqual(leadCreateBlockedRes.body.code, "SUPERADMIN_READONLY_SUPPORT_MODE")
     })
 
     console.log("\n=====================================================================")

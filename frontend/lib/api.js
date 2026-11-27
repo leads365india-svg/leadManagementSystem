@@ -46,8 +46,8 @@ class ApiClient {
           }
         }
 
-        // Attach active workspace header ONLY if it belongs to the current active session tenant
-        if (!precomputedHeaders["x-workspace-id"] && !precomputedHeaders["X-Workspace-Id"]) {
+        // Attach active workspace header ONLY if it belongs to the current active session tenant and is not skipped
+        if (!options.skipWorkspaceHeader && !precomputedHeaders["x-workspace-id"] && !precomputedHeaders["X-Workspace-Id"]) {
           const activeWsTenant = localStorage.getItem("leadflow_active_workspace_tenant") || ""
           const effectiveTenant = precomputedHeaders["x-tenant-id"] || sessionTenant
           let activeWs = null
@@ -103,11 +103,12 @@ class ApiClient {
         headers["x-auth-portal"] = "super_admin"
       }
 
+      const { skipWorkspaceHeader: _skipWs, ...fetchOptions } = options
       const config = {
         method,
         credentials: "include",
         headers,
-        ...options,
+        ...fetchOptions,
       }
 
       try {
@@ -822,7 +823,7 @@ class ApiClient {
     const explicitTenant = typeof query?.tenantId === "string" ? query.tenantId.trim() : ""
     return this.request(`/roles${queryString ? `?${queryString}` : ""}`, {
       cache: "no-store",
-      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+      ...(explicitTenant ? { skipWorkspaceHeader: true, headers: { "x-tenant-id": explicitTenant } } : {}),
     })
   }
 
@@ -835,7 +836,7 @@ class ApiClient {
     const qs = explicitTenant ? `?tenantId=${encodeURIComponent(explicitTenant)}` : ""
     return this.request(`/roles/${id}${qs}`, {
       cache: "no-store",
-      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+      ...(explicitTenant ? { skipWorkspaceHeader: true, headers: { "x-tenant-id": explicitTenant } } : {}),
     })
   }
 
@@ -843,7 +844,7 @@ class ApiClient {
     const explicitTenant = typeof payload?.tenantId === "string" ? payload.tenantId.trim() : ""
     return this.request("/roles", {
       method: "POST",
-      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+      ...(explicitTenant ? { skipWorkspaceHeader: true, headers: { "x-tenant-id": explicitTenant } } : {}),
       body: JSON.stringify(payload),
     })
   }
@@ -852,7 +853,7 @@ class ApiClient {
     const explicitTenant = typeof payload?.tenantId === "string" ? payload.tenantId.trim() : ""
     return this.request(`/roles/${id}`, {
       method: "PUT",
-      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+      ...(explicitTenant ? { skipWorkspaceHeader: true, headers: { "x-tenant-id": explicitTenant } } : {}),
       body: JSON.stringify(payload),
     })
   }
@@ -862,7 +863,7 @@ class ApiClient {
     const qs = explicitTenant ? `?tenantId=${encodeURIComponent(explicitTenant)}` : ""
     return this.request(`/roles/${id}${qs}`, {
       method: "DELETE",
-      ...(explicitTenant ? { headers: { "x-tenant-id": explicitTenant } } : {}),
+      ...(explicitTenant ? { skipWorkspaceHeader: true, headers: { "x-tenant-id": explicitTenant } } : {}),
     })
   }
 
