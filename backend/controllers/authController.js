@@ -662,7 +662,7 @@ const getMe = async (req, res) => {
         ? "Leads Account Admin"
         : req.user.role === "super_admin"
           ? "Super Admin"
-          : req.user.role
+          : req.user.roleName || req.user.role
 
     res.status(200).json({
       success: true,

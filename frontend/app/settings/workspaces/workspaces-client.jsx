@@ -663,9 +663,9 @@ export default function WorkspacesClient() {
 
       {/* Create / Edit Workspace Modal */}
       {(showCreateModal || editingWorkspace) && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-900 text-base">
                 {editingWorkspace ? `Edit Workspace: ${editingWorkspace.name}` : "Create New Workspace"}
               </h3>
@@ -680,7 +680,7 @@ export default function WorkspacesClient() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveWorkspace} className="p-5 space-y-4">
+            <form onSubmit={handleSaveWorkspace} className="p-4 sm:p-5 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Workspace Name *</label>
                 <input
@@ -728,7 +728,7 @@ export default function WorkspacesClient() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Brand Color</label>
                   <div className="flex items-center space-x-2">
@@ -918,9 +918,9 @@ export default function WorkspacesClient() {
 
       {/* Workspace Custom Domain Modal */}
       {managingDomainWs && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-lg max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
                   <Globe className="w-4 h-4" />

@@ -344,7 +344,7 @@ function CallReportsClient() {
             </p>
           </div>
 
-          <div className="flex items-center space-x-2.5">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
             <button
               type="button"
               onClick={() => {
@@ -372,17 +372,17 @@ function CallReportsClient() {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-slate-200 space-x-8 text-sm font-semibold">
+      <div className="flex border-b border-slate-200 gap-4 sm:gap-8 overflow-x-auto no-scrollbar whitespace-nowrap text-sm font-semibold">
         <button
           type="button"
           onClick={() => setActiveTab("logs")}
-          className={`pb-3 border-b-2 flex items-center space-x-2 transition cursor-pointer ${
+          className={`pb-3 border-b-2 flex items-center space-x-2 transition cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "logs"
               ? "border-indigo-600 text-indigo-600"
               : "border-transparent text-slate-500 hover:text-slate-800"
           }`}
         >
-          <BarChart3 className="w-4 h-4" />
+          <BarChart3 className="w-4 h-4 shrink-0" />
           <span>Call Logs & Metrics</span>
           <span className="px-2 py-0.5 rounded-full text-xs bg-indigo-50 text-indigo-700 font-bold">
             {totalCount}
@@ -392,13 +392,13 @@ function CallReportsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("devices")}
-          className={`pb-3 border-b-2 flex items-center space-x-2 transition cursor-pointer ${
+          className={`pb-3 border-b-2 flex items-center space-x-2 transition cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "devices"
               ? "border-indigo-600 text-indigo-600"
               : "border-transparent text-slate-500 hover:text-slate-800"
           }`}
         >
-          <Smartphone className="w-4 h-4" />
+          <Smartphone className="w-4 h-4 shrink-0" />
           <span>Mobile Devices</span>
           <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600 font-bold">
             {devices.length}
@@ -410,9 +410,9 @@ function CallReportsClient() {
       {activeTab === "logs" && (
         <div className="space-y-6">
           {/* Key Metrics Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
             {/* Total Calls */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
+            <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2 min-w-0">
               <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
                 <span>Total Calls</span>
                 <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
@@ -430,14 +430,14 @@ function CallReportsClient() {
             </div>
 
             {/* Total Duration */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
+            <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2 min-w-0">
               <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
                 <span>Total Duration</span>
                 <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
                   <Clock className="w-4 h-4" />
                 </div>
               </div>
-              <div className="text-2xl font-black text-slate-900">
+              <div className="text-xl sm:text-2xl font-black text-slate-900">
                 {loadingMetrics ? "—" : formatDuration(metrics.totalDurationSeconds)}
               </div>
               <div className="text-xs text-slate-500 font-medium">
@@ -446,14 +446,14 @@ function CallReportsClient() {
             </div>
 
             {/* Connect Rate */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
+            <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2 min-w-0">
               <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
                 <span>Connect Rate</span>
                 <div className="p-2 rounded-xl bg-amber-50 text-amber-600">
                   <Activity className="w-4 h-4" />
                 </div>
               </div>
-              <div className="text-2xl font-black text-slate-900">
+              <div className="text-xl sm:text-2xl font-black text-slate-900">
                 {loadingMetrics ? "—" : `${metrics.connectRate}%`}
               </div>
               <div className="text-xs text-slate-500 font-medium">
@@ -462,14 +462,14 @@ function CallReportsClient() {
             </div>
 
             {/* Lead Telephony Health */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
+            <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2 min-w-0">
               <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
                 <span>Top Disposition</span>
                 <div className="p-2 rounded-xl bg-purple-50 text-purple-600">
                   <CheckCircle2 className="w-4 h-4" />
                 </div>
               </div>
-              <div className="text-2xl font-black text-slate-900 truncate">
+              <div className="text-xl sm:text-2xl font-black text-slate-900 truncate">
                 {loadingMetrics
                   ? "—"
                   : metrics.byDisposition?.[0]?._id || "Interested"}
@@ -484,7 +484,7 @@ function CallReportsClient() {
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               {/* Search */}
-              <div className="relative flex-1 max-w-md">
+              <div className="relative w-full md:flex-1 md:max-w-md">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -496,7 +496,7 @@ function CallReportsClient() {
               </div>
 
               {/* Filters */}
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full md:w-auto">
                 {/* Date Range */}
                 <select
                   value={dateRange}
@@ -774,7 +774,7 @@ function CallReportsClient() {
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
+              <div className="px-4 sm:px-5 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                 <span>
                   Showing page <strong className="text-slate-800">{page}</strong> of{" "}
                   <strong className="text-slate-800">{totalPages}</strong>
@@ -817,7 +817,8 @@ function CallReportsClient() {
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-            <table className="w-full text-left text-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
               <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                 <tr>
                   <th className="px-5 py-3.5">Device Label & Model</th>
@@ -901,15 +902,16 @@ function CallReportsClient() {
                   })
                 )}
               </tbody>
-            </table>
+              </table>
+            </div>
           </div>
         </div>
       )}
 
       {/* MODAL: LOG CALL */}
       {showLogCallModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 space-y-4 animate-in fade-in duration-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-slate-900 flex items-center gap-2 text-sm">
                 <PhoneCall className="w-4 h-4 text-indigo-600" />
@@ -939,7 +941,7 @@ function CallReportsClient() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">Direction</label>
                   <select
@@ -964,7 +966,7 @@ function CallReportsClient() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">Status</label>
                   <select
@@ -1029,8 +1031,8 @@ function CallReportsClient() {
 
       {/* MODAL: EDIT CALL */}
       {editingCall && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 space-y-4 animate-in fade-in duration-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-slate-900 flex items-center gap-2 text-sm">
                 <Edit2 className="w-4 h-4 text-indigo-600" />
@@ -1113,7 +1115,7 @@ function CallReportsClient() {
 
       {/* In-Browser Streaming Audio Player Dock */}
       {activePlayingCall && (
-        <div className="fixed bottom-6 right-6 z-50 w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
+        <div className="fixed bottom-20 lg:bottom-6 inset-x-3 sm:left-auto sm:right-6 z-40 sm:w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
           <InBrowserAudioPlayer
             callId={activePlayingCall._id || activePlayingCall.id}
             recording={activePlayingCall.recording}

@@ -1417,7 +1417,7 @@ export default function RolesPermissionsPage() {
                             </td>
                             <td className="py-3 px-4">
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                {st.role}
+                                {(tenantRoles.find((r) => r.slug === st.role)?.name) || st.role}
                               </span>
                             </td>
                             <td className="py-3 px-4">

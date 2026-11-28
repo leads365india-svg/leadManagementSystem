@@ -233,7 +233,7 @@ function LeadFormContent() {
     <>
       <Breadcrumb items={breadcrumbItems} />
       <div className="min-h-screen bg-slate-50/70 pb-12 pt-4">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6">
+        <div className="max-w-3xl mx-auto px-3 sm:px-6">
           {/* Back link */}
           <div className="mb-4">
             <Link
@@ -286,7 +286,7 @@ function LeadFormContent() {
 
           {/* Main Form Card */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-            <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-slate-50 to-indigo-50/20">
+            <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-slate-50 to-indigo-50/20">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
                   <UserPlus className="w-5 h-5" />
@@ -302,7 +302,7 @@ function LeadFormContent() {
               </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* 1. Full Name */}
                 <div className="sm:col-span-2">
@@ -534,7 +534,7 @@ function LeadFormContent() {
               </div>
 
               {/* Form Action Buttons */}
-              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-100">
+              <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 pt-4 border-t border-slate-100">
                 <Link
                   href="/leads"
                   className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer"

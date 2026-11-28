@@ -76,7 +76,7 @@ export default function PortalNewLeadPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in duration-300">
+    <div className="max-w-2xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-6 animate-in fade-in duration-300">
       {/* Top back link */}
       <div>
         <Link
@@ -90,7 +90,7 @@ export default function PortalNewLeadPage() {
 
       {/* Main Form Card */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-slate-50 to-indigo-50/20">
+        <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-slate-50 to-indigo-50/20">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
               <UserPlus className="w-5 h-5" />
@@ -104,7 +104,7 @@ export default function PortalNewLeadPage() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5">
           {error && (
             <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start space-x-2.5">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
@@ -178,7 +178,7 @@ export default function PortalNewLeadPage() {
           </div>
 
           {/* Action Buttons */}
-          <div className="pt-4 border-t border-slate-100 flex items-center justify-end space-x-3">
+          <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-end gap-2 sm:gap-3">
             <Link
               href="/portal/leads"
               className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"

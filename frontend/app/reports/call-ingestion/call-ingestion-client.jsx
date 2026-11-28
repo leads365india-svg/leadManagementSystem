@@ -325,91 +325,91 @@ export default function CallIngestionClient() {
       </div>
 
       {/* Main Content Area */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 mt-4 sm:mt-6">
         {/* KPI Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Manual Calls</p>
-              <h3 className="text-2xl font-bold text-slate-900 mt-1">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2 min-w-0">
+            <div className="min-w-0">
+              <p className="text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">Total Manual Calls</p>
+              <h3 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">
                 {loadingStats ? <RefreshCw className="w-5 h-5 animate-spin text-slate-400" /> : stats.totalManual}
               </h3>
             </div>
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
-              <UploadCloud className="w-6 h-6" />
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
+              <UploadCloud className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Matched to Leads</p>
-              <h3 className="text-2xl font-bold text-emerald-600 mt-1">
+          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2 min-w-0">
+            <div className="min-w-0">
+              <p className="text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">Matched to Leads</p>
+              <h3 className="text-xl sm:text-2xl font-bold text-emerald-600 mt-1">
                 {loadingStats ? <RefreshCw className="w-5 h-5 animate-spin text-slate-400" /> : stats.matched}
               </h3>
             </div>
-            <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center">
-              <CheckCircle2 className="w-6 h-6" />
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Review Queue</p>
-              <h3 className="text-2xl font-bold text-amber-600 mt-1">
+          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2 min-w-0">
+            <div className="min-w-0">
+              <p className="text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">Review Queue</p>
+              <h3 className="text-xl sm:text-2xl font-bold text-amber-600 mt-1">
                 {loadingStats ? <RefreshCw className="w-5 h-5 animate-spin text-slate-400" /> : stats.unmatched}
               </h3>
             </div>
-            <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center">
-              <HelpCircle className="w-6 h-6" />
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
+              <HelpCircle className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Recordings Stored</p>
-              <h3 className="text-2xl font-bold text-indigo-600 mt-1">
+          <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2 min-w-0">
+            <div className="min-w-0">
+              <p className="text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">Recordings Stored</p>
+              <h3 className="text-xl sm:text-2xl font-bold text-indigo-600 mt-1">
                 {loadingStats ? <RefreshCw className="w-5 h-5 animate-spin text-slate-400" /> : stats.withRecording}
               </h3>
             </div>
-            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
-              <Music className="w-6 h-6" />
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0">
+              <Music className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
           </div>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200 mb-6 bg-white rounded-t-xl px-4 pt-2">
+        <div className="flex border-b border-slate-200 mb-6 bg-white rounded-t-xl px-3 sm:px-4 pt-2 overflow-x-auto no-scrollbar whitespace-nowrap">
           <button
             onClick={() => setActiveTab("audio")}
-            className={`py-3 px-4 font-semibold text-sm flex items-center gap-2 border-b-2 transition ${
+            className={`py-3 px-4 font-semibold text-sm flex items-center gap-2 border-b-2 transition whitespace-nowrap shrink-0 ${
               activeTab === "audio"
                 ? "border-indigo-600 text-indigo-600"
                 : "border-transparent text-slate-600 hover:text-slate-900"
             }`}
           >
-            <FileAudio className="w-4 h-4" />
+            <FileAudio className="w-4 h-4 shrink-0" />
             Audio Recording Upload
           </button>
           <button
             onClick={() => setActiveTab("csv")}
-            className={`py-3 px-4 font-semibold text-sm flex items-center gap-2 border-b-2 transition ${
+            className={`py-3 px-4 font-semibold text-sm flex items-center gap-2 border-b-2 transition whitespace-nowrap shrink-0 ${
               activeTab === "csv"
                 ? "border-indigo-600 text-indigo-600"
                 : "border-transparent text-slate-600 hover:text-slate-900"
             }`}
           >
-            <FileSpreadsheet className="w-4 h-4" />
+            <FileSpreadsheet className="w-4 h-4 shrink-0" />
             CSV Call Records Batch
           </button>
           <button
             onClick={() => setActiveTab("review")}
-            className={`py-3 px-4 font-semibold text-sm flex items-center gap-2 border-b-2 transition ${
+            className={`py-3 px-4 font-semibold text-sm flex items-center gap-2 border-b-2 transition whitespace-nowrap shrink-0 ${
               activeTab === "review"
                 ? "border-indigo-600 text-indigo-600"
                 : "border-transparent text-slate-600 hover:text-slate-900"
             }`}
           >
-            <HelpCircle className="w-4 h-4" />
+            <HelpCircle className="w-4 h-4 shrink-0" />
             Review Queue
             {stats.unmatched > 0 && (
               <span className="ml-1.5 px-2 py-0.5 text-xs font-bold bg-amber-100 text-amber-800 rounded-full">
@@ -893,8 +893,8 @@ export default function CallIngestionClient() {
 
       {/* RESOLUTION / MATCH MODAL */}
       {selectedCallForMatch && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
                 <User className="w-5 h-5 text-indigo-600" />

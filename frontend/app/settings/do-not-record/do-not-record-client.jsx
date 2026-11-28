@@ -121,16 +121,16 @@ export default function DoNotRecordClient() {
   const tagRulesCount = rules.filter((r) => r.type === "tag").length
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 md:p-8 space-y-6">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-3 sm:p-6 md:p-8 space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-xl">
+            <div className="p-2.5 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-xl shrink-0">
               <ShieldAlert className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
                 Do-Not-Record & Privacy Controls
               </h1>
               <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -140,7 +140,7 @@ export default function DoNotRecordClient() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             onClick={fetchRules}
             disabled={loading}
@@ -366,8 +366,8 @@ export default function DoNotRecordClient() {
 
       {/* Add Rule Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 bg-rose-500/10 text-rose-600 rounded-xl">

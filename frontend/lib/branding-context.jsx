@@ -52,12 +52,13 @@ export function BrandingProvider({ children }) {
       document.documentElement.style.setProperty("--brand-primary", brandData.primaryColor)
     }
 
-    // 3. Update favicon if custom logo URL is present
+    // 3. Update custom tenant favicon without mutating Next-managed icon links
     if (brandData.logoUrl) {
-      let iconLink = document.querySelector("link[rel*='icon']")
+      let iconLink = document.querySelector("link[data-tenant-favicon='true']")
       if (!iconLink) {
         iconLink = document.createElement("link")
-        iconLink.rel = "shortcut icon"
+        iconLink.rel = "icon"
+        iconLink.setAttribute("data-tenant-favicon", "true")
         document.head.appendChild(iconLink)
       }
       iconLink.href = brandData.logoUrl
@@ -162,6 +163,13 @@ export function BrandingProvider({ children }) {
     resolveDomainBranding()
   }, [resolveDomainBranding])
 
+  // Apply resolved branding side-effects cleanly after commit
+  useEffect(() => {
+    if (branding?.accountId || branding?.logoUrl || branding?.isWhiteLabel || branding?.primaryColor !== DEFAULT_BRANDING.primaryColor) {
+      applyBrandingToDOM(branding)
+    }
+  }, [branding, applyBrandingToDOM])
+
   // Synchronize branding with authenticated user account metadata
   // Strictly prohibits cross-tenant contamination: user session from Tenant A cannot override Tenant B domain branding
   useEffect(() => {
@@ -182,7 +190,7 @@ export function BrandingProvider({ children }) {
         if (isWhiteLabel && prev.accountId && acc.accountId && acc.accountId !== prev.accountId) {
           return prev
         }
-        const merged = {
+        return {
           ...prev,
           displayName: acc.displayName || acc.companyName || prev.displayName,
           companyName: acc.companyName || acc.displayName || prev.companyName,
@@ -194,11 +202,9 @@ export function BrandingProvider({ children }) {
           status: acc.status || prev.status,
           isWhiteLabel: prev.isWhiteLabel || Boolean(acc.customDomain),
         }
-        applyBrandingToDOM(merged)
-        return merged
       })
     }
-  }, [user, isWhiteLabel, branding?.accountId, applyBrandingToDOM])
+  }, [user, isWhiteLabel, branding?.accountId])
 
   const value = {
     branding,

@@ -209,6 +209,7 @@ const runTests = async () => {
     // Update users with their teamId
     await User.findByIdAndUpdate(managerAUser._id, { teamId: team1._id })
     await User.findByIdAndUpdate(agentAUser._id, { teamId: team1._id, managerId: managerAUser._id })
+    await User.findByIdAndUpdate(viewerAUser._id, { teamId: team1._id })
     await User.findByIdAndUpdate(agentBUser._id, { teamId: team2._id })
 
     // 5. Create Leads:
@@ -297,9 +298,12 @@ const runTests = async () => {
     const roleSlugs = resRoles.body.data.roles.map((r) => r.slug)
     assert(roleSlugs.includes("account_admin"), "Account Admin role exists")
     assert(roleSlugs.includes("manager"), "Manager role exists")
+    assert(roleSlugs.includes("sales_executive"), "Sales Executive role exists")
+    assert(roleSlugs.includes("telecaller"), "Telecaller role exists")
+    assert(roleSlugs.includes("marketing"), "Marketing role exists")
     assert(roleSlugs.includes("agent"), "Agent role exists")
     assert(roleSlugs.includes("viewer"), "Viewer role exists")
-    console.log("  ✅ PASS: Default system roles (Account Admin, Manager, Agent, Viewer) seeded properly")
+    console.log("  ✅ PASS: Default system roles (Account Admin, Manager, Sales Executive, Telecaller, Marketing, Agent, Viewer) seeded properly")
     passed++
 
     // Test 2: Role listing includes assigned staff counts
@@ -337,7 +341,7 @@ const runTests = async () => {
     console.log("  ✅ PASS: Agent B with 'own' scope sees only Bob's lead")
     passed++
 
-    // Test 5: Manager Mike (team scope for Team 1) queries list: sees Arthur's lead, but NOT Bob's lead (Team 2)
+    // Test 5: Manager Mike (all tenant scope) sees tenant leads across teams; Viewer Victor (team scope for Team 1) sees only Team 1 lead
     const resManagerLeads = await request(app)
       .get("/api/leads")
       .set("Cookie", managerAToken)
@@ -345,8 +349,17 @@ const runTests = async () => {
     assert.strictEqual(resManagerLeads.status, 200)
     const managerLeadIds = resManagerLeads.body.data.leads.map((l) => l.id)
     assert(managerLeadIds.includes(leadAgentA._id.toString()), "Manager sees Team 1 member lead")
-    assert(!managerLeadIds.includes(leadAgentB._id.toString()), "Manager CANNOT see Team 2 lead")
-    console.log("  ✅ PASS: Manager with 'team' scope sees only leads belonging to their team")
+    assert(managerLeadIds.includes(leadAgentB._id.toString()), "Manager sees Team 2 member lead under tenant .all scope")
+
+    const resTeamScopedLeads = await request(app)
+      .get("/api/leads")
+      .set("Cookie", viewerAToken)
+
+    assert.strictEqual(resTeamScopedLeads.status, 200)
+    const teamScopedLeadIds = resTeamScopedLeads.body.data.leads.map((l) => l.id)
+    assert(teamScopedLeadIds.includes(leadAgentA._id.toString()), "Team-scoped user sees Team 1 member lead")
+    assert(!teamScopedLeadIds.includes(leadAgentB._id.toString()), "Team-scoped user CANNOT see Team 2 lead")
+    console.log("  ✅ PASS: Manager (.all) sees all tenant leads while team-scoped Viewer sees only their team's leads")
     passed++
 
     // Test 6: Account Admin (all scope) queries list: sees both Arthur's and Bob's leads

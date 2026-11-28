@@ -586,7 +586,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
             <button
               type="button"
               onClick={() => setActiveTab("overview")}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition ${
                 activeTab === "overview"
                   ? "bg-indigo-600 text-white shadow-2xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -599,7 +599,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
             <button
               type="button"
               onClick={() => setActiveTab("scorecards")}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition ${
                 activeTab === "scorecards"
                   ? "bg-indigo-600 text-white shadow-2xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -612,7 +612,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
             <button
               type="button"
               onClick={() => setActiveTab("lead-priorities")}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition ${
                 activeTab === "lead-priorities"
                   ? "bg-indigo-600 text-white shadow-2xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -625,7 +625,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
             <button
               type="button"
               onClick={() => setActiveTab("recommendations")}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition ${
                 activeTab === "recommendations"
                   ? "bg-indigo-600 text-white shadow-2xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -634,7 +634,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
               <AlertCircle className="w-3.5 h-3.5" />
               Manager Alerts
               {activeRecsCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-500 text-white font-bold">
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-rose-500 text-white font-bold leading-none">
                   {activeRecsCount}
                 </span>
               )}
@@ -643,7 +643,7 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
             <button
               type="button"
               onClick={() => setActiveTab("coaching-reviews")}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition ${
                 activeTab === "coaching-reviews"
                   ? "bg-indigo-600 text-white shadow-2xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -1715,8 +1715,8 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       {/* MODAL: NEW COACHING REVIEW */}
       {/* ======================================================== */}
       {reviewModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-xl w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-xl w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Record 1-on-1 Coaching Session</h3>
               <button
@@ -1799,8 +1799,8 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       {/* MODAL: ACCEPT LEAD PRIORITY ACTION */}
       {/* ======================================================== */}
       {acceptModalItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Accept Recommendation</h3>
               <button
@@ -1856,8 +1856,8 @@ export default function AISalesIntelligenceClient({ initialTab } = {}) {
       {/* DRAWER / MODAL: CALL COACHING REPORT */}
       {/* ======================================================== */}
       {coachingModalCallId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-2xl w-full p-4 sm:p-6 space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-600" />

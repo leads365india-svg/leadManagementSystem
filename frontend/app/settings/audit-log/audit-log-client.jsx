@@ -254,17 +254,17 @@ export default function AuditLogClient() {
   }
 
   return (
-    <div className="w-full space-y-6 pb-12">
+    <div className="w-full px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-12">
       {/* Header Banner */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-xs">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center space-x-2.5">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
                 <History className="w-5 h-5" />
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight">Audit Log & Security Trail</h1>
+              <div className="min-w-0">
+                <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">Audit Log & Security Trail</h1>
                 <p className="text-xs text-slate-500 font-medium">
                   Append-only, immutable record of logins, staff changes, assignments, and API events.
                 </p>
@@ -272,7 +272,7 @@ export default function AuditLogClient() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2.5">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
             <button
               type="button"
               onClick={handleExportJson}
@@ -294,31 +294,31 @@ export default function AuditLogClient() {
         </div>
 
         {/* Metrics Overview Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mt-6 pt-5 border-t border-slate-100">
-          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5 sm:mt-6 pt-4 sm:pt-5 border-t border-slate-100">
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 sm:p-4 min-w-0">
             <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total Recorded Events</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{pagination.total.toLocaleString()}</p>
+            <p className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">{pagination.total.toLocaleString()}</p>
           </div>
-          <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5">
+          <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5 sm:p-4 min-w-0">
             <p className="text-[11px] font-semibold text-indigo-600 uppercase tracking-wider">Auth & Security</p>
-            <p className="text-2xl font-bold text-indigo-900 mt-1">{metrics.authEvents} <span className="text-xs font-normal text-indigo-500">visible</span></p>
+            <p className="text-xl sm:text-2xl font-bold text-indigo-900 mt-1">{metrics.authEvents} <span className="text-xs font-normal text-indigo-500">visible</span></p>
           </div>
-          <div className="bg-purple-50/50 border border-purple-100 rounded-xl p-3.5">
+          <div className="bg-purple-50/50 border border-purple-100 rounded-xl p-3.5 sm:p-4 min-w-0">
             <p className="text-[11px] font-semibold text-purple-600 uppercase tracking-wider">Staff & Roles</p>
-            <p className="text-2xl font-bold text-purple-900 mt-1">{metrics.staffEvents} <span className="text-xs font-normal text-purple-500">visible</span></p>
+            <p className="text-xl sm:text-2xl font-bold text-purple-900 mt-1">{metrics.staffEvents} <span className="text-xs font-normal text-purple-500">visible</span></p>
           </div>
-          <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-3.5">
+          <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-3.5 sm:p-4 min-w-0">
             <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider">Leads & Reassignments</p>
-            <p className="text-2xl font-bold text-amber-900 mt-1">{metrics.leadEvents} <span className="text-xs font-normal text-amber-500">visible</span></p>
+            <p className="text-xl sm:text-2xl font-bold text-amber-900 mt-1">{metrics.leadEvents} <span className="text-xs font-normal text-amber-500">visible</span></p>
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+      <div className="bg-white border border-slate-200 rounded-2xl p-3.5 sm:p-4 shadow-xs space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
           {/* Search Input */}
-          <div className="md:col-span-5 relative">
+          <div className="md:col-span-4 relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
@@ -330,7 +330,7 @@ export default function AuditLogClient() {
           </div>
 
           {/* Entity Filter */}
-          <div className="md:col-span-2.5">
+          <div className="md:col-span-3">
             <select
               value={selectedEntity}
               onChange={(e) => {
@@ -350,7 +350,7 @@ export default function AuditLogClient() {
           </div>
 
           {/* Action Filter */}
-          <div className="md:col-span-2.5">
+          <div className="md:col-span-3">
             <select
               value={selectedAction}
               onChange={(e) => {
@@ -539,15 +539,15 @@ export default function AuditLogClient() {
 
       {/* Audit Detail Modal / Drawer */}
       {selectedLog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
-              <div className="flex items-center space-x-2.5">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50/70">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${getActionBadge(selectedLog.action)}`}>
                   {selectedLog.action}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">ID: {selectedLog._id}</span>
+                <span className="text-xs text-slate-500 font-mono truncate">ID: {selectedLog._id}</span>
                 <button
                   type="button"
                   onClick={() => handleCopy(selectedLog._id, "id")}
@@ -560,14 +560,14 @@ export default function AuditLogClient() {
               <button
                 type="button"
                 onClick={() => setSelectedLog(null)}
-                className="w-7 h-7 rounded-lg hover:bg-slate-200/60 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+                className="w-7 h-7 rounded-lg hover:bg-slate-200/60 text-slate-500 flex items-center justify-center transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 overflow-y-auto space-y-5 text-xs text-slate-700">
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-5 text-xs text-slate-700">
               {/* Summary Statement */}
               <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3.5">
                 <p className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider mb-1">Event Summary</p>
@@ -575,7 +575,7 @@ export default function AuditLogClient() {
               </div>
 
               {/* 2-Column Metadata Grid */}
-              <div className="grid grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 space-y-1.5">
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Actor Identity</p>
                   <p className="font-bold text-slate-900">{selectedLog.actor?.name || "System"}</p>

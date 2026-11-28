@@ -1540,17 +1540,17 @@ export default function LeadFeedsClient() {
       </div>
 
       {/* Modern Platform Tab Navigation Selector */}
-      <div className="flex items-center space-x-2 border-b border-slate-200 overflow-x-auto pb-px">
+      <div className="flex items-center space-x-2 border-b border-slate-200 overflow-x-auto no-scrollbar pb-px">
         <button
           type="button"
           onClick={() => setActiveTab("overview")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "overview"
               ? "border-indigo-600 text-indigo-600 bg-indigo-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
-          <LayoutGrid className="w-4 h-4 text-indigo-600" />
+          <LayoutGrid className="w-4 h-4 text-indigo-600 shrink-0" />
           <span>Integration Studio</span>
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
             Overview
@@ -1560,13 +1560,13 @@ export default function LeadFeedsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("website")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "website"
               ? "border-indigo-600 text-indigo-600 bg-indigo-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
-          <Globe className="w-4 h-4" />
+          <Globe className="w-4 h-4 shrink-0" />
           <span>Website & Webhooks</span>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
             {enabled ? "Active" : "Disabled"}
@@ -1576,13 +1576,13 @@ export default function LeadFeedsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("indiamart")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "indiamart"
               ? "border-amber-600 text-amber-600 bg-amber-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
-          <Briefcase className="w-4 h-4 text-amber-600" />
+          <Briefcase className="w-4 h-4 text-amber-600 shrink-0" />
           <span>IndiaMART Lead Manager</span>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${indiamartData.configured ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
             {indiamartData.configured ? "Connected" : "Disconnected"}
@@ -1592,13 +1592,13 @@ export default function LeadFeedsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("meta")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "meta"
               ? "border-blue-600 text-blue-600 bg-blue-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
-          <Share2 className="w-4 h-4 text-blue-600" />
+          <Share2 className="w-4 h-4 text-blue-600 shrink-0" />
           <span>Meta Lead Ads (FB & IG)</span>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${metaData.configured ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
             {metaData.configured ? "Connected" : "Disconnected"}
@@ -1608,13 +1608,13 @@ export default function LeadFeedsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("google")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "google"
               ? "border-emerald-600 text-emerald-600 bg-emerald-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
-          <Code2 className="w-4 h-4 text-emerald-600" />
+          <Code2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>Google Lead Forms (Google Ads)</span>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${googleData.configured ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
             {googleData.configured ? "Active" : "Disconnected"}
@@ -1624,13 +1624,13 @@ export default function LeadFeedsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("generic")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "generic"
               ? "border-violet-600 text-violet-600 bg-violet-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
           }`}
         >
-          <Sparkles className="w-4 h-4 text-violet-600" />
+          <Sparkles className="w-4 h-4 text-violet-600 shrink-0" />
           <span>Zapier, Make & n8n</span>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${genericData.status === "active" ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}`}>
             {genericData.status === "active" ? "Active" : "Disabled"}
@@ -1640,7 +1640,7 @@ export default function LeadFeedsClient() {
         <button
           type="button"
           onClick={() => setActiveTab("events")}
-          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+          className={`flex items-center space-x-2 py-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === "events"
               ? "border-purple-600 text-purple-600 bg-purple-50/40 rounded-t-lg"
               : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
@@ -1704,8 +1704,8 @@ export default function LeadFeedsClient() {
           )}
 
           {/* Global Ingestion KPI Summary Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="bg-white rounded-xl border border-slate-200 p-3.5 sm:p-4 shadow-sm min-w-0">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Monitored Channels</span>
                 <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
@@ -2386,7 +2386,7 @@ export default function LeadFeedsClient() {
             </div>
 
             {/* Platform Filter Tabs */}
-            <div className="flex items-center gap-2 pt-4 overflow-x-auto pb-1">
+            <div className="flex items-center gap-2 pt-4 overflow-x-auto no-scrollbar pb-1">
               {[
                 { id: "all", label: "All Integrations", count: websiteIntegrations.length },
                 { id: "wordpress", label: "WordPress", count: websiteIntegrations.filter((i) => i.type === "wordpress").length },
@@ -2400,7 +2400,7 @@ export default function LeadFeedsClient() {
                   key={filter.id}
                   type="button"
                   onClick={() => setSelectedPlatformFilter(filter.id)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     selectedPlatformFilter === filter.id
                       ? "bg-slate-900 text-white font-semibold"
                       : "bg-slate-100 hover:bg-slate-200 text-slate-700"
@@ -5339,7 +5339,7 @@ export default function LeadFeedsClient() {
             </div>
 
             {/* Platform Selector Tabs inside Snippets Modal */}
-            <div className="flex items-center gap-1.5 pt-4 pb-2 border-b border-slate-100 overflow-x-auto">
+            <div className="flex items-center gap-1.5 pt-4 pb-2 border-b border-slate-100 overflow-x-auto no-scrollbar">
               {[
                 { id: "universal", label: "Universal Form SDK (Recommended)" },
                 { id: "wordpress", label: "WordPress" },
@@ -5353,7 +5353,7 @@ export default function LeadFeedsClient() {
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveSnippetTab(tab.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                     activeSnippetTab === tab.id
                       ? "bg-indigo-600 text-white"
                       : "bg-slate-100 hover:bg-slate-200 text-slate-700"
@@ -5586,7 +5586,7 @@ export default function LeadFeedsClient() {
 
                       <div className="space-y-2">
                         <div className="font-bold text-slate-900">1. .env.local Configuration</div>
-                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px]">
+                        <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
                           {integrationSnippets.nextjs?.envExample}
                         </pre>
                       </div>
@@ -5740,8 +5740,9 @@ export default function LeadFeedsClient() {
               </div>
 
               {/* Table / Row mapping manager */}
-              <div className="space-y-2">
-                <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">
+              <div className="overflow-x-auto">
+                <div className="space-y-2 min-w-[620px]">
+                  <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">
                   <div className="col-span-3">Website Form Field</div>
                   <div className="col-span-1 text-center"></div>
                   <div className="col-span-3">CRM Target Field</div>
@@ -5872,9 +5873,10 @@ export default function LeadFeedsClient() {
                     </div>
                   </div>
                 ))}
+                </div>
               </div>
 
-              <div className="flex items-center justify-between pt-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => {

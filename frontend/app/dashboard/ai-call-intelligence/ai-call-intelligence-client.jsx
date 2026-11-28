@@ -671,11 +671,11 @@ export default function AICallIntelligenceClient() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 mt-4 sm:mt-6 space-y-6">
         {/* 2. Top Metric KPI Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
           {/* Card 1: Eligible Recorded Calls */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-4 shadow-2xs min-w-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-500">Recorded Calls</span>
               <span className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
@@ -692,7 +692,7 @@ export default function AICallIntelligenceClient() {
           </div>
 
           {/* Card 2: Analyzed Calls */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-4 shadow-2xs min-w-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-500">Analyzed Calls</span>
               <span className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
@@ -700,7 +700,7 @@ export default function AICallIntelligenceClient() {
               </span>
             </div>
             <div className="mt-3 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-slate-900">
+              <span className="text-xl sm:text-2xl font-bold text-slate-900">
                 {loadingMetrics ? "..." : metrics.analyzedCalls}
               </span>
               <span className="text-[11px] font-semibold text-emerald-600">
@@ -711,7 +711,7 @@ export default function AICallIntelligenceClient() {
           </div>
 
           {/* Card 3: In-Progress */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-4 shadow-2xs min-w-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-500">Processing</span>
               <span className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
@@ -719,7 +719,7 @@ export default function AICallIntelligenceClient() {
               </span>
             </div>
             <div className="mt-3 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-slate-900">
+              <span className="text-xl sm:text-2xl font-bold text-slate-900">
                 {loadingMetrics ? "..." : metrics.processingCalls}
               </span>
               <span className="text-[11px] text-slate-400 font-medium">Active</span>
@@ -728,7 +728,7 @@ export default function AICallIntelligenceClient() {
           </div>
 
           {/* Card 4: Failed */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-4 shadow-2xs min-w-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-500">Failed</span>
               <span className="p-1.5 rounded-lg bg-rose-50 text-rose-600">
@@ -736,7 +736,7 @@ export default function AICallIntelligenceClient() {
               </span>
             </div>
             <div className="mt-3 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-slate-900">
+              <span className="text-xl sm:text-2xl font-bold text-slate-900">
                 {loadingMetrics ? "..." : metrics.failedCalls}
               </span>
               <span className="text-[11px] text-slate-400 font-medium">Retryable</span>
@@ -745,7 +745,7 @@ export default function AICallIntelligenceClient() {
           </div>
 
           {/* Card 5: Audio Duration */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs col-span-2 md:col-span-1">
+          <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-4 shadow-2xs col-span-2 md:col-span-3 lg:col-span-1 min-w-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-500">Audio Processed</span>
               <span className="p-1.5 rounded-lg bg-violet-50 text-violet-600">
@@ -762,7 +762,7 @@ export default function AICallIntelligenceClient() {
         </div>
 
         {/* 3. Analytics Distribution Section */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Outcome Distribution */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs">
             <div className="flex items-center justify-between mb-4">
@@ -888,8 +888,8 @@ export default function AICallIntelligenceClient() {
         {/* 4. Analyzed Calls Table & Filters */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
           {/* Filter Bar */}
-          <div className="p-4 border-b border-slate-200 bg-slate-50/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex-1 relative max-w-md">
+          <div className="p-3.5 sm:p-4 border-b border-slate-200 bg-slate-50/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="w-full md:flex-1 relative md:max-w-md">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -1209,24 +1209,24 @@ export default function AICallIntelligenceClient() {
         <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/50 backdrop-blur-xs flex justify-end transition-opacity">
           <div className="w-full max-w-3xl bg-white h-full shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
             {/* Drawer Header */}
-            <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs shrink-0">
                   <Sparkles className="w-5 h-5" />
                 </span>
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <div className="min-w-0">
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900 flex flex-wrap items-center gap-2">
                     <span>Call Intelligence Report</span>
                     {detailData.status?.overallStatus && getStatusBadge(detailData.status.overallStatus)}
                   </h2>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-500 truncate">
                     {detailData.call?.customerNumber || "Customer"} &bull; {detailData.call?.agentId?.name || "Agent"} &bull;{" "}
                     {detailData.call?.startedAt ? new Date(detailData.call.startedAt).toLocaleString() : ""}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {isAdmin && selectedCallId && (detailData.analysis || (detailData.status?.overallStatus && detailData.status?.overallStatus !== "NOT_ANALYZED")) && (
                   <button
                     type="button"
@@ -1269,7 +1269,7 @@ export default function AICallIntelligenceClient() {
 
             {/* Audio Streaming Bar */}
             {selectedCallId && (
-              <div className="bg-slate-900 text-white px-6 py-3 flex items-center justify-between gap-4 border-b border-slate-800">
+              <div className="bg-slate-900 text-white px-4 sm:px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
@@ -1295,7 +1295,7 @@ export default function AICallIntelligenceClient() {
                   </div>
                 </div>
 
-                <div className="flex-1 max-w-xs mx-4">
+                <div className="w-full sm:flex-1 sm:max-w-xs sm:mx-4">
                   <input
                     type="range"
                     min="0"
@@ -1318,11 +1318,11 @@ export default function AICallIntelligenceClient() {
             )}
 
             {/* Drawer Tabs */}
-            <div className="flex border-b border-slate-200 bg-white px-6">
+            <div className="flex border-b border-slate-200 bg-white px-3 sm:px-6 overflow-x-auto no-scrollbar whitespace-nowrap">
               <button
                 type="button"
                 onClick={() => setDrawerTab("summary")}
-                className={`py-3 px-4 text-xs font-semibold border-b-2 transition ${
+                className={`py-3 px-4 text-xs font-semibold border-b-2 transition whitespace-nowrap shrink-0 ${
                   drawerTab === "summary"
                     ? "border-indigo-600 text-indigo-600"
                     : "border-transparent text-slate-500 hover:text-slate-700"
@@ -1333,7 +1333,7 @@ export default function AICallIntelligenceClient() {
               <button
                 type="button"
                 onClick={() => setDrawerTab("transcript")}
-                className={`py-3 px-4 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 ${
+                className={`py-3 px-4 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                   drawerTab === "transcript"
                     ? "border-indigo-600 text-indigo-600"
                     : "border-transparent text-slate-500 hover:text-slate-700"
@@ -1341,7 +1341,7 @@ export default function AICallIntelligenceClient() {
               >
                 <span>Full Transcript</span>
                 {detailData.transcript?.segments?.length > 0 && (
-                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600">
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 leading-none">
                     {detailData.transcript.segments.length}
                   </span>
                 )}
@@ -1349,7 +1349,7 @@ export default function AICallIntelligenceClient() {
               <button
                 type="button"
                 onClick={() => setDrawerTab("topics")}
-                className={`py-3 px-4 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 ${
+                className={`py-3 px-4 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                   drawerTab === "topics"
                     ? "border-indigo-600 text-indigo-600"
                     : "border-transparent text-slate-500 hover:text-slate-700"
@@ -1357,7 +1357,7 @@ export default function AICallIntelligenceClient() {
               >
                 <span>Matched Approved Topics</span>
                 {detailData.analysis?.topicMatches?.length > 0 && (
-                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-violet-100 text-violet-700 font-bold">
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-violet-100 text-violet-700 font-bold leading-none">
                     {detailData.analysis.topicMatches.length}
                   </span>
                 )}
@@ -1365,7 +1365,7 @@ export default function AICallIntelligenceClient() {
               <button
                 type="button"
                 onClick={() => setDrawerTab("usage")}
-                className={`py-3 px-4 text-xs font-semibold border-b-2 transition ${
+                className={`py-3 px-4 text-xs font-semibold border-b-2 transition whitespace-nowrap shrink-0 ${
                   drawerTab === "usage"
                     ? "border-indigo-600 text-indigo-600"
                     : "border-transparent text-slate-500 hover:text-slate-700"
@@ -1376,7 +1376,7 @@ export default function AICallIntelligenceClient() {
             </div>
 
             {/* Drawer Body Content */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 sm:space-y-6">
               {loadingDetail ? (
                 <div className="py-20 text-center text-slate-400 space-y-2">
                   <RefreshCw className="w-8 h-8 animate-spin mx-auto text-indigo-600" />
@@ -1769,7 +1769,7 @@ export default function AICallIntelligenceClient() {
                           <Shield className="w-3.5 h-3.5 text-indigo-600" />
                           Processing &amp; Usage Ledger
                         </h4>
-                        <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                           <div>
                             <span className="text-slate-400">Speech-to-Text Provider:</span>
                             <p className="font-semibold text-slate-800 capitalize">
@@ -1823,8 +1823,8 @@ export default function AICallIntelligenceClient() {
 
       {/* Delete AI Call Intelligence Report Confirmation Modal */}
       {deleteModalOpen && reportToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md p-6 space-y-5 animate-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-5 animate-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3.5">
               <div className="p-3 bg-rose-100 text-rose-600 rounded-xl shrink-0">
                 <Trash2 className="w-6 h-6" />

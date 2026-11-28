@@ -321,7 +321,7 @@ export default function RolesClient() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             onClick={fetchData}
             title="Refresh Role Definitions"
@@ -355,8 +355,8 @@ export default function RolesClient() {
       )}
 
       {/* KPI Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3.5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3 min-w-0">
           <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
             <Shield className="w-5 h-5" />
           </div>
@@ -398,8 +398,8 @@ export default function RolesClient() {
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="p-4 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
+      <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="relative w-full md:flex-1 md:max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -410,12 +410,12 @@ export default function RolesClient() {
           />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-slate-500">Filter:</span>
-          <div className="flex items-center p-1 bg-slate-100 dark:bg-slate-900 rounded-xl text-xs font-medium">
+          <div className="flex items-center p-1 bg-slate-100 dark:bg-slate-900 rounded-xl text-xs font-medium overflow-x-auto no-scrollbar max-w-full">
             <button
               onClick={() => setTypeFilter("all")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
+              className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 typeFilter === "all"
                   ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs font-semibold"
                   : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
@@ -425,7 +425,7 @@ export default function RolesClient() {
             </button>
             <button
               onClick={() => setTypeFilter("system")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
+              className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 typeFilter === "system"
                   ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs font-semibold"
                   : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
@@ -435,7 +435,7 @@ export default function RolesClient() {
             </button>
             <button
               onClick={() => setTypeFilter("custom")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
+              className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 typeFilter === "custom"
                   ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs font-semibold"
                   : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
@@ -612,11 +612,11 @@ export default function RolesClient() {
 
       {/* MODAL 1: Configure Permissions & Scopes Drawer */}
       {isPermModalOpen && activeRole && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-slate-850 rounded-2xl max-w-3xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-850 rounded-2xl max-w-3xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90dvh]">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 <span className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
                   <ShieldCheck className="w-5 h-5" />
                 </span>
@@ -645,7 +645,7 @@ export default function RolesClient() {
             </div>
 
             {/* Modal Body: Scopes & Module Permissions */}
-            <div className="p-6 overflow-y-auto space-y-6 flex-1">
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-5 sm:space-y-6 flex-1">
               {/* Account Admin notice */}
               {activeRole.slug === "account_admin" && (
                 <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200 flex items-start gap-3">
@@ -869,9 +869,9 @@ export default function RolesClient() {
 
       {/* MODAL 2: Create Custom Role */}
       {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-slate-850 rounded-2xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-850 rounded-2xl max-w-lg w-full max-h-[90dvh] overflow-y-auto border border-slate-200 dark:border-slate-800 shadow-2xl">
+            <div className="px-4 sm:px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <span className="p-2 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400">
                   <Plus className="w-5 h-5" />
@@ -886,7 +886,7 @@ export default function RolesClient() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateRole} className="p-6 space-y-4">
+            <form onSubmit={handleCreateRole} className="p-4 sm:p-6 space-y-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Role Name <span className="text-rose-500">*</span>
@@ -940,7 +940,7 @@ export default function RolesClient() {
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Initial Permissions Template
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {[
                     { id: "agent", label: "Agent Baseline", desc: "Own-scoped leads & calls" },
                     { id: "manager", label: "Manager Baseline", desc: "Team-scoped leads & stats" },
@@ -988,8 +988,8 @@ export default function RolesClient() {
 
       {/* MODAL 3: Delete Role Confirmation */}
       {isDeleteModalOpen && roleToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-slate-850 rounded-2xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-850 rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto border border-slate-200 dark:border-slate-800 shadow-2xl p-4 sm:p-6 space-y-4">
             <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400">
               <span className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60">
                 <Trash2 className="w-6 h-6" />

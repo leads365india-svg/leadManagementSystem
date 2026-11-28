@@ -30,6 +30,7 @@ const TEST_TAG = `role_persist_${Date.now()}`
 const TENANT_A = `ACC-RPT-A-${Date.now()}`
 const TENANT_B = `ACC-RPT-B-${Date.now()}`
 const TENANT_MW = `ACC-RPT-MW-${Date.now()}`
+const createdExtraTenantIds = []
 
 const cleanupData = async (originalCeiling) => {
   try {
@@ -43,16 +44,19 @@ const cleanupData = async (originalCeiling) => {
       invalidateTenantRoleCache()
     }
 
-    await Lead.deleteMany({ tenantId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } }).setOptions({ skipTenantFilter: true })
-    await AuditLog.collection.deleteMany({ tenantId: { $regex: /^ACC-RPT-/ } })
-    await Role.deleteMany({ tenantId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } }).setOptions({ skipTenantFilter: true })
+    const allTestTenants = Array.from(new Set([TENANT_A, TENANT_B, TENANT_MW, ...createdExtraTenantIds]))
+    await Lead.deleteMany({ tenantId: { $in: allTestTenants } }).setOptions({ skipTenantFilter: true })
+    await AuditLog.collection.deleteMany({
+      $or: [{ tenantId: { $regex: /^ACC-RPT-/ } }, { tenantId: { $in: createdExtraTenantIds } }],
+    })
+    await Role.deleteMany({ tenantId: { $in: allTestTenants } }).setOptions({ skipTenantFilter: true })
     await User.deleteMany({
       $or: [
-        { tenantId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } },
+        { tenantId: { $in: allTestTenants } },
         { email: { $regex: TEST_TAG } },
       ],
     })
-    await Account.deleteMany({ accountId: { $in: [TENANT_A, TENANT_B, TENANT_MW] } })
+    await Account.deleteMany({ accountId: { $in: allTestTenants } })
   } catch (err) {
     console.warn("Cleanup warning:", err.message)
   }
@@ -813,6 +817,280 @@ const runTests = async () => {
       assert.strictEqual(reloadSingleRes.status, 200)
       assert.strictEqual(reloadSingleRes.body.data.permissions.length, 21)
       assert.deepStrictEqual([...reloadSingleRes.body.data.permissions].sort(), [...exact21Permissions].sort())
+    })
+
+    await check("Scenario 15: Newly created tenant via POST /api/accounts auto-provisions Manager, Sales Executive, Telecaller, Marketing + preserves existing customizations on ensureTenantRoles", async () => {
+      const createAccRes = await request(app)
+        .post("/api/super-admin/accounts")
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-auth-portal", "super_admin")
+        .send({
+          companyName: `Provisioned Co ${TEST_TAG}`,
+          displayName: `Provisioned Co`,
+          adminName: "Provisioned Admin",
+          adminEmail: `prov_admin_${TEST_TAG}@test.local`,
+          password: "Password123!",
+        })
+      assert.strictEqual(createAccRes.status, 201, `Account create failed: ${JSON.stringify(createAccRes.body)}`)
+      const provisionedTenantId = createAccRes.body.data.account.accountId
+      createdExtraTenantIds.push(provisionedTenantId)
+
+      const provRolesRes = await request(app)
+        .get(`/api/roles?tenantId=${provisionedTenantId}`)
+        .set("Authorization", `Bearer ${superToken}`)
+      assert.strictEqual(provRolesRes.status, 200)
+      const provRoles = provRolesRes.body.data.roles
+      const bySlug = new Map(provRoles.map((r) => [r.slug, r]))
+
+      for (const slug of ["account_admin", "manager", "sales_executive", "telecaller", "marketing"]) {
+        assert(bySlug.has(slug), `Newly created tenant must have '${slug}' role provisioned`)
+      }
+
+      assert.deepStrictEqual(
+        [...bySlug.get("sales_executive").permissions].sort(),
+        [
+          "calls.log",
+          "calls.view.own",
+          "dashboard.view",
+          "followups.manage.own",
+          "followups.view.own",
+          "leads.create",
+          "leads.edit.own",
+          "leads.view.own",
+        ],
+      )
+      assert.deepStrictEqual(
+        [...bySlug.get("telecaller").permissions].sort(),
+        [
+          "calls.log",
+          "calls.view.own",
+          "dashboard.view",
+          "followups.manage.own",
+          "followups.view.own",
+          "leads.create",
+          "leads.edit.own",
+          "leads.view.own",
+          "recordings.listen",
+        ],
+      )
+      assert.deepStrictEqual(
+        [...bySlug.get("marketing").permissions].sort(),
+        [
+          "dashboard.view",
+          "followups.manage.own",
+          "followups.view.own",
+          "leads.create",
+          "leads.edit.own",
+          "leads.export",
+          "leads.view.team",
+          "reports.view",
+        ],
+      )
+      assert(bySlug.get("manager").permissions.includes("leads.view.all"))
+      assert(bySlug.get("manager").permissions.includes("leads.edit.all"))
+      assert(bySlug.get("manager").permissions.includes("leads.assign"))
+      assert(!bySlug.get("manager").permissions.includes("settings.manage"))
+      assert(!bySlug.get("manager").permissions.includes("integrations.manage"))
+      assert(!bySlug.get("manager").permissions.includes("roles.manage"))
+      assert(!bySlug.get("manager").permissions.includes("staff.manage"))
+
+      // Simulate partially seeded existing tenant (missing telecaller & marketing, customized sales_executive)
+      const salesExecRole = bySlug.get("sales_executive")
+      const customSalesPerms = ["dashboard.view", "leads.view.own"]
+      await Role.findByIdAndUpdate(salesExecRole.id, {
+        permissions: customSalesPerms,
+        isCustomized: true,
+      }).setOptions({ skipTenantFilter: true })
+      await Role.deleteMany({
+        tenantId: provisionedTenantId,
+        slug: { $in: ["telecaller", "marketing"] },
+      }).setOptions({ skipTenantFilter: true })
+
+      const reseeded = await ensureTenantRoles(provisionedTenantId)
+      const reseededMap = new Map(reseeded.map((r) => [r.slug, r]))
+      assert(reseededMap.has("telecaller"), "Missing telecaller role must be backfilled")
+      assert(reseededMap.has("marketing"), "Missing marketing role must be backfilled")
+      assert.deepStrictEqual(
+        [...reseededMap.get("sales_executive").permissions].sort(),
+        [...customSalesPerms].sort(),
+        "Customized sales_executive permissions must NEVER be overwritten",
+      )
+      // Also confirm Tenant A & Tenant B remain untouched and isolated
+      const tenantBRolesAfter = await ensureTenantRoles(TENANT_B)
+      const tenantBSalesExec = tenantBRolesAfter.find((r) => r.slug === "sales_executive")
+      assert(tenantBSalesExec && tenantBSalesExec.permissions.includes("leads.create"), "Other tenant roles remain untouched")
+
+      // Test ceiling capping during backfill: tighten ceiling temporarily for a fresh tenant
+      const restrictedTenantId = `ACC-RPT-CAP-${Date.now()}`
+      createdExtraTenantIds.push(restrictedTenantId)
+      const prevCeiling = await RolePermission.findOne({ targetRole: "account_admin" }).lean()
+      await RolePermission.findOneAndUpdate(
+        { targetRole: "account_admin" },
+        { permissions: ["dashboard.view", "leads.view.own", "leads.create"], updatedBy: "test_cap" },
+      )
+      invalidatePermissionCache()
+      const cappedRoles = await ensureTenantRoles(restrictedTenantId)
+      const cappedSalesExec = cappedRoles.find((r) => r.slug === "sales_executive")
+      assert(cappedSalesExec, "Capped tenant receives sales_executive")
+      assert(!cappedSalesExec.permissions.includes("leads.edit.own"), "Capped seed omits permissions excluded from ceiling")
+      assert(!cappedSalesExec.permissions.includes("calls.log"), "Capped seed omits calls.log excluded from ceiling")
+      await RolePermission.findOneAndUpdate(
+        { targetRole: "account_admin" },
+        { permissions: prevCeiling.permissions, updatedBy: prevCeiling.updatedBy || "test_restore" },
+      )
+      invalidatePermissionCache()
+    })
+
+    await check("Scenario 16: Staff creation/update + login + runtime scope enforcement for Manager, Sales Executive, Telecaller & Marketing", async () => {
+      const staffPassword = "StaffPassword123!"
+      const createStaffRole = async (name, emailPrefix, roleSlug) => {
+        const res = await request(app)
+          .post("/api/staff")
+          .set("Authorization", `Bearer ${superToken}`)
+          .send({
+            tenantId: TENANT_A,
+            name,
+            email: `${emailPrefix}_${TEST_TAG}@test.local`,
+            role: roleSlug,
+            password: staffPassword,
+          })
+        assert.strictEqual(res.status, 201, `Failed creating ${roleSlug} staff: ${JSON.stringify(res.body)}`)
+        assert.strictEqual(res.body.data.staff.role, roleSlug)
+        return res.body.data.staff
+      }
+
+      const mgrStaff = await createStaffRole("TenantA Manager", "mgr_new", "manager")
+      const execStaff = await createStaffRole("TenantA SalesExec", "exec_new", "sales_executive")
+      const teleStaff = await createStaffRole("TenantA Telecaller", "tele_new", "telecaller")
+      const mktStaff = await createStaffRole("TenantA Marketing", "mkt_new", "marketing")
+
+      // Verify updateStaff handles updating role slug cleanly & populates roleId
+      const updateToTele = await request(app)
+        .put(`/api/staff/${mktStaff.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_A)
+        .send({ role: "marketing" })
+      assert.strictEqual(updateToTele.status, 200)
+
+      const mktUserDoc = await User.findById(mktStaff.id).lean()
+      assert(mktUserDoc.roleId, "Updated/created staff must have roleId linked to Role document")
+
+      const loginStaff = async (emailPrefix, expectedRole, expectedTitle) => {
+        const loginRes = await request(app)
+          .post("/api/auth/login")
+          .send({ email: `${emailPrefix}_${TEST_TAG}@test.local`, password: staffPassword })
+        assert.strictEqual(loginRes.status, 200, `Login failed for ${expectedRole}: ${JSON.stringify(loginRes.body)}`)
+        assert.strictEqual(loginRes.body.data.user.role, expectedRole)
+        assert.strictEqual(loginRes.body.data.user.roleTitle, expectedTitle)
+
+        const cookies = loginRes.headers["set-cookie"] || []
+        const cookieStr = Array.isArray(cookies) ? cookies.map((c) => c.split(";")[0]).join("; ") : ""
+        const meRes = await request(app).get("/api/auth/me").set("Cookie", cookieStr)
+        assert.strictEqual(meRes.status, 200)
+        assert.strictEqual(meRes.body.data.user.role, expectedRole)
+        assert.strictEqual(meRes.body.data.user.roleTitle, expectedTitle)
+        return cookieStr
+      }
+
+      const mgrCookie = await loginStaff("mgr_new", "manager", "Manager")
+      const execCookie = await loginStaff("exec_new", "sales_executive", "Sales Executive")
+      const teleCookie = await loginStaff("tele_new", "telecaller", "Telecaller")
+      const mktCookie = await loginStaff("mkt_new", "marketing", "Marketing")
+
+      // Seed leads owned by SalesExec and Telecaller separately
+      const execLead = await Lead.create({
+        tenantId: TENANT_A,
+        name: `Exec Own Lead ${TEST_TAG}`,
+        email: `exec_lead_${TEST_TAG}@test.local`,
+        phone: "+919900001111",
+        ownerId: execStaff.id,
+        assignedStaffId: execStaff.id,
+        assignedTo: execStaff.name,
+        status: "New",
+      })
+      const teleLead = await Lead.create({
+        tenantId: TENANT_A,
+        name: `Tele Own Lead ${TEST_TAG}`,
+        email: `tele_lead_${TEST_TAG}@test.local`,
+        phone: "+919900002222",
+        ownerId: teleStaff.id,
+        assignedStaffId: teleStaff.id,
+        assignedTo: teleStaff.name,
+        status: "New",
+      })
+
+      // Sales Executive sees ONLY own lead, blocked on Telecaller lead / assign / delete / audit / settings / integrations
+      const execList = await request(app).get("/api/leads").set("Cookie", execCookie)
+      assert.strictEqual(execList.status, 200)
+      const execLeadIds = execList.body.data.leads.map((l) => l.id || l._id)
+      assert(execLeadIds.includes(execLead._id.toString()), "Sales Executive must see own lead")
+      assert(!execLeadIds.includes(teleLead._id.toString()), "Sales Executive must NOT see other user's lead")
+      assert.strictEqual((await request(app).get(`/api/leads/${teleLead._id}`).set("Cookie", execCookie)).status, 403)
+      assert.strictEqual(
+        (await request(app).patch(`/api/leads/${execLead._id}/assign`).set("Cookie", execCookie).send({ targetOwnerId: teleStaff.id })).status,
+        403,
+      )
+      assert.strictEqual((await request(app).delete(`/api/leads/${execLead._id}`).set("Cookie", execCookie)).status, 403)
+      assert.strictEqual((await request(app).get("/api/audit-logs").set("Cookie", execCookie)).status, 403)
+      assert.strictEqual((await request(app).post("/api/custom-fields").set("Cookie", execCookie).send({ name: "X" })).status, 403)
+      assert.strictEqual((await request(app).post("/api/integrations").set("Cookie", execCookie).send({ name: "X" })).status, 403)
+      assert.strictEqual((await request(app).post("/api/roles").set("Cookie", execCookie).send({ name: "X" })).status, 403)
+
+      // Telecaller sees ONLY own lead, blocked from assign / delete / audit / settings / integrations
+      const teleList = await request(app).get("/api/leads").set("Cookie", teleCookie)
+      assert.strictEqual(teleList.status, 200)
+      const teleLeadIds = teleList.body.data.leads.map((l) => l.id || l._id)
+      assert(teleLeadIds.includes(teleLead._id.toString()), "Telecaller must see own lead")
+      assert(!teleLeadIds.includes(execLead._id.toString()), "Telecaller must NOT see other user's lead")
+      assert.strictEqual((await request(app).patch(`/api/leads/${teleLead._id}/assign`).set("Cookie", teleCookie).send({ targetOwnerId: execStaff.id })).status, 403)
+      assert.strictEqual((await request(app).delete(`/api/leads/${teleLead._id}`).set("Cookie", teleCookie)).status, 403)
+      assert.strictEqual((await request(app).post("/api/integrations").set("Cookie", teleCookie).send({ name: "X" })).status, 403)
+
+      // Marketing can access lead import config (200), blocked from delete / assign / roles / integrations / settings
+      assert.strictEqual((await request(app).get("/api/leads/import/config").set("Cookie", mktCookie)).status, 200)
+      assert.strictEqual((await request(app).delete(`/api/leads/${execLead._id}`).set("Cookie", mktCookie)).status, 403)
+      assert.strictEqual((await request(app).patch(`/api/leads/${execLead._id}/assign`).set("Cookie", mktCookie).send({ targetOwnerId: mktStaff.id })).status, 403)
+      assert.strictEqual((await request(app).post("/api/roles").set("Cookie", mktCookie).send({ name: "X" })).status, 403)
+      assert.strictEqual((await request(app).post("/api/integrations").set("Cookie", mktCookie).send({ name: "X" })).status, 403)
+      assert.strictEqual((await request(app).post("/api/custom-fields").set("Cookie", mktCookie).send({ name: "X" })).status, 403)
+
+      // Manager sees ALL tenant leads, can assign leads, view staff & audit-logs, and is STILL blocked from settings/integrations/roles admin
+      const mgrList = await request(app).get("/api/leads").set("Cookie", mgrCookie)
+      assert.strictEqual(mgrList.status, 200)
+      const mgrLeadIds = mgrList.body.data.leads.map((l) => l.id || l._id)
+      assert(mgrLeadIds.includes(execLead._id.toString()), "Manager must see SalesExec lead")
+      assert(mgrLeadIds.includes(teleLead._id.toString()), "Manager must see Telecaller lead")
+      const assignRes = await request(app)
+        .patch(`/api/leads/${teleLead._id}/assign`)
+        .set("Cookie", mgrCookie)
+        .send({ targetOwnerId: execStaff.id, reason: "Manager reassignment" })
+      assert.strictEqual(assignRes.status, 200, `Manager lead assign failed: ${JSON.stringify(assignRes.body)}`)
+      assert.strictEqual((await request(app).get("/api/staff").set("Cookie", mgrCookie)).status, 200)
+      assert.strictEqual((await request(app).get("/api/audit-logs").set("Cookie", mgrCookie)).status, 200)
+      assert.strictEqual((await request(app).post("/api/integrations").set("Cookie", mgrCookie).send({ name: "X" })).status, 403)
+      assert.strictEqual((await request(app).post("/api/custom-fields").set("Cookie", mgrCookie).send({ name: "X" })).status, 403)
+      assert.strictEqual((await request(app).post("/api/roles").set("Cookie", mgrCookie).send({ name: "X" })).status, 403)
+
+      // Customizing Tenant A's Sales Executive role persists across ensureTenantRoles and does not affect Tenant B
+      const rolesARes = await request(app).get(`/api/roles?tenantId=${TENANT_A}`).set("Authorization", `Bearer ${superToken}`)
+      const salesExecRoleA = rolesARes.body.data.roles.find((r) => r.slug === "sales_executive")
+      const customPerms = ["dashboard.view", "leads.view.own", "leads.edit.own"]
+      const patchExecA = await request(app)
+        .put(`/api/roles/${salesExecRoleA.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_A)
+        .send({ tenantId: TENANT_A, permissions: customPerms })
+      assert.strictEqual(patchExecA.status, 200)
+      assert.strictEqual(patchExecA.body.data.isCustomized, true)
+
+      await ensureTenantRoles(TENANT_A)
+      invalidateTenantRoleCache(TENANT_A)
+      const reloadExecA = await Role.findById(salesExecRoleA.id).setOptions({ skipTenantFilter: true }).lean()
+      assert.deepStrictEqual([...reloadExecA.permissions].sort(), [...customPerms].sort())
+
+      const rolesB = await ensureTenantRoles(TENANT_B)
+      const salesExecRoleB = rolesB.find((r) => r.slug === "sales_executive")
+      assert(salesExecRoleB.permissions.includes("calls.log"), "Tenant B Sales Executive keeps default calls.log")
     })
 
     console.log("\n=====================================================================")

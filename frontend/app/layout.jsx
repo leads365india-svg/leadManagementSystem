@@ -1,6 +1,7 @@
 import { Inter } from "next/font/google"
+import Script from "next/script"
 import "./globals.css"
-import Header, { CrmMainWrapper } from "@/components/header"
+import Header, { CrmMainWrapper, CrmShellProvider } from "@/components/header"
 import Footer from "@/components/footer"
 import { Toaster } from "react-hot-toast"
 import { AuthProvider } from "@/lib/auth-context"
@@ -20,58 +21,57 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if (typeof window !== 'undefined') {
-                var autoReloadOnChunkError = function() {
-                  try {
-                    var k = '__chunk_retry_ts';
-                    var last = sessionStorage.getItem(k);
-                    var now = Date.now();
-                    if (!last || now - parseInt(last, 10) > 4000) {
-                      sessionStorage.setItem(k, now.toString());
-                      window.location.reload();
-                    }
-                  } catch(err) {
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased max-w-full overflow-x-hidden`}>
+        <Script id="chunk-error-recovery" strategy="beforeInteractive">
+          {`
+            if (typeof window !== 'undefined') {
+              var autoReloadOnChunkError = function() {
+                try {
+                  var k = '__chunk_retry_ts';
+                  var last = sessionStorage.getItem(k);
+                  var now = Date.now();
+                  if (!last || now - parseInt(last, 10) > 4000) {
+                    sessionStorage.setItem(k, now.toString());
                     window.location.reload();
                   }
-                };
-                window.addEventListener('unhandledrejection', function(event) {
-                  var reason = event && event.reason;
-                  var msg = ((reason && (reason.message || reason.name)) || '') + '';
-                  if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1 || msg.indexOf('timeout') !== -1) {
-                    if (event.preventDefault) event.preventDefault();
-                    autoReloadOnChunkError();
-                  }
-                });
-                window.addEventListener('error', function(e) {
-                  var msg = (e && (e.message || (e.error && (e.error.message || e.error.name)))) || '';
-                  var target = e && e.target;
-                  var isChunkScript = target && target.tagName === 'SCRIPT' && target.src && target.src.indexOf('/_next/static/chunks/') !== -1;
-                  if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1 || isChunkScript) {
-                    autoReloadOnChunkError();
-                  }
-                }, true);
-              }
-            `,
-          }}
-        />
-      </head>
-      <body className={`${inter.className} min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased max-w-full overflow-x-hidden`}>
+                } catch(err) {
+                  window.location.reload();
+                }
+              };
+              window.addEventListener('unhandledrejection', function(event) {
+                var reason = event && event.reason;
+                var msg = ((reason && (reason.message || reason.name)) || '') + '';
+                if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1 || msg.indexOf('timeout') !== -1) {
+                  if (event.preventDefault) event.preventDefault();
+                  autoReloadOnChunkError();
+                }
+              });
+              window.addEventListener('error', function(e) {
+                var msg = (e && (e.message || (e.error && (e.error.message || e.error.name)))) || '';
+                var target = e && e.target;
+                var isChunkScript = target && target.tagName === 'SCRIPT' && target.src && target.src.indexOf('/_next/static/chunks/') !== -1;
+                if (msg.indexOf('ChunkLoadError') !== -1 || msg.indexOf('Loading chunk') !== -1 || isChunkScript) {
+                  autoReloadOnChunkError();
+                }
+              }, true);
+            }
+          `}
+        </Script>
         <AuthProvider>
           <BrandingProvider>
-            <Header />
-            <CrmMainWrapper>
-              <AuthGuard>{children}</AuthGuard>
-            </CrmMainWrapper>
-            <Footer />
+            <CrmShellProvider>
+              <Header />
+              <CrmMainWrapper>
+                <AuthGuard>{children}</AuthGuard>
+              </CrmMainWrapper>
+              <Footer />
+            </CrmShellProvider>
           </BrandingProvider>
         </AuthProvider>
         <Toaster
-          position="top-right"
+          position="bottom-right"
+          containerClassName="!bottom-20 lg:!bottom-4"
           toastOptions={{
             duration: 4000,
             style: {

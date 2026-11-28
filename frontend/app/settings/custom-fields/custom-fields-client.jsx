@@ -323,14 +323,14 @@ export default function CustomFieldsClient() {
   }, [fields])
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-3 sm:p-6 max-w-7xl mx-auto space-y-6">
       {/* =========================================================================
           PAGE HEADER
       ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-2xl font-bold text-slate-900">Custom Fields Builder</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Custom Fields Builder</h1>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
               Phase 5 Active
             </span>
@@ -340,7 +340,7 @@ export default function CustomFieldsClient() {
           </p>
         </div>
 
-        <div className="flex items-center space-x-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
             onClick={fetchFields}
@@ -365,28 +365,28 @@ export default function CustomFieldsClient() {
       {/* =========================================================================
           STATISTICS OVERVIEW CARDS
       ========================================================================= */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="p-3.5 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1 min-w-0">
           <span className="text-xs font-medium text-slate-500">Active Custom Fields</span>
-          <div className="text-2xl font-extrabold text-slate-900">{stats.active}</div>
+          <div className="text-xl sm:text-2xl font-extrabold text-slate-900">{stats.active}</div>
           <span className="text-[11px] text-emerald-600 font-medium">Tenant partitioned</span>
         </div>
 
-        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+        <div className="p-3.5 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1 min-w-0">
           <span className="text-xs font-medium text-slate-500">Mandatory Rules</span>
-          <div className="text-2xl font-extrabold text-indigo-600">{stats.required}</div>
+          <div className="text-xl sm:text-2xl font-extrabold text-indigo-600">{stats.required}</div>
           <span className="text-[11px] text-slate-400">Strict form validation</span>
         </div>
 
-        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+        <div className="p-3.5 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1 min-w-0">
           <span className="text-xs font-medium text-slate-500">Dropdown Choices</span>
-          <div className="text-2xl font-extrabold text-purple-600">{stats.dropdowns}</div>
+          <div className="text-xl sm:text-2xl font-extrabold text-purple-600">{stats.dropdowns}</div>
           <span className="text-[11px] text-slate-400">Configured options</span>
         </div>
 
-        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+        <div className="p-3.5 sm:p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1 min-w-0">
           <span className="text-xs font-medium text-slate-500">Integration Readiness</span>
-          <div className="text-2xl font-extrabold text-emerald-600">100%</div>
+          <div className="text-xl sm:text-2xl font-extrabold text-emerald-600">100%</div>
           <span className="text-[11px] text-slate-400">Mappable in Studio</span>
         </div>
       </div>
@@ -395,7 +395,7 @@ export default function CustomFieldsClient() {
           FILTER & SEARCH TOOLBAR
       ========================================================================= */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
-        <div className="relative flex-1 max-w-md">
+        <div className="relative w-full md:flex-1 md:max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -597,10 +597,10 @@ export default function CustomFieldsClient() {
           CREATE / EDIT MODAL
       ========================================================================= */}
       {showModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
             {/* Modal Header */}
-            <div className="p-5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold">
                   <Sliders className="w-4 h-4" />
@@ -678,7 +678,7 @@ export default function CustomFieldsClient() {
                 <label className="font-semibold text-slate-700 block">
                   Field Type <span className="text-rose-500">*</span>
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {Object.entries(FIELD_TYPE_CONFIG).map(([k, cfg]) => {
                     const Icon = cfg.icon
                     const isSelected = formData.type === k
@@ -845,8 +845,8 @@ export default function CustomFieldsClient() {
           SAFE ARCHIVE CONFIRMATION MODAL
       ========================================================================= */}
       {fieldToArchive && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
               <Archive className="w-6 h-6" />
             </div>

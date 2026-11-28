@@ -269,7 +269,7 @@ export default function FollowUpAlertManager() {
     <div
       role="region"
       aria-label="Follow-up alerts"
-      className="fixed top-16 lg:top-4 right-3 sm:right-6 md:right-8 z-[9999] flex flex-col space-y-3 max-w-sm sm:max-w-md w-[calc(100vw-1.5rem)] sm:w-full pointer-events-none max-h-[calc(100vh-5rem)] overflow-y-auto px-1 sm:px-0"
+      className="fixed top-16 right-3 sm:right-6 md:right-8 z-[9999] flex flex-col space-y-3 max-w-sm sm:max-w-md w-[calc(100vw-1.5rem)] sm:w-full pointer-events-none max-h-[calc(100dvh-9rem)] lg:max-h-[calc(100dvh-5rem)] overflow-y-auto px-1 sm:px-0"
     >
       {activeAlerts.map(({ task, scheduleKey, alertType, title, subtitle }) => {
         const taskId = task.id || task._id

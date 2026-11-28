@@ -17,6 +17,23 @@ const { getEffectiveTenant, runWithTenantContext } = require("../middleware/tena
  * reset password, team assignment, and seat limit verification.
  */
 
+const DEFAULT_ALLOWED_ROLE_SLUGS = [
+  "account_admin",
+  "manager",
+  "sales_executive",
+  "telecaller",
+  "marketing",
+  "agent",
+  "viewer",
+]
+
+const toWorkspaceMembershipRole = (staffRole) => {
+  if (staffRole === "account_admin" || staffRole === "workspace_admin") return "workspace_admin"
+  if (staffRole === "manager") return "manager"
+  if (staffRole === "viewer") return "viewer"
+  return "agent"
+}
+
 // Helper to escape regex special characters
 const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -206,30 +223,26 @@ const createStaff = async (req, res) => {
       return res.status(400).json({ success: false, error: "Valid email address is required" })
     }
 
+    const requestedRole = typeof role === "string" && role.trim() ? role.trim().toLowerCase() : "agent"
     const explicitBodyTenant =
       isSuperAdmin && typeof req.body?.tenantId === "string" && req.body.tenantId.trim()
         ? req.body.tenantId.trim()
         : null
     const targetTenantId = explicitBodyTenant || tenantId || req.body.tenantId
-    const tenantRoles = targetTenantId
-      ? await Role.find({ tenantId: targetTenantId }).setOptions({ skipTenantFilter: true }).lean()
-      : []
+    const tenantRoles = targetTenantId ? await Role.ensureTenantRoles(targetTenantId) : []
     const allowedRoleSlugs = new Set([
-      "manager",
-      "agent",
-      "account_admin",
-      "viewer",
+      ...DEFAULT_ALLOWED_ROLE_SLUGS,
       ...tenantRoles.map((r) => r.slug),
     ])
 
-    if (!allowedRoleSlugs.has(role)) {
+    if (!allowedRoleSlugs.has(requestedRole)) {
       return res.status(400).json({
         success: false,
-        error: `Invalid role '${role}'. Allowed roles: ${Array.from(allowedRoleSlugs).join(", ")}`,
+        error: `Invalid role '${requestedRole}'. Allowed roles: ${Array.from(allowedRoleSlugs).join(", ")}`,
       })
     }
 
-    const matchedRole = tenantRoles.find((r) => r.slug === role)
+    const matchedRole = tenantRoles.find((r) => r.slug === requestedRole)
     const roleIdToAssign = matchedRole ? matchedRole._id : null
 
     const cleanEmail = email.toLowerCase().trim()
@@ -283,7 +296,7 @@ const createStaff = async (req, res) => {
       email: cleanEmail,
       phone: phone ? phone.trim() : "",
       contactNumber: phone ? phone.trim() : "",
-      role,
+      role: requestedRole,
       roleId: roleIdToAssign,
       tenantId: targetTenantId,
       teamId: teamId || null,
@@ -313,7 +326,13 @@ const createStaff = async (req, res) => {
         const WorkspaceMembership = require("../models/WorkspaceMembership")
         await WorkspaceMembership.findOneAndUpdate(
           { tenantId: targetTenantId, workspaceId: effectiveWorkspaceId, userId: newStaff._id },
-          { $setOnInsert: { status: "active", role: newStaff.role, createdAt: new Date() } },
+          {
+            $setOnInsert: {
+              status: "active",
+              role: toWorkspaceMembershipRole(newStaff.role),
+              createdAt: new Date(),
+            },
+          },
           { upsert: true, new: true }
         )
       } catch (wsErr) {
@@ -471,20 +490,24 @@ const updateStaff = async (req, res) => {
       staff.contactNumber = staff.phone
     }
     const targetTenant = staff.tenantId || tenantId
-    const tenantRoles = targetTenant ? await Role.find({ tenantId: targetTenant }).lean() : []
+    const tenantRoles = targetTenant ? await Role.ensureTenantRoles(targetTenant) : []
     const allowedRoleSlugs = new Set([
-      "manager",
-      "agent",
-      "account_admin",
-      "viewer",
+      ...DEFAULT_ALLOWED_ROLE_SLUGS,
       ...tenantRoles.map((r) => r.slug),
     ])
 
     const previousRole = staff.role
-    if (role && allowedRoleSlugs.has(role)) {
-      if (role !== staff.role) {
-        staff.role = role
-        const matchedRole = tenantRoles.find((r) => r.slug === role)
+    const requestedRole = typeof role === "string" && role.trim() ? role.trim().toLowerCase() : ""
+    if (role !== undefined && role !== null && requestedRole) {
+      if (!allowedRoleSlugs.has(requestedRole)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid role '${requestedRole}'. Allowed roles: ${Array.from(allowedRoleSlugs).join(", ")}`,
+        })
+      }
+      if (requestedRole !== staff.role) {
+        staff.role = requestedRole
+        const matchedRole = tenantRoles.find((r) => r.slug === requestedRole)
         staff.roleId = matchedRole ? matchedRole._id : null
         // Invalidate active session tokens on role change
         staff.tokenVersion = (staff.tokenVersion || 1) + 1

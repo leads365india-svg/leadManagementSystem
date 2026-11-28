@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef, useMemo } from "react"
+import React, { useState, useEffect, useRef, useMemo, createContext, useContext } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
@@ -50,6 +50,9 @@ import {
   Bell,
   FileText,
   Mail,
+  PanelLeftClose,
+  PanelLeftOpen,
+  MoreHorizontal,
 } from "lucide-react"
 import FollowUpAlertManager from "@/components/follow-up-alert-manager"
 
@@ -358,36 +361,115 @@ export function isCrmSidebarHiddenPath(pathname) {
   )
 }
 
+const CrmShellContext = createContext({
+  mobileMenuOpen: false,
+  setMobileMenuOpen: () => {},
+  tabletExpanded: false,
+  setTabletExpanded: () => {},
+  desktopCollapsed: false,
+  setDesktopCollapsed: () => {},
+})
+
+export function CrmShellProvider({ children }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [tabletExpanded, setTabletExpanded] = useState(false)
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false)
+
+  const value = useMemo(
+    () => ({
+      mobileMenuOpen,
+      setMobileMenuOpen,
+      tabletExpanded,
+      setTabletExpanded,
+      desktopCollapsed,
+      setDesktopCollapsed,
+    }),
+    [mobileMenuOpen, tabletExpanded, desktopCollapsed]
+  )
+
+  return <CrmShellContext.Provider value={value}>{children}</CrmShellContext.Provider>
+}
+
+function useCrmShell() {
+  return useContext(CrmShellContext)
+}
+
+function getCrmPageTitle(pathname, fallback = "CRM") {
+  if (!pathname) return fallback
+  if (pathname === "/portal" || pathname === "/dashboard" || pathname === "/") return "Home"
+  if (pathname === "/leads/new" || pathname === "/portal/leads/new") return "Add New Lead"
+  if (pathname.startsWith("/portal/leads")) return "Leads Pipeline"
+  if (pathname.startsWith("/leads")) return "Manage Leads"
+  if (pathname.startsWith("/dashboard/ai-call-intelligence")) return "AI Call Intelligence"
+  if (pathname.startsWith("/dashboard/ai-sales-intelligence")) return "AI Sales Intelligence"
+
+  for (const cat of NAV_CATEGORIES) {
+    if (cat.items) {
+      for (const item of cat.items) {
+        if (pathname === item.href || pathname.startsWith(`${item.href}/`)) {
+          return item.label
+        }
+      }
+    }
+  }
+  return fallback
+}
+
 export function CrmMainWrapper({ children }) {
   const pathname = usePathname()
+  const { tabletExpanded, desktopCollapsed } = useCrmShell()
   const hasSidebar = !isCrmSidebarHiddenPath(pathname)
 
   return (
-    <main className={`flex-1 w-full max-w-full min-w-0 ${hasSidebar ? "lg:pl-[260px]" : ""}`}>
-      {children}
-    </main>
+    <div className="flex-1 flex flex-col min-w-0 w-full max-w-full">
+      <main
+        className={`flex-1 flex flex-col min-w-0 w-full max-w-full ${
+          hasSidebar
+            ? `${tabletExpanded ? "md:pl-64" : "md:pl-16"} ${
+                desktopCollapsed ? "lg:pl-16" : "lg:pl-64"
+              } pb-24 lg:pb-6 transition-[padding] duration-200`
+            : ""
+        }`}
+      >
+        {children}
+      </main>
+    </div>
   )
 }
 
 export default function Header() {
   const pathname = usePathname()
   const router = useRouter()
+  const {
+    mobileMenuOpen,
+    setMobileMenuOpen,
+    tabletExpanded,
+    setTabletExpanded,
+    desktopCollapsed,
+    setDesktopCollapsed,
+  } = useCrmShell()
 
-  // Unified Sidebar Navigation State
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  // Unified Sidebar & Header Navigation State
   const [expandedCategory, setExpandedCategory] = useState(null)
   const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [headerNotificationsOpen, setHeaderNotificationsOpen] = useState(false)
+  const [headerProfileOpen, setHeaderProfileOpen] = useState(false)
+  const [headerSearchOpen, setHeaderSearchOpen] = useState(false)
   const [callbacksList, setCallbacksList] = useState([])
   const [callbackCounts, setCallbackCounts] = useState({ today: 0, overdue: 0, total: 0 })
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
+  const [currentSearchString, setCurrentSearchString] = useState("")
 
   const workspaceRef = useRef(null)
   const notificationsRef = useRef(null)
   const profileRef = useRef(null)
+  const headerNotificationsRef = useRef(null)
+  const headerProfileRef = useRef(null)
   const searchInputRef = useRef(null)
+  const headerSearchInputRef = useRef(null)
   const lastAutoExpandedRef = useRef("")
 
   const {
@@ -406,6 +488,8 @@ export default function Header() {
   const user = authUser
 
   // Load and poll pending AI callbacks and reminders (standard tenant CRM routes only)
+  const authUserId = user?.id
+  const authUserRole = user?.role
   useEffect(() => {
     let isMounted = true
     if (!pathname || isCrmSidebarHiddenPath(pathname)) {
@@ -414,8 +498,8 @@ export default function Header() {
 
     const loadCallbacks = async () => {
       try {
-        if (!user) return
-        if (user.role === "super_admin") return
+        if (!authUserId) return
+        if (authUserRole === "super_admin") return
         const [statsRes, listRes] = await Promise.all([
           apiClient.getFollowUpStats().catch(() => null),
           apiClient.getFollowUps({ status: "pending", limit: 5, sortBy: "scheduledAt", sortOrder: "asc" }).catch(() => null),
@@ -440,7 +524,7 @@ export default function Header() {
       isMounted = false
       clearInterval(timer)
     }
-  }, [user?.id, pathname])
+  }, [authUserId, authUserRole, pathname])
 
   // Filter NAV_CATEGORIES dynamically based on user role and granular permissions
   const filteredNavCategories = useMemo(() => {
@@ -506,22 +590,30 @@ export default function Header() {
     setWorkspaceDropdownOpen(false)
     setNotificationsOpen(false)
     setProfileMenuOpen(false)
-  }, [pathname])
+    setHeaderNotificationsOpen(false)
+    setHeaderProfileOpen(false)
+    setHeaderSearchOpen(false)
+  }, [pathname, setMobileMenuOpen])
 
-  // Lock background page scroll while mobile slide-over sidebar is open (< 1024px)
+  // Lock background page scroll while mobile slide-over sidebar is open (< 768px)
+  // Always clean up overflow on unmount or resize across the 768px breakpoint
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return
 
-    const mql = window.matchMedia("(min-width: 1024px)")
+    const mql = window.matchMedia("(min-width: 768px)")
     const handleViewportChange = (e) => {
       if (e.matches) {
         setMobileMenuOpen(false)
+        document.body.style.overflow = ""
+        document.body.style.touchAction = ""
       }
     }
     mql.addEventListener?.("change", handleViewportChange)
 
     if (!mobileMenuOpen || mql.matches) {
       return () => {
+        document.body.style.overflow = ""
+        document.body.style.touchAction = ""
         mql.removeEventListener?.("change", handleViewportChange)
       }
     }
@@ -532,11 +624,11 @@ export default function Header() {
     document.body.style.touchAction = "none"
 
     return () => {
-      document.body.style.overflow = prevOverflow
-      document.body.style.touchAction = prevTouchAction
+      document.body.style.overflow = prevOverflow || ""
+      document.body.style.touchAction = prevTouchAction || ""
       mql.removeEventListener?.("change", handleViewportChange)
     }
-  }, [mobileMenuOpen])
+  }, [mobileMenuOpen, setMobileMenuOpen])
 
   // Close popovers on outside click, handle Escape and keyboard shortcut (Ctrl/Cmd + K)
   useEffect(() => {
@@ -550,6 +642,12 @@ export default function Header() {
       if (profileRef.current && !profileRef.current.contains(event.target)) {
         setProfileMenuOpen(false)
       }
+      if (headerNotificationsRef.current && !headerNotificationsRef.current.contains(event.target)) {
+        setHeaderNotificationsOpen(false)
+      }
+      if (headerProfileRef.current && !headerProfileRef.current.contains(event.target)) {
+        setHeaderProfileOpen(false)
+      }
     }
 
     const handleKeyDown = (e) => {
@@ -557,15 +655,18 @@ export default function Header() {
         setWorkspaceDropdownOpen(false)
         setNotificationsOpen(false)
         setProfileMenuOpen(false)
+        setHeaderNotificationsOpen(false)
+        setHeaderProfileOpen(false)
+        setHeaderSearchOpen(false)
         setMobileMenuOpen(false)
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault()
-        if (typeof window !== "undefined" && window.innerWidth < 1024) {
-          setMobileMenuOpen(true)
+        if (typeof window !== "undefined" && (window.innerWidth < 1024 || desktopCollapsed)) {
+          setHeaderSearchOpen(true)
           setTimeout(() => {
-            searchInputRef.current?.focus()
-          }, 60)
+            headerSearchInputRef.current?.focus()
+          }, 50)
         } else if (searchInputRef.current) {
           searchInputRef.current.focus()
         }
@@ -578,7 +679,7 @@ export default function Header() {
       document.removeEventListener("mousedown", handleClickOutside)
       document.removeEventListener("keydown", handleKeyDown)
     }
-  }, [])
+  }, [desktopCollapsed, setMobileMenuOpen])
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -596,12 +697,14 @@ export default function Header() {
       router.push(`/leads?search=${encodeURIComponent(searchQuery.trim())}`)
       setSearchQuery("")
       setMobileMenuOpen(false)
+      setHeaderSearchOpen(false)
     }
   }
 
   const handleLogout = async () => {
     try {
       setProfileMenuOpen(false)
+      setHeaderProfileOpen(false)
       setMobileMenuOpen(false)
       await logout()
     } catch (err) {
@@ -610,13 +713,19 @@ export default function Header() {
     }
   }
 
+  // Sync location.search after mount/navigation for SSR-safe active link highlighting
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setCurrentSearchString(window.location.search || "")
+    }
+  }, [pathname])
+
   const isItemActive = (href) => {
     if (href === "/") return pathname === "/" || pathname === "/portal" || pathname === "/dashboard"
     if (href.includes("?status=")) {
       return (
         (pathname === "/leads" || pathname === "/portal/leads") &&
-        typeof window !== "undefined" &&
-        window.location.search.includes(href.split("?")[1])
+        currentSearchString.includes(href.split("?")[1])
       )
     }
     return pathname === href || pathname?.startsWith(`${href}/`)
@@ -743,48 +852,437 @@ export default function Header() {
 
   const selectedWorkspaceObj = workspaces?.find((w) => w._id?.toString() === activeWorkspace)
 
+  const brandName =
+    branding?.displayName && branding.displayName !== "LeadFlow"
+      ? branding.displayName
+      : isWhiteLabel
+      ? companyName || "CRM"
+      : "LEADS365"
+  const currentPageTitle = getCrmPageTitle(pathname, brandName)
+
+  const hasPerm = (perm) => {
+    if (!user) return false
+    if (user.role === "super_admin") return true
+    return typeof hasPermission === "function" ? hasPermission(perm) : true
+  }
+
+  const canCreateLead = hasPerm("leads.create")
+  const canViewHome = hasPerm("dashboard.view")
+  const canViewLeads = hasPerm("leads.view*")
+  const canViewFollowUps = hasPerm("followups.view*")
+  const canViewCalls = hasPerm("calls.view*")
+
+  // Complete static Tailwind class helpers derived from tabletExpanded & desktopCollapsed
+  const expandedOnlyBlock = `${tabletExpanded ? "md:block" : "md:hidden"} ${desktopCollapsed ? "lg:hidden" : "lg:block"}`
+  const expandedOnlyFlex = `${tabletExpanded ? "md:flex" : "md:hidden"} ${desktopCollapsed ? "lg:hidden" : "lg:flex"}`
+  const expandedOnlyInline = `${tabletExpanded ? "md:inline" : "md:hidden"} ${desktopCollapsed ? "lg:hidden" : "lg:inline"}`
+  const collapsedOnlyFlex = `hidden ${tabletExpanded ? "md:hidden" : "md:flex"} ${desktopCollapsed ? "lg:flex" : "lg:hidden"}`
+  const railAlignClass = `${tabletExpanded ? "md:justify-start md:px-3" : "md:justify-center md:px-2"} ${desktopCollapsed ? "lg:justify-center lg:px-2" : "lg:justify-start lg:px-3"}`
+  const sidebarOffsetClass = `${tabletExpanded ? "md:pl-64" : "md:pl-16"} ${desktopCollapsed ? "lg:pl-16" : "lg:pl-64"}`
+
+  const handleToggleSidebarRail = () => {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) {
+      setDesktopCollapsed((prev) => !prev)
+    } else {
+      setTabletExpanded((prev) => !prev)
+    }
+  }
+
+  const handleExpandRailForAction = () => {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) {
+      setDesktopCollapsed(false)
+    } else if (typeof window !== "undefined" && window.innerWidth >= 768) {
+      setTabletExpanded(true)
+    }
+  }
+
+  const handleBottomMoreClick = () => {
+    if (typeof window !== "undefined" && window.innerWidth >= 768) {
+      setTabletExpanded((prev) => !prev)
+    } else {
+      setMobileMenuOpen((prev) => !prev)
+    }
+  }
+
+  const renderBrandIcon = () => (
+    branding?.logoUrl && !logoError ? (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img
+        src={branding.logoUrl}
+        alt={branding.displayName || companyName || "Logo"}
+        onError={() => setLogoError(true)}
+        className="h-7 w-7 object-contain shrink-0 rounded-md"
+      />
+    ) : (
+      <div
+        className="w-8 h-8 rounded-lg flex items-center justify-center text-white shadow-sm shrink-0"
+        style={{
+          backgroundColor: branding?.primaryColor || branding?.brandPrimaryColor || "#4f46e5",
+        }}
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2.2}
+            d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+          />
+        </svg>
+      </div>
+    )
+  )
+
+  const renderNotificationsPopover = ({ positionClass, onNavigate }) => (
+    <div className={`${positionClass} bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-50`}>
+      <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-bold text-slate-900 leading-snug">Callback Reminders</p>
+          <p className="text-[11px] text-slate-500">
+            {callbackCounts.today} today • {callbackCounts.overdue} overdue
+          </p>
+        </div>
+        <Link
+          href="/communication/follow-ups"
+          onClick={onNavigate}
+          className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 shrink-0"
+        >
+          View all
+        </Link>
+      </div>
+
+      <div className="py-1 max-h-56 overflow-y-auto">
+        {callbacksList.length === 0 ? (
+          <div className="py-5 text-center text-slate-400">
+            <Clock className="w-5 h-5 mx-auto mb-1 text-slate-300" />
+            <p className="text-xs text-slate-500 font-medium">No pending callbacks</p>
+            <p className="text-[10px] text-slate-400">You&apos;re all caught up!</p>
+          </div>
+        ) : (
+          callbacksList.map((cb) => (
+            <Link
+              key={cb._id || cb.id}
+              href="/communication/follow-ups"
+              onClick={onNavigate}
+              className="block px-3.5 py-2 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
+            >
+              <div className="flex items-center justify-between mb-1 gap-2">
+                <span className="text-xs font-semibold text-slate-900 truncate">
+                  {cb.customerName || cb.lead?.name || cb.title}
+                </span>
+                <span
+                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                    cb.isOverdue
+                      ? "bg-red-100 text-red-700"
+                      : cb.isToday
+                      ? "bg-amber-100 text-amber-700"
+                      : "bg-blue-100 text-blue-700"
+                  }`}
+                >
+                  {cb.isOverdue ? "Overdue" : cb.isToday ? "Today" : "Upcoming"}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 line-clamp-1">
+                {cb.notes || cb.callbackReason || "Scheduled follow-up"}
+              </p>
+              <p className="text-[10px] font-mono text-slate-400 mt-1">
+                {cb.scheduledAt
+                  ? new Date(cb.scheduledAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+                  : ""}
+              </p>
+            </Link>
+          ))
+        )}
+      </div>
+
+      <div className="px-3.5 py-2 border-t border-slate-100 text-center bg-slate-50/40">
+        <Link
+          href="/communication/follow-ups"
+          onClick={onNavigate}
+          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+        >
+          Manage All Follow-ups & Callbacks →
+        </Link>
+      </div>
+    </div>
+  )
+
+  const renderProfilePopover = ({ positionClass, onNavigate }) => (
+    <div className={`${positionClass} bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 max-h-[60vh] overflow-y-auto z-50`}>
+      <div className="px-3.5 py-2 border-b border-slate-100">
+        <p className="text-xs font-bold text-slate-900 leading-snug truncate">{userName}</p>
+        {userEmail && <p className="text-[11px] text-slate-500 font-mono truncate">{userEmail}</p>}
+        <div className="mt-1.5 flex flex-wrap gap-1 items-center">
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+            {userRole}
+          </span>
+          {companyName && (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 truncate max-w-[180px]">
+              {companyName}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="py-1 text-xs text-slate-700">
+        {user?.role === "super_admin" && !isWhiteLabel && (
+          <button
+            type="button"
+            onClick={() => {
+              onNavigate()
+              handleExitTenantContext()
+            }}
+            className="w-full text-left flex items-center space-x-2.5 px-3.5 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100 cursor-pointer"
+          >
+            <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+            <span>Super Admin Console</span>
+          </button>
+        )}
+        <Link
+          href="/settings/staff"
+          onClick={onNavigate}
+          className="flex items-center space-x-2.5 px-3.5 py-2 hover:bg-slate-50 transition-colors"
+        >
+          <Shield className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <span>Staff & Team Profile</span>
+        </Link>
+        <Link
+          href="/settings/custom-fields"
+          onClick={onNavigate}
+          className="flex items-center space-x-2.5 px-3.5 py-2 hover:bg-slate-50 transition-colors"
+        >
+          <Sliders className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <span>Custom Fields & Tags</span>
+        </Link>
+      </div>
+
+      <div className="pt-1.5 border-t border-slate-100">
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+        >
+          <LogOut className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+          <span>Sign Out</span>
+        </button>
+      </div>
+    </div>
+  )
+
   return (
     <>
       {/* =========================================================================
-          MOBILE / TABLET COMPACT TRIGGER BAR (< 1024px ONLY — No duplicated nav items)
+          STICKY SLIM TOP HEADER (h-14 across Mobile, Tablet, Desktop)
       ========================================================================= */}
-      <header className="sticky top-0 z-30 lg:hidden bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none w-full">
-        <div className="px-3 sm:px-4 h-14 flex items-center justify-between gap-2 min-w-0">
-          <div className="flex items-center space-x-2 min-w-0">
+      <header
+        className={`sticky top-0 z-30 w-full bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs select-none transition-[padding] duration-200 ${sidebarOffsetClass}`}
+      >
+        <div className="h-14 px-3 sm:px-5 flex items-center justify-between gap-2 min-w-0">
+          {/* Left: Hamburger (Mobile < md) + Rail Toggle (md+) + Active Page Title / Brand */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="Open CRM Navigation"
               aria-expanded={mobileMenuOpen}
               aria-controls="crm-sidebar"
-              className="p-2 -ml-1 rounded-lg text-slate-700 hover:text-slate-900 hover:bg-slate-100 focus:outline-none cursor-pointer shrink-0"
+              className="md:hidden p-1.5 -ml-1 rounded-lg text-slate-700 hover:text-slate-900 hover:bg-slate-100 focus:outline-none cursor-pointer shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
-            {renderBrandMark({ compact: true })}
+
+            <button
+              type="button"
+              onClick={handleToggleSidebarRail}
+              aria-label="Toggle Sidebar Width"
+              title="Expand or Collapse Sidebar"
+              className="hidden md:inline-flex p-1.5 -ml-1 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 focus:outline-none cursor-pointer shrink-0 transition-colors"
+            >
+              <span className="lg:hidden">
+                {tabletExpanded ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+              </span>
+              <span className="hidden lg:inline-flex">
+                {desktopCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+              </span>
+            </button>
+
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 truncate min-w-0">
+                {currentPageTitle}
+              </h2>
+              {(isWhiteLabel || companyName) && (
+                <span className="hidden sm:inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/80 truncate max-w-[170px] shrink-0">
+                  {selectedWorkspaceObj?.name
+                    ? selectedWorkspaceObj.name
+                    : activeWorkspace === "all" && isMultiWorkspaceEnabled
+                    ? `All Projects (${workspaces?.length || 0})`
+                    : isWhiteLabel
+                    ? brandName
+                    : companyName}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Search Toggle, Desktop/Tablet Add Lead, Notifications Bell, Avatar Menu */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setHeaderSearchOpen((prev) => {
+                  const next = !prev
+                  if (next) {
+                    setTimeout(() => headerSearchInputRef.current?.focus(), 40)
+                  }
+                  return next
+                })
+              }}
+              aria-expanded={headerSearchOpen}
+              aria-label="Search leads"
+              title="Search leads (⌘K)"
+              className={`${desktopCollapsed ? "inline-flex" : "lg:hidden inline-flex"} items-center justify-center p-1.5 sm:p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer`}
+            >
+              {headerSearchOpen ? <X className="w-4 h-4" /> : <Search className="w-4 h-4" />}
+            </button>
+
+            {canCreateLead && (
+              <Link
+                href="/leads/new"
+                title="Add New Lead"
+                aria-label="Add New Lead"
+                className="hidden md:inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-2xs transition-colors shrink-0"
+                style={branding?.primaryColor ? { backgroundColor: branding.primaryColor } : undefined}
+              >
+                <Plus className="w-4 h-4 shrink-0" />
+                <span>Add Lead</span>
+              </Link>
+            )}
+
+            {/* Header Live Notifications Bell */}
+            <div className="relative" ref={headerNotificationsRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setHeaderNotificationsOpen((prev) => !prev)
+                  setHeaderProfileOpen(false)
+                }}
+                aria-expanded={headerNotificationsOpen}
+                aria-label="Notifications and Callbacks"
+                title="Callback Reminders"
+                className={`relative p-1.5 sm:p-2 rounded-lg transition-colors cursor-pointer ${
+                  headerNotificationsOpen
+                    ? "bg-indigo-50 text-indigo-700"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                }`}
+              >
+                <Bell className="w-4 h-4" />
+                {callbackCounts.total > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold flex items-center justify-center shadow-xs">
+                    {callbackCounts.total > 99 ? "99+" : callbackCounts.total}
+                  </span>
+                )}
+              </button>
+
+              {headerNotificationsOpen &&
+                renderNotificationsPopover({
+                  positionClass: "absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)]",
+                  onNavigate: () => {
+                    setHeaderNotificationsOpen(false)
+                    setMobileMenuOpen(false)
+                  },
+                })}
+            </div>
+
+            {/* Header Real User Avatar Menu */}
+            <div className="relative" ref={headerProfileRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setHeaderProfileOpen((prev) => !prev)
+                  setHeaderNotificationsOpen(false)
+                }}
+                aria-expanded={headerProfileOpen}
+                aria-label="User Account Menu"
+                className="flex items-center gap-1.5 p-1 rounded-full sm:rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-tr from-indigo-600 via-indigo-700 to-purple-600 text-white font-bold text-[11px] sm:text-xs flex items-center justify-center shadow-xs shrink-0">
+                  {userInitials}
+                </div>
+                <ChevronDown className="hidden sm:block w-3.5 h-3.5 text-slate-400" />
+              </button>
+
+              {headerProfileOpen &&
+                renderProfilePopover({
+                  positionClass: "absolute right-0 top-full mt-2 w-64 max-w-[calc(100vw-1.5rem)]",
+                  onNavigate: () => {
+                    setHeaderProfileOpen(false)
+                    setMobileMenuOpen(false)
+                  },
+                })}
+            </div>
           </div>
         </div>
+
+        {/* Expandable Search Input Bar Below Sticky Header */}
+        {headerSearchOpen && (
+          <div className="border-t border-slate-100 bg-slate-50/90 px-3 sm:px-5 py-2 animate-in fade-in duration-150">
+            <form onSubmit={handleGlobalSearch} className="flex items-center gap-2 max-w-xl">
+              <div className="relative flex-1 min-w-0">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  ref={headerSearchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search leads by name, phone, or email..."
+                  aria-label="Search Leads"
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-white text-slate-800 placeholder-slate-400 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shrink-0 cursor-pointer"
+              >
+                Search
+              </button>
+              <button
+                type="button"
+                onClick={() => setHeaderSearchOpen(false)}
+                aria-label="Close Search"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 shrink-0 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </form>
+          </div>
+        )}
       </header>
 
-      {/* Mobile / Tablet Drawer Backdrop (< 1024px) */}
+      {/* Mobile Drawer Backdrop (< 768px) */}
       <div
         onClick={() => setMobileMenuOpen(false)}
         aria-hidden="true"
-        className={`fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden transition-opacity duration-200 ${
+        className={`fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs md:hidden transition-opacity duration-200 ${
           mobileMenuOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
       />
 
       {/* =========================================================================
-          UNIFIED PERMANENT LEFT SIDEBAR (260px Fixed on >= 1024px, Drawer on < 1024px)
+          RESPONSIVE LEFT SIDEBAR
+          - Mobile (<768px): Fixed slide-over drawer (w-72 max-w-[85vw] h-dvh z-50)
+          - Tablet (768px–1023px): Docked icon rail (md:w-16 <-> md:w-64)
+          - Desktop (1024px+): Docked full sidebar (lg:w-64 <-> lg:w-16)
       ========================================================================= */}
       <aside
         id="crm-sidebar"
         aria-label="CRM Sidebar Navigation"
-        className={`fixed inset-y-0 left-0 z-50 lg:z-40 w-[260px] max-w-[86vw] lg:max-w-[260px] h-[100dvh] bg-white border-r border-slate-200/90 shadow-2xl lg:shadow-xs flex flex-col select-none transition-transform duration-200 ease-out ${
+        className={`fixed inset-y-0 left-0 z-50 md:z-40 h-dvh w-72 max-w-[85vw] md:max-w-none ${
+          tabletExpanded ? "md:w-64" : "md:w-16"
+        } ${
+          desktopCollapsed ? "lg:w-16" : "lg:w-64"
+        } bg-white border-r border-slate-200/90 shadow-2xl md:shadow-xs flex flex-col select-none transition-[transform,width] duration-200 ease-out ${
           mobileMenuOpen
             ? "translate-x-0 visible pointer-events-auto"
-            : "-translate-x-full invisible pointer-events-none lg:translate-x-0 lg:visible lg:pointer-events-auto"
+            : "-translate-x-full invisible pointer-events-none md:translate-x-0 md:visible md:pointer-events-auto"
         }`}
       >
         {/* -----------------------------------------------------------------------
@@ -792,10 +1290,24 @@ export default function Header() {
         ----------------------------------------------------------------------- */}
         <div className="shrink-0 border-b border-slate-100 bg-white">
           {/* Logo & Utility Buttons */}
-          <div className="px-3 pt-3.5 pb-2.5 flex items-center justify-between gap-1.5 min-w-0">
-            {renderBrandMark({ onNavigate: () => setMobileMenuOpen(false) })}
+          <div className={`px-3 pt-3.5 pb-2.5 flex items-center gap-1.5 min-w-0 ${tabletExpanded ? "md:justify-between" : "md:justify-center"} ${desktopCollapsed ? "lg:justify-center" : "lg:justify-between"} justify-between`}>
+            {/* Expanded Brand Mark */}
+            <div className={`min-w-0 flex-1 ${expandedOnlyFlex}`}>
+              {renderBrandMark({ onNavigate: () => setMobileMenuOpen(false) })}
+            </div>
 
-            <div className="flex items-center gap-1 shrink-0">
+            {/* Collapsed Rail Centered Brand Icon (Expand Trigger) */}
+            <button
+              type="button"
+              onClick={handleExpandRailForAction}
+              title={`Expand ${brandName} Sidebar`}
+              aria-label="Expand Sidebar"
+              className={`${collapsedOnlyFlex} items-center justify-center p-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer`}
+            >
+              {renderBrandIcon()}
+            </button>
+
+            <div className={`flex items-center gap-1 shrink-0 ${expandedOnlyFlex}`}>
               <button
                 type="button"
                 onClick={toggleFullscreen}
@@ -808,9 +1320,19 @@ export default function Header() {
 
               <button
                 type="button"
+                onClick={handleToggleSidebarRail}
+                aria-label="Collapse CRM Sidebar"
+                title="Collapse Sidebar"
+                className="hidden md:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <PanelLeftClose className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setMobileMenuOpen(false)}
                 aria-label="Close CRM Navigation"
-                className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -819,7 +1341,7 @@ export default function Header() {
 
           {/* Super Admin Active Tenant Indicator */}
           {user?.role === "super_admin" && !isWhiteLabel && (
-            <div className="px-3.5 pb-2.5">
+            <div className={`px-3.5 pb-2.5 ${expandedOnlyBlock}`}>
               <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200/80 text-[11px] shadow-2xs">
                 <div className="flex items-center space-x-1 min-w-0">
                   <span className="font-bold text-indigo-700 shrink-0">Tenant:</span>
@@ -841,34 +1363,50 @@ export default function Header() {
 
           {/* Workspace Selector */}
           {isMultiWorkspaceEnabled && workspaces && workspaces.length > 0 && (
-            <div className="px-3.5 pb-2.5 relative" ref={workspaceRef}>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                CRM Workspace
-              </p>
+            <div className="px-3 pb-2.5 relative" ref={workspaceRef}>
+              <div className={expandedOnlyBlock}>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                  CRM Workspace
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceDropdownOpen((prev) => !prev)
+                    setNotificationsOpen(false)
+                    setProfileMenuOpen(false)
+                  }}
+                  aria-expanded={workspaceDropdownOpen}
+                  title="Switch active project/workspace"
+                  className="w-full flex items-center justify-between gap-2 px-2.5 py-2 text-xs font-semibold rounded-lg bg-slate-50/90 hover:bg-slate-100 text-slate-800 border border-slate-200/90 shadow-2xs transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center space-x-2 min-w-0">
+                    <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">
+                      {activeWorkspace === "all"
+                        ? `All Projects (${workspaces.length})`
+                        : selectedWorkspaceObj?.name || "Select Workspace"}
+                    </span>
+                  </div>
+                  <ChevronsUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                </button>
+              </div>
+
+              {/* Collapsed Rail Workspace Button */}
               <button
                 type="button"
                 onClick={() => {
-                  setWorkspaceDropdownOpen((prev) => !prev)
-                  setNotificationsOpen(false)
-                  setProfileMenuOpen(false)
+                  handleExpandRailForAction()
+                  setWorkspaceDropdownOpen(true)
                 }}
-                aria-expanded={workspaceDropdownOpen}
-                title="Switch active project/workspace"
-                className="w-full flex items-center justify-between gap-2 px-2.5 py-2 text-xs font-semibold rounded-lg bg-slate-50/90 hover:bg-slate-100 text-slate-800 border border-slate-200/90 shadow-2xs transition-colors cursor-pointer"
+                title="Switch Workspace"
+                aria-label="Switch Workspace"
+                className={`${collapsedOnlyFlex} w-full items-center justify-center p-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-indigo-600 border border-slate-200/80 cursor-pointer`}
               >
-                <div className="flex items-center space-x-2 min-w-0">
-                  <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  <span className="truncate">
-                    {activeWorkspace === "all"
-                      ? `All Projects (${workspaces.length})`
-                      : selectedWorkspaceObj?.name || "Select Workspace"}
-                  </span>
-                </div>
-                <ChevronsUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <Building2 className="w-4 h-4 shrink-0" />
               </button>
 
               {workspaceDropdownOpen && (
-                <div className="absolute left-3.5 right-3.5 top-full -mt-1 bg-white rounded-xl shadow-xl border border-slate-200/95 py-1.5 z-30">
+                <div className="absolute left-3 right-3 top-full -mt-1 min-w-[220px] bg-white rounded-xl shadow-xl border border-slate-200/95 py-1.5 z-50">
                   <div className="px-3 py-1.5 border-b border-slate-100">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                       Project / Workspace
@@ -945,9 +1483,9 @@ export default function Header() {
             </div>
           )}
 
-          {/* Global Search */}
-          <div className="px-3.5 pb-3">
-            <form onSubmit={handleGlobalSearch} className="relative">
+          {/* Global Search (Full input when expanded, Icon trigger when rail collapsed) */}
+          <div className="px-3 pb-3">
+            <form onSubmit={handleGlobalSearch} className={`relative ${expandedOnlyBlock}`}>
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 ref={searchInputRef}
@@ -962,6 +1500,19 @@ export default function Header() {
                 ⌘K
               </kbd>
             </form>
+
+            <button
+              type="button"
+              onClick={() => {
+                setHeaderSearchOpen(true)
+                setTimeout(() => headerSearchInputRef.current?.focus(), 50)
+              }}
+              title="Search leads (⌘K)"
+              aria-label="Search leads"
+              className={`${collapsedOnlyFlex} w-full items-center justify-center p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer`}
+            >
+              <Search className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -970,7 +1521,7 @@ export default function Header() {
         ----------------------------------------------------------------------- */}
         <nav
           aria-label="Primary CRM Navigation"
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-2.5 space-y-1 [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent]"
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2.5 py-2.5 space-y-1 [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent]"
         >
           {filteredNavCategories.map((category) => {
             const CategoryIcon = category.icon
@@ -983,8 +1534,9 @@ export default function Header() {
                 <Link
                   key={category.id}
                   href={category.href}
+                  title={category.label}
                   onClick={() => setMobileMenuOpen(false)}
-                  className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors ${
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors ${railAlignClass} ${
                     isCatActive
                       ? "bg-indigo-50 text-indigo-700 border border-indigo-200/60"
                       : "text-slate-700 hover:bg-slate-50 hover:text-slate-900 border border-transparent"
@@ -993,7 +1545,7 @@ export default function Header() {
                   <CategoryIcon
                     className={`w-4 h-4 shrink-0 ${isCatActive ? "text-indigo-600" : "text-slate-400"}`}
                   />
-                  <span className="truncate">{category.label}</span>
+                  <span className={`truncate ${expandedOnlyInline}`}>{category.label}</span>
                 </Link>
               )
             }
@@ -1002,29 +1554,46 @@ export default function Header() {
               <div key={category.id} className="space-y-0.5">
                 <button
                   type="button"
-                  onClick={() => setExpandedCategory(isExpanded ? null : category.id)}
+                  title={category.label}
+                  onClick={() => {
+                    const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024
+                    const isTablet = typeof window !== "undefined" && window.innerWidth >= 768 && window.innerWidth < 1024
+                    if (isDesktop && desktopCollapsed) {
+                      setDesktopCollapsed(false)
+                      setExpandedCategory(category.id)
+                      return
+                    }
+                    if (isTablet && !tabletExpanded) {
+                      setTabletExpanded(true)
+                      setExpandedCategory(category.id)
+                      return
+                    }
+                    setExpandedCategory(isExpanded ? null : category.id)
+                  }}
                   aria-expanded={isExpanded}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors cursor-pointer ${railAlignClass} ${
                     isCatActive
                       ? "bg-indigo-50/70 text-indigo-700"
                       : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
                   }`}
                 >
-                  <div className="flex items-center space-x-3 min-w-0">
+                  <div className="flex items-center gap-3 min-w-0">
                     <CategoryIcon
                       className={`w-4 h-4 shrink-0 ${isCatActive ? "text-indigo-600" : "text-slate-400"}`}
                     />
-                    <span className="truncate">{category.label}</span>
+                    <span className={`truncate ${expandedOnlyInline}`}>{category.label}</span>
                   </div>
-                  {isExpanded ? (
-                    <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-                  )}
+                  <span className={`shrink-0 ${expandedOnlyInline}`}>
+                    {isExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-slate-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400" />
+                    )}
+                  </span>
                 </button>
 
                 {isExpanded && (
-                  <div className="pl-6 pr-1 py-0.5 space-y-0.5">
+                  <div className={`pl-6 pr-1 py-0.5 space-y-0.5 ${expandedOnlyBlock}`}>
                     {category.items.map((item) => {
                       const ItemIcon = item.icon
                       const itemActive = isItemActive(item.href)
@@ -1057,114 +1626,45 @@ export default function Header() {
         {/* -----------------------------------------------------------------------
             BOTTOM SECTION: Notifications + User Profile + Super Admin Console + Sign Out
         ----------------------------------------------------------------------- */}
-        <div className="shrink-0 border-t border-slate-200/80 bg-white px-3 py-2.5 space-y-1.5">
+        <div className="shrink-0 border-t border-slate-200/80 bg-white px-2.5 py-2.5 space-y-1.5">
           {/* Notifications Trigger & Upward Popover */}
           <div className="relative" ref={notificationsRef}>
-            {notificationsOpen && (
-              <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-30">
-                <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-slate-900 leading-snug">Callback Reminders</p>
-                    <p className="text-[11px] text-slate-500">
-                      {callbackCounts.today} today • {callbackCounts.overdue} overdue
-                    </p>
-                  </div>
-                  <Link
-                    href="/communication/follow-ups"
-                    onClick={() => {
-                      setNotificationsOpen(false)
-                      setMobileMenuOpen(false)
-                    }}
-                    className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 shrink-0"
-                  >
-                    View all
-                  </Link>
-                </div>
-
-                <div className="py-1 max-h-56 overflow-y-auto">
-                  {callbacksList.length === 0 ? (
-                    <div className="py-5 text-center text-slate-400">
-                      <Clock className="w-5 h-5 mx-auto mb-1 text-slate-300" />
-                      <p className="text-xs text-slate-500 font-medium">No pending callbacks</p>
-                      <p className="text-[10px] text-slate-400">You&apos;re all caught up!</p>
-                    </div>
-                  ) : (
-                    callbacksList.map((cb) => (
-                      <Link
-                        key={cb._id || cb.id}
-                        href="/communication/follow-ups"
-                        onClick={() => {
-                          setNotificationsOpen(false)
-                          setMobileMenuOpen(false)
-                        }}
-                        className="block px-3.5 py-2 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
-                      >
-                        <div className="flex items-center justify-between mb-1 gap-2">
-                          <span className="text-xs font-semibold text-slate-900 truncate">
-                            {cb.customerName || cb.lead?.name || cb.title}
-                          </span>
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
-                              cb.isOverdue
-                                ? "bg-red-100 text-red-700"
-                                : cb.isToday
-                                ? "bg-amber-100 text-amber-700"
-                                : "bg-blue-100 text-blue-700"
-                            }`}
-                          >
-                            {cb.isOverdue ? "Overdue" : cb.isToday ? "Today" : "Upcoming"}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 line-clamp-1">
-                          {cb.notes || cb.callbackReason || "Scheduled follow-up"}
-                        </p>
-                        <p className="text-[10px] font-mono text-slate-400 mt-1">
-                          {cb.scheduledAt
-                            ? new Date(cb.scheduledAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })
-                            : ""}
-                        </p>
-                      </Link>
-                    ))
-                  )}
-                </div>
-
-                <div className="px-3.5 py-2 border-t border-slate-100 text-center bg-slate-50/40">
-                  <Link
-                    href="/communication/follow-ups"
-                    onClick={() => {
-                      setNotificationsOpen(false)
-                      setMobileMenuOpen(false)
-                    }}
-                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
-                  >
-                    Manage All Follow-ups & Callbacks →
-                  </Link>
-                </div>
-              </div>
-            )}
+            {notificationsOpen &&
+              renderNotificationsPopover({
+                positionClass: "absolute bottom-full left-0 mb-2 w-72 max-w-[calc(100vw-2rem)]",
+                onNavigate: () => {
+                  setNotificationsOpen(false)
+                  setMobileMenuOpen(false)
+                },
+              })}
 
             <button
               type="button"
               onClick={() => {
+                handleExpandRailForAction()
                 setNotificationsOpen((prev) => !prev)
                 setProfileMenuOpen(false)
                 setWorkspaceDropdownOpen(false)
               }}
               aria-expanded={notificationsOpen}
               aria-label="Scheduled Callbacks & Reminders"
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors cursor-pointer ${
+              title="Notifications"
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors cursor-pointer ${railAlignClass} ${
                 notificationsOpen
                   ? "bg-indigo-50/70 text-indigo-700"
                   : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
               }`}
             >
-              <div className="flex items-center space-x-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 relative">
                 <Bell
                   className={`w-4 h-4 shrink-0 ${notificationsOpen ? "text-indigo-600" : "text-slate-400"}`}
                 />
-                <span className="truncate">Notifications</span>
+                <span className={`truncate ${expandedOnlyInline}`}>Notifications</span>
+                {callbackCounts.total > 0 && (
+                  <span className={`${collapsedOnlyFlex} absolute -top-1 -right-1 w-2 h-2 rounded-full bg-rose-500`} />
+                )}
               </div>
-              <div className="flex items-center space-x-1.5 shrink-0">
+              <div className={`items-center space-x-1.5 shrink-0 ${expandedOnlyFlex}`}>
                 {callbackCounts.total > 0 && (
                   <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700">
                     <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
@@ -1182,76 +1682,17 @@ export default function Header() {
 
           {/* User Profile Menu + Direct Sign Out */}
           <div className="relative" ref={profileRef}>
-            {profileMenuOpen && (
-              <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 max-h-[52vh] overflow-y-auto z-30">
-                <div className="px-3.5 py-2 border-b border-slate-100">
-                  <p className="text-xs font-bold text-slate-900 leading-snug truncate">{userName}</p>
-                  {userEmail && <p className="text-[11px] text-slate-500 font-mono truncate">{userEmail}</p>}
-                  <div className="mt-1.5 flex flex-wrap gap-1 items-center">
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                      {userRole}
-                    </span>
-                    {companyName && (
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 truncate max-w-[180px]">
-                        {companyName}
-                      </span>
-                    )}
-                  </div>
-                </div>
+            {profileMenuOpen &&
+              renderProfilePopover({
+                positionClass: "absolute bottom-full left-0 mb-2 w-64 max-w-[calc(100vw-2rem)]",
+                onNavigate: () => {
+                  setProfileMenuOpen(false)
+                  setMobileMenuOpen(false)
+                },
+              })}
 
-                <div className="py-1 text-xs text-slate-700">
-                  {user?.role === "super_admin" && !isWhiteLabel && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProfileMenuOpen(false)
-                        setMobileMenuOpen(false)
-                        handleExitTenantContext()
-                      }}
-                      className="w-full text-left flex items-center space-x-2.5 px-3.5 py-2 hover:bg-indigo-50 text-indigo-700 font-semibold transition-colors border-b border-slate-100 cursor-pointer"
-                    >
-                      <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                      <span>Super Admin Console</span>
-                    </button>
-                  )}
-                  <Link
-                    href="/settings/staff"
-                    onClick={() => {
-                      setProfileMenuOpen(false)
-                      setMobileMenuOpen(false)
-                    }}
-                    className="flex items-center space-x-2.5 px-3.5 py-2 hover:bg-slate-50 transition-colors"
-                  >
-                    <Shield className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>Staff & Team Profile</span>
-                  </Link>
-                  <Link
-                    href="/settings/custom-fields"
-                    onClick={() => {
-                      setProfileMenuOpen(false)
-                      setMobileMenuOpen(false)
-                    }}
-                    className="flex items-center space-x-2.5 px-3.5 py-2 hover:bg-slate-50 transition-colors"
-                  >
-                    <Sliders className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>Custom Fields & Tags</span>
-                  </Link>
-                </div>
-
-                <div className="pt-1.5 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                  >
-                    <LogOut className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                    <span>Sign Out</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center gap-1.5">
+            {/* Expanded Profile + Sign Out Row */}
+            <div className={`items-center gap-1.5 ${expandedOnlyFlex}`}>
               <button
                 type="button"
                 onClick={() => {
@@ -1285,9 +1726,123 @@ export default function Header() {
                 <LogOut className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Collapsed Rail Profile + Sign Out Icons */}
+            <div className={`${collapsedOnlyFlex} flex-col items-center gap-1.5`}>
+              <button
+                type="button"
+                onClick={() => {
+                  handleExpandRailForAction()
+                  setProfileMenuOpen(true)
+                }}
+                title={userName}
+                aria-label="Account Profile"
+                className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 via-indigo-700 to-purple-600 text-white font-bold text-xs flex items-center justify-center shadow-xs cursor-pointer"
+              >
+                {userInitials}
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sign Out"
+                aria-label="Sign Out"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
+
+      {/* =========================================================================
+          FIXED BOTTOM SHORTCUT BAR (< 1024px ONLY — RBAC-filtered Quick Links + More)
+      ========================================================================= */}
+      <nav
+        aria-label="Quick Mobile Navigation"
+        className={`lg:hidden fixed bottom-0 left-0 right-0 z-30 min-h-16 pb-[env(safe-area-inset-bottom)] bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-2px_10px_rgba(15,23,42,0.06)] transition-[left] duration-200 ${
+          tabletExpanded ? "md:left-64" : "md:left-16"
+        }`}
+      >
+        <div className="h-16 grid grid-flow-col auto-cols-fr items-stretch px-1">
+          {user && canViewHome && (
+            <Link
+              href="/portal"
+              className={`min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 text-[11px] font-medium transition-colors ${
+                pathname === "/portal" || pathname === "/dashboard" || pathname === "/"
+                  ? "text-indigo-600 font-semibold"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              <LayoutDashboard className="w-5 h-5 shrink-0" />
+              <span className="truncate max-w-full">Home</span>
+            </Link>
+          )}
+
+          {user && canViewLeads && (
+            <Link
+              href="/leads"
+              className={`min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 text-[11px] font-medium transition-colors ${
+                pathname?.startsWith("/leads") || pathname?.startsWith("/portal/leads")
+                  ? "text-indigo-600 font-semibold"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              <Users className="w-5 h-5 shrink-0" />
+              <span className="truncate max-w-full">Leads</span>
+            </Link>
+          )}
+
+          {user && canViewFollowUps && (
+            <Link
+              href="/communication/follow-ups"
+              className={`min-w-0 relative flex flex-col items-center justify-center gap-0.5 px-1 text-[11px] font-medium transition-colors ${
+                pathname?.startsWith("/communication/follow-ups") || pathname?.startsWith("/communication/reminders")
+                  ? "text-indigo-600 font-semibold"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              <div className="relative">
+                <ArrowUpRight className="w-5 h-5 shrink-0" />
+                {callbackCounts.total > 0 && (
+                  <span className="absolute -top-1 -right-1.5 min-w-[14px] h-3.5 px-0.5 rounded-full bg-rose-600 text-white text-[9px] font-bold flex items-center justify-center">
+                    {callbackCounts.total > 9 ? "9+" : callbackCounts.total}
+                  </span>
+                )}
+              </div>
+              <span className="truncate max-w-full">Follow-ups</span>
+            </Link>
+          )}
+
+          {user && canViewCalls && (
+            <Link
+              href="/communication/call-reports"
+              className={`min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 text-[11px] font-medium transition-colors ${
+                pathname?.startsWith("/communication/call-reports") || pathname?.startsWith("/dashboard/ai-call-intelligence")
+                  ? "text-indigo-600 font-semibold"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              <PhoneCall className="w-5 h-5 shrink-0" />
+              <span className="truncate max-w-full">Calls</span>
+            </Link>
+          )}
+
+          <button
+            type="button"
+            onClick={handleBottomMoreClick}
+            aria-label="More Navigation Options"
+            className={`min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 text-[11px] font-medium transition-colors cursor-pointer ${
+              mobileMenuOpen || tabletExpanded
+                ? "text-indigo-600 font-semibold"
+                : "text-slate-500 hover:text-slate-900"
+            }`}
+          >
+            <MoreHorizontal className="w-5 h-5 shrink-0" />
+            <span className="truncate max-w-full">More</span>
+          </button>
+        </div>
+      </nav>
 
       {/* Persistent In-App Follow-up & Callback Alarms */}
       <FollowUpAlertManager />

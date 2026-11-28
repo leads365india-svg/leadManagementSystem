@@ -582,8 +582,8 @@ export default function AssignLeadsClient() {
       )}
 
       {/* Key Metrics Banner */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="p-3.5 sm:p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between gap-2 min-w-0">
           <div>
             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Unassigned Pool
@@ -822,7 +822,7 @@ export default function AssignLeadsClient() {
         <div className="space-y-4">
           {/* Filter Bar */}
           <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[240px]">
+            <div className="relative flex-1 min-w-0 sm:min-w-[220px]">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -1224,8 +1224,8 @@ export default function AssignLeadsClient() {
 
       {/* SINGLE LEAD ASSIGN MODAL */}
       {singleAssignLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
                 Reassign Lead Ownership
@@ -1335,8 +1335,8 @@ export default function AssignLeadsClient() {
 
       {/* LEAD ASSIGNMENT HISTORY MODAL */}
       {historyLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl max-h-[90dvh] overflow-y-auto rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white">
@@ -1406,8 +1406,8 @@ export default function AssignLeadsClient() {
 
       {/* CREATE / EDIT ASSIGNMENT RULE MODAL */}
       {isRuleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
                 {editingRule ? "Edit Assignment Rule" : "Create New Assignment Rule"}
@@ -1421,7 +1421,7 @@ export default function AssignLeadsClient() {
             </div>
 
             <form onSubmit={handleSaveRuleSubmit} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
                     Rule Name
@@ -1511,7 +1511,7 @@ export default function AssignLeadsClient() {
                 <div className="text-xs font-bold uppercase tracking-wider text-slate-500">
                   Matching Criteria
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-slate-600 dark:text-slate-400 mb-1">
                       Lead Sources (comma-separated)
@@ -1582,8 +1582,8 @@ export default function AssignLeadsClient() {
 
       {/* STAFF DEACTIVATION REASSIGNMENT WIZARD MODAL */}
       {isMigrationWizardOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <ArrowRightLeft className="w-5 h-5 text-amber-600" />
@@ -1642,7 +1642,7 @@ export default function AssignLeadsClient() {
                   <div className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
                     Lead Reassignment Destination
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <label
                       className={`p-3 rounded-xl border text-left cursor-pointer transition ${
                         migrationDestination === "pool"

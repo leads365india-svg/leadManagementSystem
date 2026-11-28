@@ -1272,13 +1272,13 @@ export default function LeadDetailDrawer({
       />
 
       {/* Slide-out Drawer Panel */}
-      <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10">
+      <div className="fixed inset-y-0 right-0 max-w-full flex pl-0 sm:pl-10">
         <div className="w-screen max-w-2xl bg-white shadow-2xl border-l border-slate-200 flex flex-col transform transition-transform duration-300 ease-in-out animate-in slide-in-from-right">
           
           {/* =========================================================================
               DRAWER HEADER
           ========================================================================= */}
-          <div className="p-6 bg-slate-50/70 border-b border-slate-200 shrink-0">
+          <div className="p-4 sm:p-6 bg-slate-50/70 border-b border-slate-200 shrink-0">
             <div className="flex items-start justify-between gap-4">
               {/* Lead identity & avatar */}
               <div className="flex items-start space-x-3.5 min-w-0">
@@ -1435,11 +1435,11 @@ export default function LeadDetailDrawer({
           {/* =========================================================================
               TABS NAVIGATION
           ========================================================================= */}
-          <div className="flex items-center px-6 bg-white border-b border-slate-200 shrink-0 overflow-x-auto text-xs font-semibold">
+          <div className="flex items-center px-3 sm:px-6 bg-white border-b border-slate-200 shrink-0 overflow-x-auto no-scrollbar text-xs font-semibold">
             <button
               type="button"
               onClick={() => setActiveTab("timeline")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "timeline"
                   ? "border-indigo-600 text-indigo-600"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -1447,7 +1447,7 @@ export default function LeadDetailDrawer({
             >
               <History className="w-3.5 h-3.5" />
               <span>Timeline</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold leading-none">
                 {activityTimeline.length}
               </span>
             </button>
@@ -1455,7 +1455,7 @@ export default function LeadDetailDrawer({
             <button
               type="button"
               onClick={() => setActiveTab("notes")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "notes"
                   ? "border-indigo-600 text-indigo-600"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -1468,7 +1468,7 @@ export default function LeadDetailDrawer({
             <button
               type="button"
               onClick={() => setActiveTab("followups")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "followups"
                   ? "border-indigo-600 text-indigo-600"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -1476,7 +1476,7 @@ export default function LeadDetailDrawer({
             >
               <CalendarClock className="w-3.5 h-3.5" />
               <span>Follow-ups</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold leading-none">
                 {followUps.length}
               </span>
             </button>
@@ -1484,7 +1484,7 @@ export default function LeadDetailDrawer({
             <button
               type="button"
               onClick={() => setActiveTab("calls")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "calls"
                   ? "border-indigo-600 text-indigo-600"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -1492,7 +1492,7 @@ export default function LeadDetailDrawer({
             >
               <PhoneCall className="w-3.5 h-3.5" />
               <span>Calls & Recordings</span>
-              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold leading-none">
                 {calls.length}
               </span>
             </button>
@@ -1500,7 +1500,7 @@ export default function LeadDetailDrawer({
             <button
               type="button"
               onClick={() => setActiveTab("whatsapp")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "whatsapp"
                   ? "border-emerald-600 text-emerald-600 font-bold"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -1518,7 +1518,7 @@ export default function LeadDetailDrawer({
             <button
               type="button"
               onClick={() => setActiveTab("documents")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "documents"
                   ? "border-indigo-600 text-indigo-600 font-bold"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -1530,7 +1530,7 @@ export default function LeadDetailDrawer({
                 <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse ml-0.5" title="Quotation Requested" />
               )}
               {activeQuotations.length > 0 && (
-                <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+                <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold leading-none">
                   {activeQuotations.length}
                 </span>
               )}
@@ -1539,7 +1539,7 @@ export default function LeadDetailDrawer({
             <button
               type="button"
               onClick={() => setActiveTab("details")}
-              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`py-3 px-3.5 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === "details"
                   ? "border-indigo-600 text-indigo-600"
                   : "border-transparent text-slate-500 hover:text-slate-800"
@@ -3030,8 +3030,8 @@ export default function LeadDetailDrawer({
           MODAL 1: CONFIRM CLOSED-WON DEAL (Phase 5)
       ========================================================================= */}
       {wonClosureModalOpen && (
-        <div className="fixed inset-0 z-60 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden transform transition-all p-6 space-y-4">
+        <div className="fixed inset-0 z-60 overflow-y-auto flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200 transform transition-all p-4 sm:p-6 space-y-4">
             <div className="flex items-start space-x-3">
               <div className="p-2.5 bg-emerald-100 text-emerald-700 rounded-xl shrink-0">
                 <CheckCircle2 className="w-5 h-5" />
@@ -3150,8 +3150,8 @@ export default function LeadDetailDrawer({
           MODAL 2: SEND QUOTATION VIA EMAIL (Phase 1 & Phase 3)
       ========================================================================= */}
       {sendModalQuotation && (
-        <div className="fixed inset-0 z-60 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden transform transition-all p-6 space-y-4">
+        <div className="fixed inset-0 z-60 overflow-y-auto flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200 transform transition-all p-4 sm:p-6 space-y-4">
             <div className="flex items-start justify-between">
               <div className="flex items-start space-x-3">
                 <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl shrink-0">
@@ -3269,8 +3269,8 @@ export default function LeadDetailDrawer({
 
       {/* Quotation Delete Confirmation Modal */}
       {deleteModalQuotation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-4 border border-slate-100">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">

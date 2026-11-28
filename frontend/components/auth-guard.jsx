@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect } from "react"
+import React, { useEffect, useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import { isWhiteLabelDomain } from "@/lib/domain"
@@ -33,7 +33,14 @@ function isExemptRoute(pathname) {
 export default function AuthGuard({ children }) {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, status, loading } = useAuth()
+  const { user, status, loading, activeTenant } = useAuth()
+  const [urlTenant, setUrlTenant] = useState(null)
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setUrlTenant(new URLSearchParams(window.location.search).get("tenant"))
+    }
+  }, [pathname])
 
   const isExempt = isExemptRoute(pathname)
 
@@ -105,10 +112,7 @@ export default function AuthGuard({ children }) {
 
   // If unauthenticated or Super Admin without active tenant redirecting, hold rendering to prevent UI flash
   const hasSuperAdminTenant = Boolean(
-    typeof window !== "undefined" &&
-    (localStorage.getItem("leadflow_active_tenant") ||
-     new URLSearchParams(window.location.search).get("tenant") ||
-     user?.tenantId) &&
+    (activeTenant || urlTenant || user?.tenantId) &&
     (!user?.account || user.account.status !== "suspended")
   )
   if (status === "unauthenticated" || (status === "authenticated" && user?.role === "super_admin" && !hasSuperAdminTenant)) {

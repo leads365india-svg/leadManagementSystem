@@ -4,6 +4,8 @@ const dnsPromises = dns.promises
 const mongoose = require("mongoose")
 const Account = require("../models/Account")
 const User = require("../models/User")
+const Role = require("../models/Role")
+const { ensureTenantRoles } = Role
 const DomainMapping = require("../models/DomainMapping")
 const audit = require("../services/auditService")
 const { invalidateCustomDomainCache } = require("../utils/customDomainCache")
@@ -539,6 +541,7 @@ const createAccount = async (req, res) => {
       pageTitle: typeof pageTitle === "string" ? pageTitle.trim() : "",
     })
     await createdAccount.save()
+    await ensureTenantRoles(createdAccount.accountId)
     invalidateCustomDomainCache()
 
     res.status(201).json({
@@ -567,13 +570,16 @@ const createAccount = async (req, res) => {
   } catch (error) {
     console.error("Error creating account:", error)
 
-    // Full compensation rollback: clean up both user and account if created
+    // Full compensation rollback: clean up created user, account, and provisioned roles
     try {
       if (createdUser && createdUser._id) {
         await User.findByIdAndDelete(createdUser._id)
       }
       if (createdAccount && createdAccount._id) {
         await Account.findByIdAndDelete(createdAccount._id)
+      }
+      if (accountId) {
+        await Role.deleteMany({ tenantId: accountId }).setOptions({ skipTenantFilter: true })
       }
     } catch (cleanupError) {
       console.error("Rollback cleanup error:", cleanupError)

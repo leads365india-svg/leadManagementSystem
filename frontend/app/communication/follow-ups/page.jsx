@@ -600,11 +600,11 @@ function FollowUpsContent() {
         ]}
       />
 
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/20 to-blue-50/30 p-4 sm:p-6 lg:p-8">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/20 to-blue-50/30 p-3 sm:p-6 lg:p-8">
         <div className="max-w-7xl mx-auto space-y-6">
 
           {/* Page Top Header */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-4 sm:p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <div className="inline-flex items-center space-x-2 px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-200/60 text-indigo-700 text-xs font-semibold mb-2">
                 <CalendarClock className="w-3.5 h-3.5 text-indigo-600" />
@@ -644,7 +644,7 @@ function FollowUpsContent() {
           </div>
 
           {/* 5 KPI Metric Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
             {/* 1. Total */}
             <div
               onClick={() => handleTabChange("all")}
@@ -746,7 +746,7 @@ function FollowUpsContent() {
             
             {/* Top row: Status Tabs */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
-              <div className="flex items-center space-x-1.5 overflow-x-auto">
+              <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar max-w-full">
                 {[
                   { key: "all", label: "All Follow-ups", count: stats.total },
                   { key: "today", label: "Due Today", count: stats.today },
@@ -759,7 +759,7 @@ function FollowUpsContent() {
                     key={tab.key}
                     type="button"
                     onClick={() => handleTabChange(tab.key)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center space-x-1.5 cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-all flex items-center space-x-1.5 cursor-pointer ${
                       currentStatusTab === tab.key
                         ? tab.isAlert
                           ? "bg-rose-600 text-white shadow-xs"
@@ -796,9 +796,9 @@ function FollowUpsContent() {
             </div>
 
             {/* Bottom row: Search and Select dropdowns */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               {/* Search Bar */}
-              <form onSubmit={handleSearchSubmit} className="relative w-full sm:w-96">
+              <form onSubmit={handleSearchSubmit} className="relative w-full sm:max-w-sm">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
@@ -822,7 +822,7 @@ function FollowUpsContent() {
               </form>
 
               {/* Type and Priority Filters */}
-              <div className="flex items-center space-x-2.5 w-full sm:w-auto overflow-x-auto">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 w-full sm:w-auto">
                 {/* Type Filter */}
                 <div className="flex items-center space-x-1">
                   <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider hidden md:inline">
@@ -1145,9 +1145,9 @@ function FollowUpsContent() {
       {/* 1. Schedule New Follow-up Modal                                */}
       {/* ============================================================== */}
       {isScheduleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90vh]">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90dvh]">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-slate-900">Schedule Lead Follow-up</h3>
                 <p className="text-xs text-slate-500">Plan a future callback, meeting demo, or touchpoint</p>
@@ -1199,7 +1199,7 @@ function FollowUpsContent() {
               </div>
 
               {/* Type and Priority 2-Column */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Touchpoint Type <span className="text-rose-500">*</span>
@@ -1232,7 +1232,7 @@ function FollowUpsContent() {
               </div>
 
               {/* Date & Time 2-Column */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Follow-up Date <span className="text-rose-500">*</span>
@@ -1312,9 +1312,9 @@ function FollowUpsContent() {
       {/* 2. Follow-up Details & Linked Lead Modal                      */}
       {/* ============================================================== */}
       {activeDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-xl max-w-xl w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90vh]">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl max-w-xl w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90dvh]">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center">
                   <CalendarClock className="w-4 h-4" />
@@ -1488,9 +1488,9 @@ function FollowUpsContent() {
       {/* 3. Edit Follow-up Modal                                        */}
       {/* ============================================================== */}
       {editingFollowUp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90vh]">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90dvh]">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-slate-900">Edit Follow-up Touchpoint</h3>
                 <p className="text-xs text-slate-500">Update schedule date, status, or preparation notes</p>
@@ -1519,7 +1519,7 @@ function FollowUpsContent() {
               </div>
 
               {/* Type and Priority */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Touchpoint Type</label>
                   <select
@@ -1550,7 +1550,7 @@ function FollowUpsContent() {
               </div>
 
               {/* Date and Time */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Scheduled Date <span className="text-rose-500">*</span>
@@ -1577,7 +1577,7 @@ function FollowUpsContent() {
               </div>
 
               {/* Status and Assigned Rep */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Execution Status</label>
                   <select
@@ -1638,9 +1638,9 @@ function FollowUpsContent() {
       {/* 4. Complete Follow-up Modal                                    */}
       {/* ============================================================== */}
       {completingFollowUp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden border border-slate-200">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90dvh] overflow-y-auto border border-slate-200">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
                   <CheckCircle2 className="w-4 h-4" />
@@ -1705,8 +1705,8 @@ function FollowUpsContent() {
       {/* 5. Delete Confirmation Modal                                  */}
       {/* ============================================================== */}
       {deletingFollowUp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 text-center space-y-4 border border-slate-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 text-center space-y-4 border border-slate-200">
             <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 mx-auto flex items-center justify-center">
               <Trash2 className="w-6 h-6" />
             </div>

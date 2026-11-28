@@ -173,8 +173,11 @@ export default function LeadsClient() {
   const [wonTableAmountError, setWonTableAmountError] = useState(null)
   const [isSavingTableWon, setIsSavingTableWon] = useState(false)
 
-  // Fetch staff list for assignment
+  const canViewStaff = typeof hasPermission === "function" ? hasPermission("staff.view") : false
+
+  // Fetch staff list for assignment (only when authorized to view staff)
   useEffect(() => {
+    if (!authUser || !canViewStaff) return
     let isMounted = true
     apiClient
       .getStaff({ limit: 100, status: "active" })
@@ -189,7 +192,7 @@ export default function LeadsClient() {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [authUser, canViewStaff])
 
   const activeLeadId = activeLeadDetails?._id || activeLeadDetails?.id
 
@@ -757,13 +760,13 @@ export default function LeadsClient() {
       {/* =========================================================================
           PAGE HEADER & PRIMARY ACTIONS
       ========================================================================= */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-200">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 pb-3 sm:pb-4 border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Manage Leads</h1>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Manage Leads</h1>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center space-x-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -771,8 +774,9 @@ export default function LeadsClient() {
               fetchLeadStats()
             }}
             disabled={refreshing}
-            className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
+            className="inline-flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
             title="Refresh Leads Data"
+            aria-label="Refresh Leads Data"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin text-indigo-600" : "text-slate-500"}`} />
             <span className="hidden sm:inline">Refresh</span>
@@ -781,9 +785,9 @@ export default function LeadsClient() {
           {canImportLeads && (
             <Link
               href="/tools/import-leads"
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
+              className="inline-flex items-center space-x-1.5 px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
-              <UploadCloud className="w-4 h-4 text-slate-500" />
+              <UploadCloud className="w-4 h-4 text-slate-500 shrink-0" />
               <span>Import Leads</span>
             </Link>
           )}
@@ -791,9 +795,9 @@ export default function LeadsClient() {
           {canCreateLead && (
             <Link
               href="/leads/new"
-              className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
+              className="inline-flex items-center space-x-1.5 px-3.5 sm:px-4 py-1.5 sm:py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4 shrink-0" />
               <span>Add Lead</span>
             </Link>
           )}
@@ -803,7 +807,7 @@ export default function LeadsClient() {
       {/* =========================================================================
           STATUS QUICK NAVIGATION TAB BAR (Clean White & Light-Blue Palette)
       ========================================================================= */}
-      <div className="flex items-center space-x-1 overflow-x-auto pb-1 scrollbar-none border-b border-slate-200">
+      <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 border-b border-slate-200">
         {statusTabs.map((tab) => {
           const isActive = currentStatus === tab.key || (tab.key === "all" && currentStatus === "all")
           return (
@@ -811,7 +815,7 @@ export default function LeadsClient() {
               key={tab.key}
               type="button"
               onClick={() => handleStatusTabClick(tab.key)}
-              className={`inline-flex items-center px-3.5 py-2 text-xs font-medium rounded-t-lg transition-colors cursor-pointer whitespace-nowrap border-b-2 focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+              className={`inline-flex items-center px-3 sm:px-3.5 py-2 text-xs font-medium rounded-t-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 border-b-2 focus:outline-none focus:ring-1 focus:ring-blue-400 ${
                 isActive
                   ? "bg-blue-50/80 text-blue-700 border-blue-600 font-semibold"
                   : "bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border-transparent"
@@ -832,7 +836,7 @@ export default function LeadsClient() {
           SEARCH & FILTER CONTROLS BAR
       ========================================================================= */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-3.5 space-y-3">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 sm:gap-3">
           {/* Quick Search Input */}
           <div className="relative w-full sm:max-w-md">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -849,11 +853,11 @@ export default function LeadsClient() {
           </div>
 
           {/* Filter Bar Controls */}
-          <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
+          <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:flex-wrap sm:items-center sm:w-auto sm:justify-end">
             <button
               type="button"
               onClick={handleApplyFilters}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs transition-colors cursor-pointer"
+              className="inline-flex items-center justify-center space-x-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs transition-colors cursor-pointer whitespace-nowrap"
             >
               <Search className="w-3.5 h-3.5" />
               <span>Search</span>
@@ -862,7 +866,7 @@ export default function LeadsClient() {
             <button
               type="button"
               onClick={() => setIsFilterOpen((prev) => !prev)}
-              className={`inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium border rounded-lg transition-colors cursor-pointer ${
+              className={`inline-flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-medium border rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
                 isFilterOpen || activeFiltersCount > 0
                   ? "bg-indigo-50 border-indigo-200 text-indigo-700 font-semibold"
                   : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
@@ -881,10 +885,10 @@ export default function LeadsClient() {
               <button
                 type="button"
                 onClick={handleClearFilters}
-                className="px-2.5 py-2 text-xs text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                className="col-span-2 sm:col-span-1 px-2.5 py-1.5 sm:py-2 text-xs text-slate-500 hover:text-slate-800 transition-colors cursor-pointer text-center"
                 title="Reset all filters"
               >
-                Reset
+                Reset Filters
               </button>
             )}
           </div>
@@ -1053,49 +1057,269 @@ export default function LeadsClient() {
             All Leads: <span className="font-bold text-slate-900">{totalLeads}</span>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span className="text-slate-400">Sort by:</span>
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full">
+            <span className="text-slate-400 whitespace-nowrap shrink-0">Sort by:</span>
             <button
               type="button"
               onClick={() => handleSort("lastInteractionAt")}
-              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 currentSortBy === "lastInteractionAt"
                   ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
                   : "text-slate-600 hover:bg-slate-100"
               }`}
             >
               <span>Latest Interaction</span>
-              <ArrowUpDown className="w-3 h-3 text-slate-400" />
+              <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
             </button>
             <button
               type="button"
               onClick={() => handleSort("createdAt")}
-              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 currentSortBy === "createdAt"
                   ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
                   : "text-slate-600 hover:bg-slate-100"
               }`}
             >
               <span>Date</span>
-              <ArrowUpDown className="w-3 h-3 text-slate-400" />
+              <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
             </button>
             <button
               type="button"
               onClick={() => handleSort("name")}
-              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 currentSortBy === "name"
                   ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
                   : "text-slate-600 hover:bg-slate-100"
               }`}
             >
               <span>Name</span>
-              <ArrowUpDown className="w-3 h-3 text-slate-400" />
+              <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
             </button>
           </div>
         </div>
 
-        {/* Table Content */}
-        <div className="overflow-x-auto w-full">
+        {/* Mobile Card View (< md) */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {loading ? (
+            <div className="py-16 px-4 text-center text-slate-500 flex flex-col items-center justify-center space-y-3">
+              <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs font-medium text-slate-600">Loading leads database from Atlas...</p>
+            </div>
+          ) : error ? (
+            <div className="py-12 px-4 text-center flex flex-col items-center justify-center space-y-2 text-rose-600">
+              <AlertCircle className="w-8 h-8" />
+              <p className="font-semibold text-xs">{error}</p>
+              <button
+                type="button"
+                onClick={() => fetchLeads()}
+                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-2xs mt-2 transition-colors cursor-pointer"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : allLeadsList.length === 0 ? (
+            <div className="py-14 px-4 text-center flex flex-col items-center justify-center">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 mb-3 shadow-2xs">
+                <Users className="w-7 h-7 stroke-[1.8]" />
+              </div>
+              <h3 className="text-sm font-bold text-slate-900 mb-1">No leads found</h3>
+              <p className="text-xs text-slate-500 max-w-sm mb-5 leading-relaxed">
+                {activeFiltersCount > 0 || currentStatus !== "all"
+                  ? "No leads match your current filter parameters. Try clearing or relaxing your search filters."
+                  : "Your leads will appear here when you add them or capture them through your website lead feeds."}
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2.5">
+                {activeFiltersCount > 0 || currentStatus !== "all" ? (
+                  <button
+                    type="button"
+                    onClick={handleClearFilters}
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                  >
+                    <Filter className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Reset Filters</span>
+                  </button>
+                ) : null}
+                <Link
+                  href="/leads/new"
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Your First Lead</span>
+                </Link>
+              </div>
+            </div>
+          ) : (
+            allLeadsList.map((lead, idx) => {
+              const leadIdStr = lead._id || lead.id || `lead-${idx}`
+              const statusInfo = STATUS_CONFIG[lead.status] || {
+                label: lead.status || "New",
+                dotColor: "bg-slate-400",
+                badgeClasses: "bg-slate-50 text-slate-700 border-slate-200",
+              }
+              const isPlayingThisLead =
+                activePlayingCall &&
+                (activePlayingCall.leadId === leadIdStr ||
+                  (lead.phone && (activePlayingCall.leadPhone === lead.phone || activePlayingCall.number === lead.phone)))
+
+              return (
+                <div key={leadIdStr} className="p-3.5 space-y-2.5 hover:bg-slate-50/80 transition-colors">
+                  {/* Top Row: Avatar, Name/Company/City + Action Icons */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start space-x-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs uppercase shrink-0 mt-0.5">
+                        {lead.name ? lead.name.charAt(0) : "L"}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setActiveLeadDetails(lead)}
+                            className="font-bold text-xs text-slate-900 hover:text-indigo-600 transition-colors text-left truncate max-w-[180px] cursor-pointer"
+                          >
+                            {lead.name}
+                          </button>
+                          {(lead.metadata?.captureSource === "ANDROID_AUTO_CALL_CAPTURE" || lead.metadata?.autoCaptured === true) && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                              <PhoneIncoming className="w-2.5 h-2.5 text-amber-600" />
+                              <span>Auto</span>
+                            </span>
+                          )}
+                        </div>
+                        {lead.company ? (
+                          <p className="text-[11px] text-indigo-600 font-medium truncate flex items-center gap-1 mt-0.5">
+                            <Building2 className="w-3 h-3 text-indigo-500 shrink-0" />
+                            <span className="truncate">{lead.company}</span>
+                          </p>
+                        ) : null}
+                        {lead.city ? (
+                          <p className="text-[11px] text-slate-500 font-medium truncate flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{lead.city}</span>
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveLeadDetails(lead)}
+                        className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                        title="Quick View Lead Details"
+                        aria-label={`View details for ${lead.name}`}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+
+                      {Boolean(lead.hasRecording) && (
+                        <button
+                          type="button"
+                          onClick={() => handlePlayRecording(lead)}
+                          disabled={loadingRecordingId === leadIdStr}
+                          className={`p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50 ${
+                            isPlayingThisLead
+                              ? "text-emerald-700 bg-emerald-100/90 hover:bg-emerald-200 ring-1 ring-emerald-400"
+                              : "text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"
+                          }`}
+                          title={isPlayingThisLead ? "Close Playing Recording" : "Play Call Recording"}
+                          aria-label={`Play call recording for ${lead.name}`}
+                        >
+                          {loadingRecordingId === leadIdStr ? (
+                            <RefreshCw className="w-4 h-4 animate-spin text-indigo-600" />
+                          ) : (
+                            <Play className={`w-4 h-4 fill-current ${isPlayingThisLead ? "text-emerald-600" : ""}`} />
+                          )}
+                        </button>
+                      )}
+
+                      {canEditLead && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditModal(lead)}
+                          className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Lead"
+                          aria-label={`Edit ${lead.name}`}
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                      )}
+
+                      {canDeleteLead && (
+                        <button
+                          type="button"
+                          onClick={() => setLeadToDelete(lead)}
+                          className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Lead"
+                          aria-label={`Delete ${lead.name}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Contact & Meta Row */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] font-mono text-slate-600">
+                    {lead.phone && (
+                      <a href={`tel:${lead.phone}`} className="flex items-center space-x-1.5 hover:text-indigo-600 truncate">
+                        <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span className="truncate">{lead.phone}</span>
+                      </a>
+                    )}
+                    {lead.email && (
+                      <a href={`mailto:${lead.email}`} className="flex items-center space-x-1.5 hover:text-indigo-600 truncate">
+                        <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span className="truncate">{lead.email}</span>
+                      </a>
+                    )}
+                  </div>
+
+                  {/* Bottom Bar: Stage Selector + Source/Owner/Date */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <div className="relative inline-flex items-center w-[134px]">
+                      <select
+                        value={lead.status || "New"}
+                        onChange={(e) => handleQuickStatusChange(leadIdStr, e.target.value, lead.status)}
+                        disabled={updatingStatusId === leadIdStr}
+                        aria-label={`Update pipeline status for ${lead.name}`}
+                        className={`w-full text-[11px] font-semibold rounded-md pl-5 pr-5 py-1 border transition-colors cursor-pointer appearance-none focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 truncate shadow-2xs ${statusInfo.badgeClasses}`}
+                      >
+                        {ALL_STATUSES.map((s) => (
+                          <option key={s} value={s} className="bg-white text-slate-800 font-medium py-1">
+                            {s} {s === "Engaged" ? "(Active)" : s === "Closed-Won" ? "(Won)" : s === "Closed-Lost" ? "(Lost)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <span className={`w-1.5 h-1.5 rounded-full absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none ${statusInfo.dotColor}`} />
+                      <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                      <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-medium">
+                        <Tag className="w-2.5 h-2.5 text-slate-400" />
+                        <span>{lead.source || "Website Form"}</span>
+                      </span>
+                      <span className="truncate max-w-[110px]">
+                        {lead.ownerId?.name || (lead.assignedTo && lead.assignedTo !== "Unassigned" ? lead.assignedTo : "Unassigned")}
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-400">
+                        {lead.createdAt
+                          ? new Date(lead.createdAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                            })
+                          : ""}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        {/* Table Content (>= md) */}
+        <div className="hidden md:block overflow-x-auto w-full">
           <table className="w-full text-left border-collapse text-xs min-w-[860px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
@@ -1542,7 +1766,7 @@ export default function LeadsClient() {
 
       {/* In-Browser Streaming Audio Player Dock */}
       {activePlayingCall && (
-        <div className="fixed bottom-6 right-6 z-50 w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
+        <div className="fixed bottom-20 lg:bottom-6 inset-x-3 sm:left-auto sm:right-6 z-40 sm:w-full max-w-md animate-in slide-in-from-bottom-5 duration-200 shadow-2xl">
           <InBrowserAudioPlayer
             callId={activePlayingCall.callId || activePlayingCall._id || activePlayingCall.id || activePlayingCall.clientCallId}
             recording={activePlayingCall.recording}
@@ -1558,12 +1782,12 @@ export default function LeadsClient() {
           IN-PLACE EDIT LEAD MODAL
       ========================================================================= */}
       {editingLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
           <div
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
             onClick={() => setEditingLead(null)}
           />
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="font-bold text-base text-slate-900">Edit Lead Record</h3>
@@ -1809,12 +2033,12 @@ export default function LeadsClient() {
           DELETE CONFIRMATION MODAL DIALOG
       ========================================================================= */}
       {leadToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
           <div
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
             onClick={() => !isDeleting && setLeadToDelete(null)}
           />
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center space-x-3 text-rose-600">
               <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center border border-rose-100 shrink-0">
                 <AlertTriangle className="w-5 h-5 text-rose-600" />
@@ -1867,9 +2091,9 @@ export default function LeadsClient() {
           CONFIRM CLOSED-WON DEAL MODAL (Table Row Dropdown Trigger)
       ========================================================================= */}
       {wonClosureLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={handleCancelTableWonClosure} />
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 sm:p-6 space-y-4 z-10 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start space-x-3">
               <div className="p-2.5 bg-emerald-100 text-emerald-700 rounded-xl shrink-0">
                 <CheckCircle2 className="w-5 h-5" />

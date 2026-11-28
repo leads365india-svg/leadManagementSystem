@@ -92,7 +92,7 @@ function PortalLeadsContent() {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="px-3 sm:px-6 py-4 sm:py-6 space-y-6 animate-in fade-in duration-300">
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -102,7 +102,7 @@ function PortalLeadsContent() {
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             onClick={() => fetchLeads()}
             disabled={refreshing}
@@ -123,7 +123,7 @@ function PortalLeadsContent() {
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="relative w-full sm:w-80">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
@@ -139,15 +139,15 @@ function PortalLeadsContent() {
         </div>
 
         <div className="flex items-center space-x-2 w-full sm:w-auto">
-          <Filter className="w-3.5 h-3.5 text-slate-400" />
-          <span className="text-xs text-slate-500">Pipeline Stage:</span>
+          <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <span className="text-xs text-slate-500 shrink-0">Pipeline Stage:</span>
           <select
             value={status}
             onChange={(e) => {
               setStatus(e.target.value)
               setPage(1)
             }}
-            className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+            className="flex-1 sm:flex-none text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-600"
           >
             <option value="all">All Stages</option>
             <option value="New">New</option>
@@ -159,9 +159,59 @@ function PortalLeadsContent() {
         </div>
       </div>
 
-      {/* Leads Table */}
+      {/* Leads Mobile Card List (< md) + Desktop Table (>= md) */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-slate-100">
+          {loading ? (
+            <div className="py-12 px-4 text-center text-slate-500 flex flex-col items-center justify-center space-y-2 text-xs">
+              <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+              <span>Loading organization leads...</span>
+            </div>
+          ) : leads.length === 0 ? (
+            <div className="py-12 px-4 text-center text-slate-500 flex flex-col items-center justify-center space-y-2 text-xs">
+              <Users className="w-8 h-8 text-slate-300" />
+              <p className="font-medium text-slate-700">No Leads Found</p>
+              <p className="text-xs text-slate-400">
+                {search || status !== "all"
+                  ? "Try adjusting your search query or stage filter."
+                  : "Get started by adding your first prospect lead."}
+              </p>
+              <Link
+                href="/portal/leads/new"
+                className="inline-block mt-2 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+              >
+                + Add Lead
+              </Link>
+            </div>
+          ) : (
+            leads.map((lead) => (
+              <div key={lead._id} className="p-3.5 space-y-1.5 hover:bg-slate-50/70 transition-colors">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-xs text-slate-900 truncate">{lead.name}</p>
+                    <p className="font-mono text-slate-600 text-[11px] truncate">{lead.email}</p>
+                  </div>
+                  <span
+                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 ${getStatusBadge(
+                      lead.status,
+                    )}`}
+                  >
+                    {lead.status}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 text-right">
+                  {new Date(lead.createdAt).toLocaleDateString(undefined, {
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
@@ -257,7 +307,7 @@ function PortalLeadsContent() {
 
         {/* Pagination Footer */}
         {totalPages > 1 && (
-          <div className="p-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+          <div className="p-3.5 sm:p-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
             <span>
               Showing {leads.length} of {totalLeads} leads
             </span>

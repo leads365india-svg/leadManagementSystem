@@ -133,13 +133,13 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
   return (
     <div className="w-full px-3 sm:px-4 py-4 sm:py-5 space-y-8 animate-in fade-in duration-300">
       {/* Top Welcome & Navigation Header */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+      <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
               <Layers className="w-4 h-4" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">
               Master Dashboard — All Projects
             </h1>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
@@ -151,7 +151,7 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0">
           <button
             onClick={() => loadMasterData()}
             disabled={refreshing}
@@ -173,8 +173,8 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
 
       {/* Review Queue Alert Banner */}
       {queueTotal > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 shadow-2xs">
-          <div className="flex items-start justify-between gap-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-5 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
             <div className="flex items-start space-x-3">
               <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 shrink-0 mt-0.5">
                 <AlertCircle className="w-5 h-5" />
@@ -324,7 +324,7 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
       )}
 
       {/* 4 Consolidated Master KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           {
             key: "total-leads",
@@ -398,11 +398,11 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
               key={card.key}
               href={card.href}
               aria-label={card.ariaLabel}
-              className={`group block bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all duration-150 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${card.hoverClass} ${card.focusClass}`}
+              className={`group block bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all duration-150 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 min-w-0 ${card.hoverClass} ${card.focusClass}`}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span
-                  className={`text-xs font-semibold text-slate-500 uppercase tracking-wider transition-colors ${card.titleHoverClass}`}
+                  className={`text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider transition-colors truncate ${card.titleHoverClass}`}
                 >
                   {card.title}
                 </span>
@@ -410,11 +410,11 @@ export default function MasterDashboard({ workspaces = [], setActiveWorkspace, u
                   <CardIcon className="w-4 h-4" />
                 </div>
               </div>
-              <div className="mt-3 flex items-baseline justify-between gap-2">
-                <div className="text-2xl font-extrabold text-slate-900 tracking-tight">{card.value}</div>
+              <div className="mt-2.5 sm:mt-3 flex flex-wrap items-baseline justify-between gap-1.5">
+                <div className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">{card.value}</div>
                 {card.meta}
               </div>
-              <p className="text-[11px] text-slate-400 mt-1">{card.subtitle}</p>
+              <p className="text-[11px] text-slate-400 mt-1 truncate">{card.subtitle}</p>
             </Link>
           )
         })}
