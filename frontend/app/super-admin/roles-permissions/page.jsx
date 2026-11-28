@@ -5,6 +5,7 @@ import Link from "next/link"
 import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { buildCustomDomainUrl } from "@/lib/domain"
+import { expandPermissionsForModules, isPermissionCoveredByCeiling } from "@/lib/rbac"
 import { toast } from "react-hot-toast"
 import {
   Shield,
@@ -48,6 +49,7 @@ export default function RolesPermissionsPage() {
   const [modules, setModules] = useState([])
   const [allowedPermissions, setAllowedPermissions] = useState([])
   const [savedCeilingPermissions, setSavedCeilingPermissions] = useState([])
+  const [ceilingLoaded, setCeilingLoaded] = useState(false)
   const [selectedPermissions, setSelectedPermissions] = useState(new Set())
   const [initialPermissions, setInitialPermissions] = useState(new Set())
   const [updatedAt, setUpdatedAt] = useState(null)
@@ -139,7 +141,10 @@ export default function RolesPermissionsPage() {
     [accounts, selectedTenantId],
   )
 
-  const ceilingPermissionSet = useMemo(() => new Set(savedCeilingPermissions), [savedCeilingPermissions])
+  const modulePermissionKeys = useMemo(
+    () => modules.flatMap((mod) => (mod.permissions || []).map((p) => p.key)),
+    [modules],
+  )
 
   const readSupportCookieTenant = useCallback(() => {
     if (typeof document === "undefined") return ""
@@ -252,11 +257,14 @@ export default function RolesPermissionsPage() {
       const res = await apiClient.getPermissions()
 
       if (res.success && res.data) {
-        setModules(res.data.modules || [])
-        setAllowedPermissions(res.data.allowedPermissions || [])
+        const loadedModules = res.data.modules || []
         const activeList = res.data.activePermissions || []
+        const expandedActive = expandPermissionsForModules(activeList, loadedModules)
+        setModules(loadedModules)
+        setAllowedPermissions(res.data.allowedPermissions || [])
         setSavedCeilingPermissions(activeList)
-        const active = new Set(activeList)
+        setCeilingLoaded(true)
+        const active = new Set(expandedActive)
         setSelectedPermissions(active)
         setInitialPermissions(new Set(active))
         setUpdatedAt(res.data.updatedAt)
@@ -302,8 +310,10 @@ export default function RolesPermissionsPage() {
   }, [])
 
   const selectAll = useCallback(() => {
-    setSelectedPermissions(new Set(allowedPermissions))
-  }, [allowedPermissions])
+    setSelectedPermissions(
+      new Set(modulePermissionKeys.length > 0 ? modulePermissionKeys : allowedPermissions),
+    )
+  }, [modulePermissionKeys, allowedPermissions])
 
   const deselectAll = useCallback(() => {
     setSelectedPermissions(new Set())
@@ -505,11 +515,17 @@ export default function RolesPermissionsPage() {
   const openEditRoleModal = (role) => {
     setEditingRole(role)
     setRoleModalError(null)
+    const rawPerms = Array.isArray(role.permissions) ? role.permissions : []
+    const expandedPerms = expandPermissionsForModules(
+      rawPerms,
+      modules,
+      ceilingLoaded ? savedCeilingPermissions : null,
+    )
     setRoleFormData({
       name: role.name || "",
       slug: role.slug || "",
       description: role.description || "",
-      permissions: Array.isArray(role.permissions) ? [...role.permissions] : [],
+      permissions: expandedPerms,
     })
     setIsRoleModalOpen(true)
   }
@@ -939,7 +955,7 @@ export default function RolesPermissionsPage() {
                         <p className="text-base font-bold text-indigo-600 mt-0.5">
                           {selectedPermissions.size}
                           <span className="text-xs text-slate-400 font-normal ml-1">
-                            / {allowedPermissions.length} total
+                            / {modulePermissionKeys.length || allowedPermissions.length} total
                           </span>
                         </p>
                       </div>
@@ -1561,7 +1577,8 @@ export default function RolesPermissionsPage() {
                         {(mod.permissions || []).map((perm) => {
                           const isChecked = roleFormData.permissions.includes(perm.key)
                           const isAllowedByCeiling =
-                            ceilingPermissionSet.size === 0 || ceilingPermissionSet.has(perm.key)
+                            !ceilingLoaded ||
+                            isPermissionCoveredByCeiling(perm.key, savedCeilingPermissions)
                           const isDisabled = isReadOnlySupportMode || (!isAllowedByCeiling && !isChecked)
                           return (
                             <label

@@ -241,8 +241,16 @@ const scopeFilter = async (user, resourceType, action = "view") => {
     return { _id: null } // Fail closed: unauthenticated
   }
 
-  if (user.role === "super_admin" || user.role === "tenant_admin" || user.role === "account_admin") {
-    return {} // Super admin, Tenant admin, and Account admin have global/tenant-wide scope
+  if (user.role === "super_admin") {
+    return {} // Super admin has platform-wide scope
+  }
+
+  // Fallback only when synthetic/unit callers pass admin user without resolved permissions
+  if (
+    (user.role === "tenant_admin" || user.role === "account_admin") &&
+    !Array.isArray(user.permissions)
+  ) {
+    return {}
   }
 
   let userPerms = user.permissions
@@ -362,10 +370,10 @@ const checkDirectObjectAccess = async (user, doc, resourceType, action = "view")
     return { allowed: false, reason: "Cross-tenant access prohibited" }
   }
 
-  // Account admin or tenant admin has tenant-wide all-scope by default if permissions array is not pre-populated
+  // Account admin or tenant admin has tenant-wide all-scope only when permissions array was not resolved
   if (
     (user.role === "account_admin" || user.role === "tenant_admin") &&
-    (!Array.isArray(user.permissions) || user.permissions.length === 0)
+    !Array.isArray(user.permissions)
   ) {
     return { allowed: true }
   }

@@ -18,34 +18,33 @@ const bootstrapSuperAdmin = async () => {
     // 1. Check persistent bootstrap history in system configuration
     const bootstrapMarker = await SystemConfig.findOne({ key: "superadmin_bootstrap_completed" })
 
-    // 2. Bootstrap default Account Admin permissions template if not present or missing audit.view
+    // 2. Bootstrap default Account Admin permissions ceiling ONLY if no document exists yet.
+    // Never re-add permissions removed intentionally by a Super Admin on subsequent server restarts.
     let permissionsConfig = await RolePermission.findOne({ targetRole: "account_admin" })
     if (!permissionsConfig) {
-      await RolePermission.create({
+      permissionsConfig = await RolePermission.create({
         targetRole: "account_admin",
         permissions: DEFAULT_ACCOUNT_ADMIN_PERMISSIONS,
         updatedBy: "system_bootstrap",
       })
       console.log("✅ Default Leads Account Admin permissions configured.")
-    } else {
-      let changed = false
-      for (const perm of DEFAULT_ACCOUNT_ADMIN_PERMISSIONS) {
-        if (!permissionsConfig.permissions.includes(perm)) {
-          permissionsConfig.permissions.push(perm)
-          changed = true
-        }
-      }
-      if (changed) {
-        await permissionsConfig.save()
-      }
     }
 
-    // 3. Ensure all existing system account_admin roles in the database possess audit.view
+    // 3. One-time migration for legacy uncustomized account_admin roles missing audit.view
+    // Never overwrite tenant-customized system roles (isCustomized: true) or roles already containing it.
     const Role = require("../models/Role")
-    await Role.updateMany(
-      { isSystem: true, slug: "account_admin" },
-      { $addToSet: { permissions: "audit.view" } },
-    ).setOptions({ skipTenantFilter: true })
+    const ceilingPerms = Array.isArray(permissionsConfig?.permissions) ? permissionsConfig.permissions : []
+    if (!permissionsConfig || ceilingPerms.includes("audit.view")) {
+      await Role.updateMany(
+        {
+          isSystem: true,
+          slug: "account_admin",
+          isCustomized: { $ne: true },
+          permissions: { $ne: "audit.view" },
+        },
+        { $addToSet: { permissions: "audit.view" } },
+      ).setOptions({ skipTenantFilter: true })
+    }
 
     // 4. Query existing Super Admin account explicitly selecting the password hash
     // (User schema marks password with select: false, so +password is mandatory)

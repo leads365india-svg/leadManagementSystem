@@ -5,6 +5,7 @@ import Link from "next/link"
 import { toast } from "react-hot-toast"
 import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { expandPermissionsForModules, isPermissionCoveredByCeiling } from "@/lib/rbac"
 import {
   Shield,
   ShieldAlert,
@@ -131,7 +132,12 @@ export default function RolesClient() {
   // Open permission editing modal
   const handleOpenPermModal = (role) => {
     setActiveRole(role)
-    setEditedPermissions([...(role.permissions || [])])
+    const expanded = expandPermissionsForModules(
+      role.permissions || [],
+      availableModules,
+      ceiling.length > 0 ? ceiling : null,
+    )
+    setEditedPermissions(expanded)
     setIsPermModalOpen(true)
   }
 
@@ -294,10 +300,7 @@ export default function RolesClient() {
   // Check ceiling coverage helper
   const isCoveredByCeiling = (permKey) => {
     if (!ceiling || ceiling.length === 0) return true
-    if (ceiling.includes(permKey)) return true
-    if (permKey.endsWith(".own") && (ceiling.includes(permKey.replace(".own", ".all")) || ceiling.includes(permKey.replace(".own", ".team")) || ceiling.includes(permKey.replace(".own", "")))) return true
-    if (permKey.endsWith(".team") && (ceiling.includes(permKey.replace(".team", ".all")) || ceiling.includes(permKey.replace(".team", "")))) return true
-    return false
+    return isPermissionCoveredByCeiling(permKey, ceiling)
   }
 
   return (

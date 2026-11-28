@@ -103,12 +103,12 @@ class ApiClient {
         headers["x-auth-portal"] = "super_admin"
       }
 
-      const { skipWorkspaceHeader: _skipWs, ...fetchOptions } = options
+      const { skipWorkspaceHeader: _skipWs, headers: _optionHeaders, ...fetchOptions } = options
       const config = {
         method,
         credentials: "include",
-        headers,
         ...fetchOptions,
+        headers,
       }
 
       try {
@@ -477,7 +477,7 @@ class ApiClient {
   }
 
   async getPermissions() {
-    return this.request("/super-admin/permissions")
+    return this.request("/super-admin/permissions", { cache: "no-store" })
   }
 
   async updatePermissions(permissions) {

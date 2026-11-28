@@ -16,6 +16,7 @@ const Role = require("../models/Role")
 const { ensureTenantRoles } = require("../models/Role")
 const RolePermission = require("../models/RolePermission")
 const { DEFAULT_ACCOUNT_ADMIN_PERMISSIONS } = RolePermission
+const { bootstrapSuperAdmin } = require("../db/seedSuperAdmin")
 const Lead = require("../models/Lead")
 const AuditLog = require("../models/AuditLog")
 const { runWithTenantContext } = require("../middleware/tenantContext")
@@ -585,6 +586,233 @@ const runTests = async () => {
         .send({ name: "Forbidden SuperAdmin Lead", email: `forbidden_sa_${TEST_TAG}@test.local` })
       assert.strictEqual(leadCreateBlockedRes.status, 403)
       assert.strictEqual(leadCreateBlockedRes.body.code, "SUPERADMIN_READONLY_SUPPORT_MODE")
+    })
+
+    await check("Scenario 12: Removing audit.view, reports.view & leads.view.all from Account Admin survives bootstrapSuperAdmin() restart hook and getAvailablePermissions honors un-scoped ceiling", async () => {
+      // Simulate production ceiling holding un-scoped legacy keys (DEFAULT_ACCOUNT_ADMIN_PERMISSIONS)
+      await RolePermission.findOneAndUpdate(
+        { targetRole: "account_admin" },
+        { permissions: [...DEFAULT_ACCOUNT_ADMIN_PERMISSIONS], updatedBy: originalCeiling.updatedBy || "system_bootstrap" },
+      )
+      invalidatePermissionCache()
+
+      // Available permissions API must expose scoped leads/followups/calls keys when ceiling holds un-scoped keys
+      const availRes = await request(app)
+        .get("/api/roles/permissions/available")
+        .set("Authorization", `Bearer ${adminBToken}`)
+      assert.strictEqual(availRes.status, 200)
+      const availKeys = availRes.body.data.allowedKeys || []
+      assert(availKeys.includes("leads.view.all"), "Available keys must include leads.view.all under un-scoped ceiling")
+      assert(availKeys.includes("leads.view.team"), "Available keys must include leads.view.team under un-scoped ceiling")
+      assert(availKeys.includes("leads.view.own"), "Available keys must include leads.view.own under un-scoped ceiling")
+
+      // Remove audit.view, reports.view, and replace leads.view with leads.view.own for Tenant A Account Admin
+      const restrictedAdminPerms = ["dashboard.view", "leads.view.own", "leads.edit.own", "calls.log"]
+      const restrictRes = await request(app)
+        .put(`/api/roles/${roleAdminA.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .send({
+          tenantId: TENANT_A,
+          permissions: restrictedAdminPerms,
+        })
+      assert.strictEqual(restrictRes.status, 200)
+      assert.strictEqual(restrictRes.body.data.isCustomized, true)
+      assert.deepStrictEqual(restrictRes.body.data.permissions.sort(), [...restrictedAdminPerms].sort())
+
+      // Simulate server restart + reload hooks
+      await bootstrapSuperAdmin()
+      await ensureTenantRoles(TENANT_A)
+      invalidateTenantRoleCache(TENANT_A)
+      invalidatePermissionCache()
+
+      // Customized Account Admin must NOT have audit.view or leads.view restored
+      const dbAdminAfterRestart = await Role.findById(roleAdminA.id).setOptions({ skipTenantFilter: true }).lean()
+      assert.strictEqual(dbAdminAfterRestart.isCustomized, true)
+      assert(!dbAdminAfterRestart.permissions.includes("audit.view"), "audit.view must NOT be re-added on restart")
+      assert(!dbAdminAfterRestart.permissions.includes("reports.view"), "reports.view must remain removed")
+      assert.deepStrictEqual(dbAdminAfterRestart.permissions.sort(), [...restrictedAdminPerms].sort())
+
+      const reloadAdminListRes = await request(app)
+        .get(`/api/roles?tenantId=${TENANT_A}`)
+        .set("Authorization", `Bearer ${superToken}`)
+      assert.strictEqual(reloadAdminListRes.status, 200)
+      const reloadedAdminA = reloadAdminListRes.body.data.roles.find((r) => r.slug === "account_admin")
+      assert.deepStrictEqual(reloadedAdminA.permissions.sort(), [...restrictedAdminPerms].sort())
+
+      const reloadAdminSingleRes = await request(app)
+        .get(`/api/roles/${roleAdminA.id}?tenantId=${TENANT_A}`)
+        .set("Authorization", `Bearer ${superToken}`)
+      assert.strictEqual(reloadAdminSingleRes.status, 200)
+      assert.deepStrictEqual(reloadAdminSingleRes.body.data.permissions.sort(), [...restrictedAdminPerms].sort())
+
+      // Also verify Admin A now gets 403 on audit logs, while Tenant B Admin still has 200
+      const auditARes = await request(app).get("/api/audit-logs").set("Authorization", `Bearer ${adminAToken}`)
+      assert.strictEqual(auditARes.status, 403, "Restricted Tenant A Admin must lose /api/audit-logs when audit.view removed")
+
+      const auditBRes = await request(app).get("/api/audit-logs").set("Authorization", `Bearer ${adminBToken}`)
+      assert.strictEqual(auditBRes.status, 200, "Uncustomized Tenant B Admin must still access /api/audit-logs")
+    })
+
+    await check("Scenario 13: Customized Account Admin with leads.view.own (leads.view.all removed) is strictly scoped in GET /api/leads & GET /api/leads/:id", async () => {
+      const leadOwnAdminA = await runWithTenantContext(
+        { tenantId: TENANT_A, isSuperAdmin: false, mode: "standalone" },
+        () =>
+          Lead.create({
+            tenantId: TENANT_A,
+            name: "Admin A Own Lead",
+            phone: `9100001${String(Date.now()).slice(-3)}`,
+            assignedStaffId: adminA._id.toString(),
+            assignedTo: adminA.name,
+            createdBy: adminA.email,
+          }),
+      )
+      const leadOtherAgentA = await runWithTenantContext(
+        { tenantId: TENANT_A, isSuperAdmin: false, mode: "standalone" },
+        () =>
+          Lead.create({
+            tenantId: TENANT_A,
+            name: "Agent A Lead Hidden From Restricted Admin",
+            phone: `9100002${String(Date.now()).slice(-3)}`,
+            assignedStaffId: agentA._id.toString(),
+            assignedTo: agentA.name,
+            createdBy: agentA.email,
+          }),
+      )
+      const leadTenantB = await runWithTenantContext(
+        { tenantId: TENANT_B, isSuperAdmin: false, mode: "standalone" },
+        () =>
+          Lead.create({
+            tenantId: TENANT_B,
+            name: "Tenant B Lead",
+            phone: `9100003${String(Date.now()).slice(-3)}`,
+            assignedStaffId: adminB._id.toString(),
+            assignedTo: adminB.name,
+            createdBy: adminB.email,
+          }),
+      )
+
+      const meAdminARes = await request(app).get("/api/auth/me").set("Authorization", `Bearer ${adminAToken}`)
+      assert.strictEqual(meAdminARes.status, 200)
+      assert.deepStrictEqual(
+        meAdminARes.body.data.user.permissions.sort(),
+        ["calls.log", "dashboard.view", "leads.edit.own", "leads.view.own"],
+      )
+
+      const leadsListARes = await request(app).get("/api/leads").set("Authorization", `Bearer ${adminAToken}`)
+      assert.strictEqual(leadsListARes.status, 200)
+      const leadIdsA = (leadsListARes.body.data?.leads || leadsListARes.body.data || []).map((l) =>
+        String(l._id || l.id),
+      )
+      assert(leadIdsA.includes(leadOwnAdminA._id.toString()), "Restricted Admin A must see own lead")
+      assert(!leadIdsA.includes(leadOtherAgentA._id.toString()), "Restricted Admin A must NOT see Agent A lead when leads.view.all is removed")
+      assert(!leadIdsA.includes(leadTenantB._id.toString()), "Tenant B lead must remain isolated")
+
+      const directOtherRes = await request(app)
+        .get(`/api/leads/${leadOtherAgentA._id}`)
+        .set("Authorization", `Bearer ${adminAToken}`)
+      assert.strictEqual(directOtherRes.status, 403, "Direct object access must deny Agent A lead to own-scoped Admin A")
+
+      const directOwnRes = await request(app)
+        .get(`/api/leads/${leadOwnAdminA._id}`)
+        .set("Authorization", `Bearer ${adminAToken}`)
+      assert.strictEqual(directOwnRes.status, 200, "Direct object access must allow Admin A's own lead")
+
+      const leadsListBRes = await request(app).get("/api/leads").set("Authorization", `Bearer ${adminBToken}`)
+      assert.strictEqual(leadsListBRes.status, 200)
+      const leadIdsB = (leadsListBRes.body.data?.leads || leadsListBRes.body.data || []).map((l) =>
+        String(l._id || l.id),
+      )
+      assert(leadIdsB.includes(leadTenantB._id.toString()), "Uncustomized Tenant B Admin must still see Tenant B leads")
+    })
+
+    await check("Scenario 14: Super Admin updates Tenant B Account Admin from 25/35 down to exact 21 scoped permissions via PUT /api/roles/:id and persists across MongoDB & GET /api/roles", async () => {
+      // Simulate the exact Tenant B Account Admin doc starting from 25 un-scoped defaults
+      const listBInitial = await request(app)
+        .get(`/api/roles?tenantId=${TENANT_B}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_B)
+      assert.strictEqual(listBInitial.status, 200)
+      const roleAdminB = listBInitial.body.data.roles.find((r) => r.slug === "account_admin")
+      assert(roleAdminB, "Account Admin role exists for Tenant B")
+
+      // Exact 21-permission subset (14 unchecked from the 35 expanded permissions:
+      // staff.view, staff.manage, teams.manage, roles.manage, leadfeed.manage,
+      // settings.view, settings.manage, calls.view.team, leads.edit.all, leads.edit.team,
+      // leads.delete, followups.view.team, followups.manage.own, recordings.listen)
+      const exact21Permissions = [
+        "dashboard.view",
+        "leads.view.all",
+        "leads.view.team",
+        "leads.view.own",
+        "leads.create",
+        "leads.edit.own",
+        "leads.assign",
+        "leads.export",
+        "leads.bulkUpdate",
+        "followups.view.all",
+        "followups.view.own",
+        "followups.manage.all",
+        "followups.manage.team",
+        "calls.view.all",
+        "calls.view.own",
+        "calls.log",
+        "devices.manage",
+        "donotrecord.manage",
+        "audit.view",
+        "reports.view",
+        "conversion.manage",
+      ]
+      assert.strictEqual(exact21Permissions.length, 21)
+
+      // Sending PUT without Content-Type: application/json (empty req.body) must fail 400 loudly, not silently 200
+      const emptyBodyRes = await request(app)
+        .put(`/api/roles/${roleAdminB.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_B)
+        .set("Content-Type", "text/plain")
+        .send(JSON.stringify({ description: roleAdminB.description, permissions: exact21Permissions, tenantId: TENANT_B }))
+      assert.strictEqual(emptyBodyRes.status, 400, "Missing application/json header must return 400 instead of silently succeeding")
+
+      // Send exact Super Admin UI PUT /api/roles/:id payload with Content-Type: application/json + x-tenant-id
+      const update21Res = await request(app)
+        .put(`/api/roles/${roleAdminB.id}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_B)
+        .set("x-auth-portal", "super_admin")
+        .send({
+          description: roleAdminB.description,
+          permissions: exact21Permissions,
+          tenantId: TENANT_B,
+        })
+      assert.strictEqual(update21Res.status, 200)
+      assert.strictEqual(update21Res.body.data.isCustomized, true)
+      assert.strictEqual(update21Res.body.data.permissions.length, 21)
+      assert.deepStrictEqual([...update21Res.body.data.permissions].sort(), [...exact21Permissions].sort())
+
+      // Verify raw MongoDB document holds exact 21 permissions (not 25 or 35)
+      const dbAdminB = await Role.findById(roleAdminB.id).setOptions({ skipTenantFilter: true }).lean()
+      assert.strictEqual(dbAdminB.isCustomized, true)
+      assert.strictEqual(dbAdminB.permissions.length, 21)
+      assert.deepStrictEqual([...dbAdminB.permissions].sort(), [...exact21Permissions].sort())
+
+      // Verify subsequent GET /api/roles & GET /api/roles/:id after cache invalidation return exact 21 permissions
+      invalidateTenantRoleCache(TENANT_B)
+      const reloadListRes = await request(app)
+        .get(`/api/roles?tenantId=${TENANT_B}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_B)
+      assert.strictEqual(reloadListRes.status, 200)
+      const reloadedAdminB = reloadListRes.body.data.roles.find((r) => r.slug === "account_admin")
+      assert.strictEqual(reloadedAdminB.permissions.length, 21)
+      assert.deepStrictEqual([...reloadedAdminB.permissions].sort(), [...exact21Permissions].sort())
+
+      const reloadSingleRes = await request(app)
+        .get(`/api/roles/${roleAdminB.id}?tenantId=${TENANT_B}`)
+        .set("Authorization", `Bearer ${superToken}`)
+        .set("x-tenant-id", TENANT_B)
+      assert.strictEqual(reloadSingleRes.status, 200)
+      assert.strictEqual(reloadSingleRes.body.data.permissions.length, 21)
+      assert.deepStrictEqual([...reloadSingleRes.body.data.permissions].sort(), [...exact21Permissions].sort())
     })
 
     console.log("\n=====================================================================")

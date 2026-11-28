@@ -166,22 +166,25 @@ const getRoles = async (req, res) => {
 const getAvailablePermissions = async (req, res) => {
   try {
     const ceiling = await getSuperAdminCeiling()
-    const ceilingSet = new Set(ceiling)
 
-    // Filter modules and permissions according to Super Admin ceiling
+    // Filter modules and permissions according to Super Admin ceiling hierarchy
     const availableModules = PERMISSION_MODULES.map((mod) => {
-      const allowedInMod = mod.permissions.filter((p) => ceilingSet.has(p.key))
+      const allowedInMod = mod.permissions.filter((p) => isPermissionCoveredByCeiling(p.key, ceiling))
       return {
         ...mod,
         permissions: allowedInMod,
       }
     }).filter((mod) => mod.permissions.length > 0)
 
+    const allowedKeys = Array.from(
+      new Set(availableModules.flatMap((mod) => mod.permissions.map((p) => p.key))),
+    )
+
     res.status(200).json({
       success: true,
       data: {
         modules: availableModules,
-        allowedKeys: Array.from(ceilingSet),
+        allowedKeys,
       },
     })
   } catch (error) {
@@ -400,6 +403,12 @@ const updateRole = async (req, res) => {
     }
 
     const { name, description, permissions } = req.body || {}
+    if (name === undefined && description === undefined && permissions === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: "No updatable role fields received in request body. Ensure Content-Type: application/json is set.",
+      })
+    }
     const prevPermissions = [...(role.permissions || [])]
     const prevName = role.name
     const prevDescription = role.description
